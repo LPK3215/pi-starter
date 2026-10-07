@@ -1,0 +1,38 @@
+{
+  "name": "pi-starter",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "基于 pi-agent SDK 的 Agent 脚手架：工具、技能、知识库、数据库、模型切换、HTTP SSE，业务从接口注入",
+  "exports": {
+    ".": {
+      "types": "./dist/lib.d.ts",
+      "import": "./dist/lib.js"
+    }
+  },
+  "scripts": {
+    "dev": "tsx src/index.ts",
+    "web": "tsx src/server.ts",
+    "setup": "tsx src/setup.ts",
+    "clean": "node scripts/dist-assets.cjs clean",
+    "build": "npm run clean && tsc -p tsconfig.build.json && node scripts/dist-assets.cjs copy",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test src/config.test.ts src/models.test.ts src/sse.test.ts src/app.test.ts src/extensions/guard.test.ts src/setup.test.ts src/skills/index.test.ts src/knowledge/index.test.ts src/tools/resource.test.ts src/db/index.test.ts"
+  },
+  "engines": {
+    "node": ">=22.19"
+  },
+  "dependencies": {
+    "@earendil-works/pi-agent-core": "0.83.0",
+    "@earendil-works/pi-ai": "0.83.0",
+    "@earendil-works/pi-coding-agent": "0.83.0",
+    "express": "^5.2.1",
+    "typebox": "^1.1.39"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^24.0.0",
+    "tsx": "^4.22.4",
+    "typescript": "^5.6.0"
+  }
+}
