@@ -1,5 +1,30 @@
 node_modules/
 dist/
 .env
+.env.local
+.env.*.local
 *.log
+npm-debug.log*
 .piapi/
+
+# SQLite / local data
+*.db
+*.sqlite
+*.sqlite3
+data/
+
+# TypeScript / test cache
+*.tsbuildinfo
+coverage/
+.nyc_output/
+
+# Editors / IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini

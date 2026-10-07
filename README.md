@@ -1,107 +1,107 @@
 # π-starter
 
-基于 [pi-agent](https://github.com/earendil-works/pi) SDK 的 **Agent 脚手架**：拿到就能跑，往上加工具、加扩展、改人设，就变成一个垂直 Agent。
+[中文](README.zh-CN.md) | **English**
 
-> 配套学习材料：pi-agent 双轨教程（实战上手 P01–P07 + 源码精读 M01–M10），见 `02-AI/Agent/Pi项目/pi-agent-notes/`。
+An **agent scaffold** built on the [pi-agent](https://github.com/earendil-works/pi) SDK: clone it and it runs; add tools, extensions, or a new persona, and it becomes a vertical agent.
 
-## 特性
+## Features
 
-- **双入口**：CLI（`npm run dev`）+ HTTP SSE（`npm run web`）。后端接口是产品；`public/index.html` 只是本地试接口的示例页
-- **分层提示词**：`src/prompts/` 下 `persona.md`（人设）+ `rules.md`（规则），改文件即改性格
-- **工具即插即用**：`src/tools/` 下定义，`tools/index.ts` 登记，自动注册进 Agent
-- **技能管理**：`src/skills/<name>/SKILL.md`，走 SDK `DefaultResourceLoader.additionalSkillPaths`，目录由 `formatSkillsForPrompt` 注入，全文用内置 `read` 按 `<location>` 加载
-- **知识库**：`src/knowledge/*.md`，系统提示词只放目录，正文由 `search_knowledge` / `read_knowledge` 按需取（SDK 没有原生知识库）
-- **数据库**：Node 内置 `node:sqlite`，默认内存库 + 示例 `notes`；`GET /db` 探活，`db_query` 只读查询
-- **扩展机制**：`src/extensions/` 下用 `pi.on()` 挂钩子。已带 `guard`（执行前拦截）和 `audit`（耗时日志）
-- **一键写入 Pi 原生配置**：`npm run setup` merge 进 `~/.pi/agent/models.json` + `auth.json`，运行时不加兼容层
-- **模型目录可配置、可切换**：`.env` 的 `PI_MODELS` 声明多个 provider 和模型，`PI_MODEL` 选默认；CLI 用 `/model`，HTTP 用 `POST /model`，都在当前会话里切换，不重建
-- **内置工具默认关编码能力**：`off` 只开自定义工具 + `read`（技能加载需要它）；bash/edit/write 要显式打开
-- **库导出**：`npm run build` 后可 `import { buildAgent, createApp } from "pi-starter"`，业务从参数注入，不必改脚手架源码
+- **Dual entry points**: CLI (`npm run dev`) + HTTP SSE (`npm run web`). The backend API is the product; `public/index.html` is only a local page for trying out the endpoints
+- **Layered prompts**: `src/prompts/` holds `persona.md` (who the agent is) + `rules.md` (working constraints) — edit the files to change the personality
+- **Pluggable tools**: define them under `src/tools/`, register in `tools/index.ts`, and they are auto-registered into the agent
+- **Skill management**: `src/skills/<name>/SKILL.md`, loaded via the SDK's `DefaultResourceLoader.additionalSkillPaths`; the catalog is injected by `formatSkillsForPrompt` and full text is read by the built-in `read` tool through `<location>`
+- **Knowledge base**: `src/knowledge/*.md` — the system prompt carries only the catalog; bodies are fetched on demand via `search_knowledge` / `read_knowledge` (the SDK has no native knowledge base)
+- **Database**: Node's built-in `node:sqlite`, in-memory by default with sample `notes`; `GET /db` for liveness, `db_query` for read-only queries
+- **Extensions**: hooks via `pi.on()` under `src/extensions/`. Ships with `guard` (pre-execution interception) and `audit` (timing logs)
+- **One-command write into Pi native config**: `npm run setup` merges into `~/.pi/agent/models.json` + `auth.json`; no compatibility layer at runtime
+- **Configurable, switchable model catalog**: `PI_MODELS` in `.env` declares multiple providers and models, `PI_MODEL` picks the default; switch mid-session with `/model` in the CLI or `POST /model` over HTTP — no session rebuild
+- **Built-in coding tools off by default**: `off` enables only custom tools + `read` (skills need it); bash/edit/write must be turned on explicitly
+- **Library export**: after `npm run build`, `import { buildAgent, createApp } from "pi-starter"` — inject business logic through parameters instead of editing scaffold sources
 
-## 默认能力
+## Defaults
 
-脚手架默认是 **垂直 Agent 起点**，不是再包一层编码助手。clone 下来时：
+The scaffold is a **vertical-agent starting point**, not another coding-assistant wrapper. Right after cloning:
 
-| 有 | 没有（除非你打开） |
+| Included | Excluded (unless you turn it on) |
 |---|---|
-| `src/tools/` 里登记的自定义工具（现成示例：`current_time`） | SDK 内置 `bash` / `edit` / `write`（`off` 仍开 `read`，给技能用） |
-| `src/skills/` 走 SDK `additionalSkillPaths`，全文用内置 `read` | 本机 `~/.pi/agent/skills`、Claude Code / Codex 技能目录 |
-| `src/knowledge/` 知识库 + `search_knowledge` / `read_knowledge` | 向量库 / 外部 RAG |
-| 内存 SQLite + `GET /db` / `db_query` | 远程 Postgres / 连接池（自己注入 `database`） |
-| `persona.md` + `rules.md` 系统提示词 | `~/.pi/agent/extensions` 和 `<cwd>/.pi/extensions` 里的文件扩展 |
-| `guard` 拦截危险 bash、路径越出 cwd（`read SKILL.md` 例外） | 完整沙箱 / 容器隔离 |
-| `audit` 打印工具耗时 | 登录、多用户会话、公网暴露 |
-| CLI 落盘会话；HTTP 内存会话、单用户防并发 | |
+| Custom tools registered in `src/tools/` (ready example: `current_time`) | SDK built-in `bash` / `edit` / `write` (`off` still enables `read`, for skills) |
+| `src/skills/` via SDK `additionalSkillPaths`, full text loaded by the built-in `read` | Local `~/.pi/agent/skills`, Claude Code / Codex skill directories |
+| `src/knowledge/` base + `search_knowledge` / `read_knowledge` | Vector stores / external RAG |
+| In-memory SQLite + `GET /db` / `db_query` | Remote Postgres / connection pools (inject your own `database`) |
+| `persona.md` + `rules.md` system prompt | File extensions from `~/.pi/agent/extensions` and `<cwd>/.pi/extensions` |
+| `guard` intercepting dangerous bash and paths outside cwd (`read SKILL.md` excepted) | Full sandboxing / container isolation |
+| `audit` printing tool durations | Login, multi-user sessions, public-internet exposure |
+| CLI persists sessions to disk; HTTP keeps in-memory sessions with a single-user busy guard | |
 
-打开内置工具（优先级：命令行 > `.env` > 默认 `off`）：
+Enable built-in tools (priority: CLI flags > `.env` > default `off`):
 
 ```bash
 # .env
-PI_BUILTIN_TOOLS=off        # 默认：自定义工具 + read（技能加载）
-# PI_BUILTIN_TOOLS=readonly # 再加上 grep / find / ls
-# PI_BUILTIN_TOOLS=coding   # 再加上 bash / edit / write
+PI_BUILTIN_TOOLS=off        # default: custom tools + read (for skills)
+# PI_BUILTIN_TOOLS=readonly # plus grep / find / ls
+# PI_BUILTIN_TOOLS=coding   # plus bash / edit / write
 
-# 或临时覆盖
+# or a temporary override
 npm run dev -- --builtin-tools coding
 ```
 
-`readonly` / `coding` 走 SDK allowlist，自定义工具名会自动并进去。工具必须出现在 `src/tools/index.ts` 或 `buildAgent({ extraTools })` 里；只在扩展里 `pi.registerTool` 的名字不会自动放行。
+`readonly` / `coding` go through the SDK allowlist, and custom tool names are merged into it automatically. Tools must appear in `src/tools/index.ts` or `buildAgent({ extraTools })`; names registered only inside extensions are not allowlisted automatically.
 
-打开 `coding` 之后，`guard` 才会真正拦到 bash / write：危险命令（如 `rm -rf`）和越出工作目录的路径会被 `{ block: true }`。改规则去 `src/extensions/guard.ts`。
+With `coding` on, `guard` actually intercepts bash / write: dangerous commands (e.g. `rm -rf`) and paths outside the working directory are blocked with `{ block: true }`. Edit rules in `src/extensions/guard.ts`.
 
-## 快速开始
+## Quick Start
 
-### 0. 前置条件
+### 0. Prerequisites
 
 - Node.js ≥ 22.19
-- 一个 ModelScope token（或你要换成的其他 OpenAI 兼容供应商的 Key）
+- A ModelScope token (or an API key from any OpenAI-compatible provider you switch to)
 
-### 1. 安装并写入 Pi 配置
+### 1. Install and write Pi config
 
 ```bash
 npm install
 cp .env.example .env   # Windows: copy .env.example .env
-# 编辑 .env，填 PI_API_KEY
+# edit .env, fill in PI_API_KEY
 npm run setup
 ```
 
-`setup` 会 **merge**（不覆盖其他 provider）写入 Pi 原生路径：
+`setup` **merges** (never clobbers other providers) into the Pi native paths:
 
-- `~/.pi/agent/models.json` — ModelScope 的 `baseUrl` + 模型 id
-- `~/.pi/agent/auth.json` — `{ "modelscope": { "type": "api_key", "key": "..." } }`（文件 mode 0o600）
+- `~/.pi/agent/models.json` — ModelScope `baseUrl` + model ids
+- `~/.pi/agent/auth.json` — `{ "modelscope": { "type": "api_key", "key": "..." } }` (file mode 0o600)
 
-已有该 provider 的密钥默认保留。覆盖才加 `--force`：
+Existing keys for a provider are kept by default. To overwrite, add `--force`:
 
 ```bash
 npm run setup -- --force
 ```
 
-运行时仍由 SDK 读这两个文件，项目里的 `PI_API_KEY` 只给 setup 用，不会在请求路径上再套一层。
+The SDK still reads these two files at runtime; `PI_API_KEY` in `.env` is only consumed by setup and never sits in the request path.
 
-`.env` 里要有默认模型，两种写法：
+The default model in `.env` can be written two ways:
 
 ```bash
 PI_MODEL=modelscope/Qwen/Qwen3-Next-80B-A3B-Instruct
-# 或分开写（模型 id 自带斜杠时，斜杠原样保留，不会被当成 provider）
+# or split (when the model id itself contains a slash, it is kept as-is and not parsed as a provider)
 PI_PROVIDER=modelscope
 PI_MODEL=Qwen/Qwen3-Next-80B-A3B-Instruct
 ```
 
-缺了会直接抛，**不会**落到 SDK 内置 huggingface。
+If missing, startup throws — it does **not** fall back to the SDK's built-in huggingface.
 
-多个模型写 `PI_MODELS`，一条一个 provider，模型用逗号，显示名用冒号：
+For multiple models, write `PI_MODELS`: one provider per entry, models comma-separated, display names colon-separated:
 
 ```bash
 PI_MODELS=modelscope|https://api-inference.modelscope.cn/v1|openai-completions|Qwen/Qwen3-Next-80B-A3B-Instruct:Qwen3-Next-80B,Qwen/Qwen2.5-72B-Instruct;zhipu|https://open.bigmodel.cn/api/paas/v4|openai-completions|glm-4.5-air:GLM-4.5-Air
 ```
 
-不写 `PI_MODELS` 时，setup 只用上面那一条，地址走 `PI_BASE_URL`。
+Without `PI_MODELS`, setup uses only the single default entry, with the base URL from `PI_BASE_URL`.
 
-优先级：**命令行 `--model` / `--provider` > `.env`**。没有第三档「SDK 自选」。
+Priority: **CLI `--model` / `--provider` > `.env`**. There is no third "SDK picks for you" tier.
 
-密钥按 provider 分：默认 provider 用 `PI_API_KEY`，其余用 `PI_API_KEY_<PROVIDER>`（大写，如 `PI_API_KEY_ZHIPU`）。默认模型所在的 provider 没有密钥会直接失败；其他 provider 缺密钥只跳过并提示。
+Keys are per provider: the default provider uses `PI_API_KEY`, the rest use `PI_API_KEY_<PROVIDER>` (uppercase, e.g. `PI_API_KEY_ZHIPU`). A missing key for the default model's provider fails immediately; missing keys for other providers are skipped with a notice.
 
-手写 `~/.pi/agent/` 也可以，格式：
+Hand-writing `~/.pi/agent/` also works, format:
 
 ```json
 {
@@ -119,103 +119,103 @@ PI_MODELS=modelscope|https://api-inference.modelscope.cn/v1|openai-completions|Q
 
 ```json
 {
-  "modelscope": { "type": "api_key", "key": "ms-你的Key" }
+  "modelscope": { "type": "api_key", "key": "ms-your-key" }
 }
 ```
 
-- `api`：国内厂商 / OpenAI 兼容用 `openai-completions`，Anthropic 用 `anthropic-messages`
-- `baseUrl` **只填到 `/v1`**，别带 `/chat/completions`
+- `api`: use `openai-completions` for domestic / OpenAI-compatible vendors, `anthropic-messages` for Anthropic
+- `baseUrl` goes **only up to `/v1`**; do not append `/chat/completions`
 
-### 2. CLI 对话
+### 2. CLI chat
 
 ```bash
 npm run dev
-# 临时换默认模型：
+# temporarily switch the default model:
 npm run dev -- --model zhipu/glm-4.5-air
-# 会话中切换（不发给模型）：
+# switch inside a session (not sent to the model):
 #   /models
 #   /model modelscope/Qwen/Qwen2.5-72B-Instruct
 ```
 
-### 3. HTTP 接口（后端）
+### 3. HTTP API (backend)
 
 ```bash
 npm run web
-# 默认 http://localhost:3000
+# defaults to http://localhost:3000
 ```
 
-`public/index.html` 只是本地试接口的示例页，不是产品前端。嵌进已有服务时用 `createApp({ staticDir: false })`，自己挂页面。
+`public/index.html` is only a local page for trying the endpoints, not a product frontend. When embedding into an existing service use `createApp({ staticDir: false })` and mount your own page.
 
-`GET /health` 返回当前模型、可用模型列表、技能 / 知识库目录、数据库探活、内置工具档位、是否忙碌。
+`GET /health` returns the current model, the available model list, skill / knowledge catalogs, database liveness, the built-in-tools tier, and whether the agent is busy.
 
-不调模型也能测资源（虚拟 / 示例数据即可）：
+You can test resources without calling any model (virtual / sample data is enough):
 
 ```bash
 curl http://localhost:3000/skills
 curl http://localhost:3000/skills/summarize
-curl http://localhost:3000/knowledge/search?q=切换模型
+curl http://localhost:3000/knowledge/search?q=model%20switching
 curl http://localhost:3000/knowledge/about
 curl http://localhost:3000/db
 curl http://localhost:3000/db/notes
 curl -X POST http://localhost:3000/db/query -H "content-type: application/json" -d "{\"sql\":\"SELECT title FROM notes\"}"
 ```
 
-`POST /model` 切换当前会话的模型，不重建会话：
+`POST /model` switches the model of the current session without rebuilding it:
 
 ```json
 { "model": "zhipu/glm-4.5-air" }
 ```
 
-`POST /chat` 对外暴露的 SSE 接口协议（任何语言可调）：
+`POST /chat` is the exposed SSE protocol over HTTP (callable from any language):
 
-| 事件 type | data | 含义 |
+| Event type | data | Meaning |
 |---|---|---|
-| `text` | `{delta}` | 回答的一段文字 |
-| `thinking` | `{delta}` | 思考的一段 |
-| `tool_start` | `{id,name,args}` | 工具开始执行 |
-| `tool_end` | `{id,name,result,isError}` | 工具执行结束 |
-| `done` | `{}` | 彻底结束 |
-| `error` | `{message}` | 出错 |
+| `text` | `{delta}` | a chunk of the answer |
+| `thinking` | `{delta}` | a chunk of the thinking |
+| `tool_start` | `{id,name,args}` | tool execution started |
+| `tool_end` | `{id,name,result,isError}` | tool execution finished |
+| `done` | `{}` | stream fully ended |
+| `error` | `{message}` | failure |
 
-## 项目结构
+## Project Structure
 
 ```
 pi-starter/
 ├── src/
-│   ├── index.ts          # CLI 入口（交互对话）
-│   ├── server.ts         # Web 入口：解析命令行、listen
-│   ├── app.ts            # ★ HTTP 应用：/health /skills /knowledge /db /model /chat
-│   ├── lib.ts            # 库导出（buildAgent / createApp / setup）
-│   ├── setup.ts          # npm run setup：merge 写入 ~/.pi/agent/
-│   ├── agent.ts          # ★ 组装层：模型 + 人设 + 工具 + 扩展 → session
-│   ├── config.ts         # 配置层：命令行 / .env / 内置工具档位
-│   ├── cli-args.ts       # 命令行 flag 解析（CLI / Web 共用）
-│   ├── sse.ts            # Agent 事件 → SSE 协议
-│   ├── prompts/          # 分层提示词（改这里 = 改 Agent 性格）
-│   │   ├── persona.md    #   人设：你是谁、你怎么回答
-│   │   └── rules.md      #   规则：工作约束
-│   ├── tools/            # 工具层：给 LLM 装「手」
-│   │   ├── index.ts      #   ★ 静态工具登记入口
+│   ├── index.ts          # CLI entry (interactive chat)
+│   ├── server.ts         # Web entry: parse args, listen
+│   ├── app.ts            # ★ HTTP app: /health /skills /knowledge /db /model /chat
+│   ├── lib.ts            # library export (buildAgent / createApp / setup)
+│   ├── setup.ts          # npm run setup: merge-write into ~/.pi/agent/
+│   ├── agent.ts          # ★ assembly: model + persona + tools + extensions → session
+│   ├── config.ts         # config layer: CLI / .env / built-in-tools tier
+│   ├── cli-args.ts       # CLI flag parsing (shared by CLI and Web)
+│   ├── sse.ts            # agent events → SSE protocol
+│   ├── prompts/          # layered prompts (edit here = change the persona)
+│   │   ├── persona.md    #   who the agent is, how it answers
+│   │   └── rules.md      #   working constraints
+│   ├── tools/            # tool layer: give the LLM "hands"
+│   │   ├── index.ts      #   ★ static tool registry
 │   │   ├── current-time.ts
-│   │   ├── knowledge.ts  #   检索 / 读知识库
+│   │   ├── knowledge.ts  #   search / read the knowledge base
 │   │   └── database.ts   #   db_status / db_query
-│   ├── skills/           # 技能：<name>/SKILL.md，SDK additionalSkillPaths
+│   ├── skills/           # skills: <name>/SKILL.md, SDK additionalSkillPaths
 │   │   ├── index.ts
 │   │   └── summarize/SKILL.md
-│   ├── knowledge/        # 知识库：*.md，扫描加载
+│   ├── knowledge/        # knowledge base: *.md, scanned at startup
 │   │   ├── index.ts
 │   │   └── about.md
-│   ├── db/               # 数据库：node:sqlite，默认内存 + 示例 notes
+│   ├── db/               # database: node:sqlite, in-memory + sample notes
 │   │   └── index.ts
-│   └── extensions/       # 扩展层：在 Agent 干活环节挂钩子
-│       ├── index.ts      #   ★ 登记入口
-│       ├── guard.ts      #   示例：tool_call 拦截（危险 bash / 路径越界）
-│       └── audit.ts      #   示例：工具调用审计日志
+│   └── extensions/       # extension layer: hooks on agent lifecycle
+│       ├── index.ts      #   ★ registry
+│       ├── guard.ts      #   example: tool_call interception (dangerous bash / path escape)
+│       └── audit.ts      #   example: tool-call audit log
 └── public/
-    └── index.html        # 示例对话页（试接口用，不是产品前端）
+    └── index.html        # sample chat page (for trying endpoints, not a frontend)
 ```
 
-契约类冒烟测试（不调模型、不写真实 `~/.pi/agent`）：
+Contract smoke tests (no model calls, never touch the real `~/.pi/agent`):
 
 ```bash
 npm test
@@ -223,20 +223,20 @@ npm run typecheck
 npm run build
 ```
 
-## 二次开发：业务从接口进来
+## Secondary development: business comes in through the interface
 
-脚手架负责组装、模型、闸门、HTTP。业务（工具、人设、页面、登录）从外面接，不要改 `node_modules/@earendil-works`。
+The scaffold handles assembly, models, the guardrail, and HTTP. Business logic (tools, persona, pages, login) is injected from outside — do not modify `node_modules/@earendil-works`.
 
-两种接法：
+Two ways in:
 
-1. **改这个仓库**：人设改 `src/prompts/`，工具登记进 `src/tools/index.ts`，技能丢进 `src/skills/`，知识库丢进 `src/knowledge/`，扩展登记进 `src/extensions/index.ts`。
-2. **当库用**：`npm run build` 后 `import { buildAgent, createApp } from "pi-starter"`，通过参数注入，本仓库保持干净。
+1. **Edit this repo**: persona in `src/prompts/`, tools registered in `src/tools/index.ts`, skills dropped into `src/skills/`, knowledge into `src/knowledge/`, extensions registered in `src/extensions/index.ts`.
+2. **Use it as a library**: after `npm run build`, `import { buildAgent, createApp } from "pi-starter"` and inject via parameters; the scaffold stays untouched.
 
 ```ts
 import { buildAgent, createApp } from "pi-starter";
 
 const agent = await buildAgent({
-  systemPrompt: "你是客服助手……",
+  systemPrompt: "You are a customer-service assistant...",
   extraTools: [myTool],
   extraExtensions: [myExtension],
   extraSkillPaths: ["./skills"],
@@ -245,12 +245,12 @@ const agent = await buildAgent({
   inMemory: true,
 });
 const { app, dispose } = createApp({ agent, staticDir: false });
-// 把 app 挂到已有 Express；登录、多用户、前端自己包
+// mount app onto your existing Express; login, multi-user, frontend are yours
 ```
 
-`extraExtensions` 排在内置 `guard` / `audit` 后面。`createApp({ staticDir: false })` 只暴露接口，前端自己接。技能和知识库同名时仓库内置优先。
+`extraExtensions` run after the built-in `guard` / `audit`. `createApp({ staticDir: false })` exposes only the API. On name collisions, repo-bundled skills/knowledge take precedence over injected ones.
 
-### 加一个工具
+### Add a tool
 
 ```ts
 import { Type } from "typebox";
@@ -258,22 +258,22 @@ import { defineTool } from "@earendil-works/pi-coding-agent";
 
 export const myTool = defineTool({
   name: "my_tool",
-  label: "我的工具",
-  description: "一句话说明这个工具能干什么（LLM 靠它决定什么时候调）",
+  label: "My Tool",
+  description: "One sentence on what this tool does (the LLM decides when to call it based on this)",
   parameters: Type.Object({
-    query: Type.String({ description: "参数说明" }),
+    query: Type.String({ description: "parameter description" }),
   }),
   async execute(_id, params: { query: string }) {
-    return { content: [{ type: "text", text: `结果是：${params.query}` }], details: {} };
+    return { content: [{ type: "text", text: `Result: ${params.query}` }], details: {} };
   },
 });
 ```
 
-仓库内开发：登记进 `src/tools/index.ts` 的 `allTools`。当库用：传给 `buildAgent({ extraTools: [myTool] })`。`readonly` / `coding` 档位会把这些名字并进 SDK allowlist。
+In-repo: add it to `allTools` in `src/tools/index.ts`. As a library: pass it to `buildAgent({ extraTools: [myTool] })`. The `readonly` / `coding` tiers merge these names into the SDK allowlist.
 
-### 加一个扩展
+### Add an extension
 
-仓库里已有可运行的拦截示例：`src/extensions/guard.ts`。新扩展照抄那个文件的结构。
+A runnable interception example already exists: `src/extensions/guard.ts`. Copy its structure for new extensions.
 
 ```ts
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -281,18 +281,18 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 export function myExtension(pi: ExtensionAPI) {
   pi.on("tool_call", (event) => {
     if (event.toolName === "dangerous_tool") {
-      return { block: true, reason: "禁止调用该工具" };
+      return { block: true, reason: "this tool is not allowed" };
     }
     return undefined;
   });
 }
 ```
 
-仓库内开发：登记进 `src/extensions/index.ts` 的 `allExtensions`。当库用：传给 `buildAgent({ extraExtensions: [myExtension] })`。
+In-repo: add it to `allExtensions` in `src/extensions/index.ts`. As a library: pass it to `buildAgent({ extraExtensions: [myExtension] })`.
 
-### 加一个技能
+### Add a skill
 
-技能是带 YAML frontmatter 的 `SKILL.md`（[Agent Skills](https://agentskills.io/specification)）。加载走 SDK：`noSkills: true` 关掉本机 `~/.pi` 扫描，`additionalSkillPaths` 只加载仓库 / 你注入的目录。SDK 在系统提示词里写 `<available_skills>`（含 `<location>`），模型用内置 `read` 读全文。
+A skill is a `SKILL.md` with YAML frontmatter ([Agent Skills](https://agentskills.io/specification)). Loading goes through the SDK: `noSkills: true` disables scanning your local `~/.pi`, and `additionalSkillPaths` loads only repo / injected directories. The SDK writes `<available_skills>` (with `<location>`) into the system prompt, and the model reads the full text with the built-in `read` tool.
 
 ```
 src/skills/refund/SKILL.md
@@ -301,21 +301,21 @@ src/skills/refund/SKILL.md
 ```md
 ---
 name: refund
-description: 处理退款申请。用户说退款、退货、取消订单时使用。
+description: Handles refund requests. Use when the user mentions refunds, returns, or order cancellation.
 ---
 
-# 退款流程
+# Refund flow
 
-1. 先问订单号
-2. 调业务工具查状态
-3. 按规则决定是否可退
+1. Ask for the order number first
+2. Call the business tool to check status
+3. Decide refundability by policy
 ```
 
-重启后会出现在 `GET /health` / `GET /skills`。模型匹配 description 后会 `read` `<location>` 指向的 SKILL.md。当库用：`buildAgent({ extraSkillPaths: ["/path/to/skills"] })`。
+After restart it shows up in `GET /health` / `GET /skills`. When the model matches the description it `read`s the SKILL.md at `<location>`. As a library: `buildAgent({ extraSkillPaths: ["/path/to/skills"] })`.
 
-默认不扫 `~/.pi/agent/skills`。`off` 档会打开 `read`（技能加载需要它），但不打开 bash/edit/write。`guard` 对越出 cwd 的路径默认拦截，但放行 `read` SKILL.md。
+By default `~/.pi/agent/skills` is not scanned. The `off` tier enables `read` (skills need it) but not bash/edit/write. `guard` blocks paths escaping cwd by default but allows `read` on SKILL.md.
 
-### 加一篇知识库
+### Add a knowledge document
 
 ```
 src/knowledge/pricing.md
@@ -323,30 +323,30 @@ src/knowledge/pricing.md
 
 ```md
 ---
-title: 价格表
-description: 套餐、单价、计费周期
+title: Pricing
+description: Plans, unit prices, billing cycles
 ---
 
-基础版 99 / 月，专业版 299 / 月。
+Basic 99/month, Pro 299/month.
 ```
 
-重启即可。模型先 `search_knowledge({ query: "专业版多少钱" })`，再 `read_knowledge({ name: "pricing" })`。当库用：`buildAgent({ extraKnowledgeDirs: ["/path/to/docs"] })`。
+Restart and it is live. The model calls `search_knowledge({ query: "how much is Pro" })` first, then `read_knowledge({ name: "pricing" })`. As a library: `buildAgent({ extraKnowledgeDirs: ["/path/to/docs"] })`.
 
-这是进程内 Markdown 检索，不是向量库。要接 RAG 就自己写工具，登记进 `extraTools`。
+This is in-process Markdown search, not a vector store. For RAG, write your own tool and register it in `extraTools`.
 
-### 接一个数据库
+### Attach a database
 
-SDK 没有原生数据库。脚手架用 Node 22 的 `node:sqlite`，默认 `:memory:`，启动写入两条 `notes`。`GET /db` 探活，`POST /db/query` 只跑 SELECT。Agent 侧工具是 `db_status` / `db_query`。
+The SDK has no native database. The scaffold uses Node 22's `node:sqlite`, defaulting to `:memory:` with two sample `notes` rows written at startup. `GET /db` for liveness, `POST /db/query` runs SELECT only. Agent-side tools: `db_status` / `db_query`.
 
 ```ts
 const agent = await buildAgent({
-  databasePath: "./data/app.db", // 或 PI_DATABASE_PATH
+  databasePath: "./data/app.db", // or PI_DATABASE_PATH
 });
 ```
 
-换实现：实现 `DatabaseStore`，传 `buildAgent({ database: myStore })`。HTTP 和工具只依赖这个接口。
+To swap implementations: implement `DatabaseStore` and pass `buildAgent({ database: myStore })`. HTTP and tools depend only on this interface.
 
-测试不调模型：
+Testing without calling the model:
 
 ```bash
 curl http://localhost:3000/db
@@ -356,62 +356,66 @@ curl -X POST http://localhost:3000/db/query \
   -d '{"sql":"SELECT id, title FROM notes"}'
 ```
 
-### 常用 `pi.on` 事件
+### Common `pi.on` events
 
-| 事件 | 时机 | 能力 |
+| Event | When | Capability |
 |---|---|---|
-| `tool_call` | 工具执行前 | 拦截 / 改参数 |
-| `tool_result` | 工具执行后 | 改返回内容 |
-| `context` | 发 LLM 前 | 注入消息（如用户偏好） |
-| `input` | 收到用户输入后 | 改写 / 拦截输入 |
-| `before_agent_start` | 开跑前 | 改系统提示词 |
-| `agent_settled` | 一次 prompt 跑完 | 可靠结束信号 |
+| `tool_call` | before tool execution | intercept / rewrite args |
+| `tool_result` | after tool execution | rewrite result |
+| `context` | before sending to the LLM | inject messages (e.g. user preferences) |
+| `input` | after receiving user input | rewrite / block input |
+| `before_agent_start` | before a run starts | modify the system prompt |
+| `agent_settled` | one prompt fully done | reliable completion signal |
 
-完整事件菜单见 pi-agent-notes 第 6 章。
+See the pi-agent SDK upstream repository for the full event menu.
 
-### 接进现有模块 / 自己做前端
+### Embed into existing modules / build your own frontend
 
-后端接口如下。页面以后再生成，现在不要改脚手架里的 HTML。
+Backend endpoints are listed below. Build your own page later; do not edit the sample HTML in the scaffold.
 
-| 方法 | 路径 | 作用 |
+| Method | Path | Purpose |
 |---|---|---|
-| GET | `/health` | 当前模型、可用列表、技能 / 知识库目录、数据库探活、是否忙碌 |
-| GET | `/skills` | 技能目录（不调模型） |
-| GET | `/skills/:name` | 读 SKILL.md 全文 |
-| GET | `/knowledge` | 知识库目录 |
-| GET | `/knowledge/search?q=` | 关键词检索 |
-| GET | `/knowledge/:name` | 读文档全文 |
-| GET | `/db` | sqlite 探活 |
-| GET | `/db/notes` | 示例表 |
-| POST | `/db/query` | `{ "sql": "SELECT …" }`，只读 |
-| POST | `/model` | `{ "model": "provider/modelId" }`，当前会话切换 |
-| POST | `/chat` | `{ "message": "..." }`，响应是 SSE 流 |
+| GET | `/health` | current model, available list, skill / knowledge catalogs, DB liveness, busy flag |
+| GET | `/skills` | skill catalog (no model call) |
+| GET | `/skills/:name` | full SKILL.md |
+| GET | `/knowledge` | knowledge catalog |
+| GET | `/knowledge/search?q=` | keyword search |
+| GET | `/knowledge/:name` | full document |
+| GET | `/db` | sqlite liveness |
+| GET | `/db/notes` | sample table |
+| POST | `/db/query` | `{ "sql": "SELECT …" }`, read-only |
+| POST | `/model` | `{ "model": "provider/modelId" }`, switch in current session |
+| POST | `/chat` | `{ "message": "..." }`, response is an SSE stream |
 
-嵌进已有 Express 时用 `createApp({ agent, staticDir: false })`，不要再开一个端口。登录用现有鉴权包一层。
+When embedding into an existing Express app use `createApp({ agent, staticDir: false })`; do not open a second port. Wrap authentication with your existing middleware.
 
-## 功能边界
+## Scope boundaries
 
-脚手架做完这些，其余留给业务：
+The scaffold does the following; everything else is left to business code:
 
-| 做了 | 刻意不做 |
+| Done on purpose | Deliberately not done |
 |---|---|
-| 模型目录、启动选模型、运行中切换 | 登录 / 用户体系。本地工具不需要；接到现有系统时用现有鉴权包一层 |
-| CLI + HTTP 共用 `buildAgent` | 多用户、多会话。现在一个进程一个 session，并发第二轮返回 429 |
-| 仓库内技能走 SDK ResourceLoader；知识库 Markdown 检索；sqlite 探活 + 只读查询 | 向量库、外部 RAG、扫本机 `~/.pi/agent/skills` |
-| `guard` 拦危险 bash 和越出 cwd 的路径 | 沙箱。正则挡不住命令替换、编码绕过、symlink。要隔离用容器 |
-| `noExtensions` / `noSkills`，不扫本机扩展和技能 | 公网暴露。默认监听所有网卡，没有鉴权 |
-| 默认 `PI_BUILTIN_TOOLS=off` | 打开 `coding` 等于把改磁盘、跑 shell 交给模型 |
+| Model catalog, pick at startup, switch at runtime | Login / user system. A local tool needs none; when attaching to an existing backend, wrap with your existing auth |
+| CLI + HTTP share one `buildAgent` | Multi-user, multi-session. One process = one session; a concurrent second round returns 429 |
+| Repo skills via the SDK ResourceLoader; Markdown knowledge search; sqlite liveness + read-only query | Vector stores, external RAG, scanning local `~/.pi/agent/skills` |
+| `guard` blocks dangerous bash and paths escaping cwd | Sandboxing. Regexes cannot stop command substitution, encoded bypasses, symlinks. Use containers for isolation |
+| `noExtensions` / `noSkills`: local extensions and skills are not scanned | Public-internet exposure. It binds all interfaces by default, with no auth |
+| Default `PI_BUILTIN_TOOLS=off` | Turning on `coding` hands disk edits and shell execution to the model |
 
-为什么默认关编码工具、仍开 `read`：SDK 的 `createAgentSession()` 不传 `tools` 时会打开 `read` / `bash` / `edit` / `write`。脚手架是垂直 Agent 起点，所以 bash/edit/write 必须显式打开。但 SDK 只有在 `selectedTools` 含 `read` 时才把技能目录写进系统提示词，模型也用 `read` 加载 SKILL.md——这是官方路径，不另包 `read_skill`。
+Why coding tools are off by default while `read` stays on: the SDK's `createAgentSession()` enables `read` / `bash` / `edit` / `write` when no `tools` are passed. The scaffold is a vertical-agent starting point, so bash/edit/write must be enabled explicitly. But the SDK only writes the skill catalog into the system prompt when `selectedTools` contains `read`, and the model uses `read` to load SKILL.md — this is the official path; there is no separate `read_skill` wrapper.
 
-为什么不加载本机扩展和技能：用户机器上的 pi 扩展 / 技能可能再次注册 bash/write，或把不相干的工作流塞进这个垂直 Agent。
+Why local extensions and skills are not loaded: pi extensions/skills on your machine may re-register bash/write, or push unrelated workflows into this vertical agent.
 
-`guard` 不是沙箱。规则在 `src/extensions/guard.ts`，按业务改 `DANGEROUS_BASH_RULES`。
+`guard` is not a sandbox. Rules live in `src/extensions/guard.ts`; adjust `DANGEROUS_BASH_RULES` for your business.
 
-## 进阶（业务自己决定）
+## Advanced (business decides)
 
-- **登录**：本地桌面 / 本机 CLI 可以没有。接到已有后台时，在 `createApp()` 外面加中间件，不要改脚手架。
-- **多用户**：每个用户一个 `buildAgent()` + 独立 session；不要共用现在这个 `busy` 标志。
-- **打开编码工具**：`PI_BUILTIN_TOOLS=coding` 或 `--builtin-tools coding`。打开后 `guard` 仍会拦截危险 bash 和越出 cwd 的路径。
-- **模型切换**：启动时 `--model provider/modelId`；CLI `/model`；HTTP `POST /model`。只接受已配好 Key 的模型，走 `session.setModel`，不重建会话。
-- **技能 / 知识库 / 数据库**：技能丢进 `src/skills/`；知识库丢进 `src/knowledge/`；数据库默认内存，或 `PI_DATABASE_PATH` / `buildAgent({ database })`。要接向量库或远程 SQL，写成工具从 `extraTools` 进来。
+- **Login**: local desktop / CLI usage can live without it. When attaching to an existing backend, add middleware outside `createApp()`; do not modify the scaffold.
+- **Multi-user**: one `buildAgent()` + independent session per user; do not reuse the current single `busy` flag.
+- **Enable coding tools**: `PI_BUILTIN_TOOLS=coding` or `--builtin-tools coding`. Even then, `guard` still blocks dangerous bash and paths escaping cwd.
+- **Model switching**: at startup `--model provider/modelId`; in CLI `/model`; over HTTP `POST /model`. Only models with configured keys are accepted, via `session.setModel`, no session rebuild.
+- **Skills / knowledge / database**: skills into `src/skills/`; knowledge into `src/knowledge/`; the DB is in-memory by default, or set `PI_DATABASE_PATH` / pass `buildAgent({ database })`. For vector stores or remote SQL, write a tool and pass it through `extraTools`.
+
+## License
+
+Released under the [MIT License](LICENSE).

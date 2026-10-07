@@ -1,0 +1,50 @@
+# Normalize line endings: LF in the repo, platform-native in the working tree by default.
+# Prevents the "LF will be replaced by CRLF" / "CRLF will be replaced by LF" noise on mixed-OS teams.
+
+* text=auto
+
+# Always LF in the working tree for cross-platform source (avoids diff churn on Windows).
+*.ts   text eol=lf
+*.cts  text eol=lf
+*.mts  text eol=lf
+*.js   text eol=lf
+*.cjs  text eol=lf
+*.mjs  text eol=lf
+*.json text eol=lf
+*.md   text eol=lf
+*.yml  text eol=lf
+*.yaml text eol=lf
+*.html text eol=lf
+*.css  text eol=lf
+.env.example text eol=lf
+.gitignore   text eol=lf
+.gitattributes text eol=lf
+LICENSE      text eol=lf
+AUTHORS      text eol=lf
+
+# Shell scripts must keep LF (CRLF breaks #!/usr/bin/env).
+*.sh text eol=lf
+
+# Windows batch files must keep CRLF.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Binary assets — never touch line endings.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.pdf binary
+*.db binary
+*.sqlite binary
+*.gz binary
+*.zip binary
+
+# Treat generated files as such on GitHub so PR diffs stay readable.
+package-lock.json linguist-generated=true -diff
+dist/** linguist-generated=true export-ignore
+
+# Documentation files: long lines are prose, not code.
+*.md markdown

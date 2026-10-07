@@ -1,15 +1,40 @@
 {
   "name": "pi-starter",
   "version": "0.1.0",
-  "private": true,
   "type": "module",
-  "description": "基于 pi-agent SDK 的 Agent 脚手架：工具、技能、知识库、数据库、模型切换、HTTP SSE，业务从接口注入",
+  "description": "Agent scaffold on the pi-agent SDK: tools, skills, knowledge base, database, model switching, HTTP SSE; business logic injected via the interface",
+  "author": "LPK3215 <17538703215@163.com>",
+  "license": "MIT",
+  "homepage": "https://github.com/LPK3215/pi-starter#readme",
+  "bugs": {
+    "url": "https://github.com/LPK3215/pi-starter/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/LPK3215/pi-starter.git"
+  },
+  "keywords": [
+    "agent",
+    "pi-agent",
+    "sdk",
+    "scaffold",
+    "sse",
+    "sqlite"
+  ],
   "exports": {
     ".": {
       "types": "./dist/lib.d.ts",
       "import": "./dist/lib.js"
     }
   },
+  "main": "./dist/lib.js",
+  "types": "./dist/lib.d.ts",
+  "files": [
+    "dist",
+    "scripts",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "dev": "tsx src/index.ts",
     "web": "tsx src/server.ts",
