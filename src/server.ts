@@ -24,9 +24,15 @@ import {
 import { createSessionHub } from "./session-hub.js";
 import { BUILTIN_TOOL_NAMES, createToolRegistry, defineToolSpec, type ToolRegistry } from "./tools/registry.js";
 import { allTools } from "./tools/index.js";
-import { SettingsService } from "./settings.js";
+import { SettingsService, fileSettingsPort, defaultSettingsFile } from "./settings.js";
+import {
+  ApprovalRulesStore,
+  loadApprovalRulesFromFile,
+  saveApprovalRulesToFile,
+} from "./approval/rules.js";
+import { join } from "node:path";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { FileService } from "./files/service.js";
-import { ApprovalRulesStore } from "./approval/rules.js";
 import { ApprovalGate, approvalExtension } from "./approval/gate.js";
 import { attachWebSocket, type WsServer } from "./transport/ws.js";
 import { applyServerTimeouts } from "./http/hardening.js";
@@ -53,8 +59,17 @@ if (!LOOPBACK.has(runtime.host)) {
 logger.info("正在组装 agent...");
 
 // 1. Settings + approval rules + gate (needed before the agent is built).
-const settings = new SettingsService();
-const rulesStore = new ApprovalRulesStore();
+// Both persist to the agent dir so a restart keeps the user's configuration; corrupt or
+// unreadable files fall back to defaults rather than taking the whole service down.
+const settings = new SettingsService(
+  fileSettingsPort(defaultSettingsFile(), {
+    logger: (msg, err) => logger.warn(msg, { detail: err instanceof Error ? err.message : String(err) }),
+  }),
+);
+const rulesFile = join(getAgentDir(), "pi-starter-approval-rules.json");
+const rulesStore = loadApprovalRulesFromFile(rulesFile, {
+  logger: (msg, err) => logger.warn(msg, { detail: err instanceof Error ? err.message : String(err) }),
+});
 
 // The WS server does not exist yet; route approval requests through a mutable holder.
 // The holder receives the owning conversation key (= the SDK sessionId, which is also the
@@ -200,6 +215,12 @@ async function shutdown(): Promise<void> {
   // Ordered teardown: stop accepting new approvals first (gate.dispose denies in-flight
   // requests so no tool call is left hanging), then close sockets, then drop sessions.
   gate.dispose();
+  // Flush rule edits before teardown so they survive the restart.
+  try {
+    saveApprovalRulesToFile(rulesFile, rulesStore);
+  } catch (err) {
+    logger.warn("审批规则保存失败", { error: err instanceof Error ? err.message : String(err) });
+  }
   await ws.close();
   hub.dispose();
   dispose();

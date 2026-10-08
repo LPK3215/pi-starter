@@ -9,8 +9,13 @@
  * 好处：
  *   1. 新增字段 = 在 schema 加一行，校验、默认值、持久化、UI 列表自动跟上；
  *   2. 校验是纯函数，可单测；未知字段被显式拒绝（不静默吞掉）；
- *   3. 持久化通过注入的 SettingsPort 完成，默认内存实现 → 零 IO，测试无需落盘。
+ *   3. 持久化通过注入的 SettingsPort 完成，默认内存实现 → 零IO，测试无需落盘；
+ *      生产用 `fileSettingsPort()` 落盘（原子写，重启不丢配置）。
  */
+
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
 /** 字段校验器：返回规范化后的值，非法则抛错。 */
 export type FieldValidator<T> = (raw: unknown) => T;
@@ -88,6 +93,48 @@ export function memorySettingsPort(initial?: Record<string, unknown>): SettingsP
       data = settings;
     },
   };
+}
+
+/**
+ * 文件端口：落盘 JSON，重启后设置不丢。
+ *
+ * 两个必须做对的细节：
+ *   1. **原子写**——先写同目录临时文件再`rename`。直接覆盖的话，进程在写到一半时被杀
+ *      会留下截断的 JSON，下次启动就再也读不出来了（这是配置文件最经典的损坏方式）。
+ *   2. **读失败不致命**——文件不存在返回 undefined（走默认值）；文件损坏则**告警并回落默认**，
+ *      而不是让整个服务起不来。配置坏了应该能被用户改回来，而不是变成死局。
+ */
+export function fileSettingsPort(filePath: string, options: { logger?: (msg: string, err: unknown) => void } = {}): SettingsPort {
+  const log = options.logger;
+  return {
+    load: () => {
+      if (!existsSync(filePath)) return undefined;
+      try {
+        const parsed: unknown = JSON.parse(readFileSync(filePath, "utf8"));
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+          return parsed as Record<string, unknown>;
+        }
+        log?.("设置文件不是对象，已回落默认值", parsed);
+        return undefined;
+      } catch (err) {
+        log?.("设置文件无法解析，已回落默认值", err);
+        return undefined;
+      }
+    },
+    save: (settings) => {
+      const dir = dirname(filePath);
+      mkdirSync(dir, { recursive: true });
+      const tmp = join(dir, `.${basename(filePath)}.${process.pid}.tmp`);
+      writeFileSync(tmp, `${JSON.stringify(settings, null, 2)}\n`, "utf8");
+      // rename 在同目录内是原子的：要么旧文件，要么新文件，不会出现中间态。
+      renameSync(tmp, filePath);
+    },
+  };
+}
+
+/** 默认设置文件路径：`~/.pi/agent/pi-starter-settings.json`（与SDK 配置同处）。 */
+export function defaultSettingsFile(): string {
+  return join(getAgentDir(), "pi-starter-settings.json");
 }
 
 /** 已知设置的默认值 + schema（单一事实源）。 */

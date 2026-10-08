@@ -148,6 +148,8 @@ export {
   extractTargetPath,
   ruleMatches,
   ruleMatchesTool,
+  loadApprovalRulesFromFile,
+  saveApprovalRulesToFile,
   type ApprovalAction,
   type ApprovalField,
   type ApprovalInput,
@@ -212,6 +214,8 @@ export {
   type Settings,
   type SettingsPort,
   type SettingsSchema,
+  defaultSettingsFile,
+  fileSettingsPort,
 } from "./settings.js";
 
 export {

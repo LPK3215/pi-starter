@@ -13,6 +13,8 @@
  *   2. 评估是**纯函数**（evaluateRules），不依赖 store / 文件 / 网络，可直接单测。
  */
 
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 import { isPathInsideCwd } from "../extensions/guard.js";
 
 /** 规则命中后的动作。 */
@@ -356,4 +358,63 @@ export class ApprovalRulesStore {
   ): ApprovalRulesStore {
     return new ApprovalRulesStore({ userRules: data?.userRules ?? [], ...options });
   }
+}
+
+/**
+ * 文件持久化：与 `fileSettingsPort` 同一套语义（原子写 + 损坏回落）。
+ *
+ * 规则库损坏的后果比设置更严重——它决定哪些命令被拦。所以读回时**逐条校验**，
+ * 非法规则只跳过并告警，而不是让一份坏文件把整个审批机制变成空规则（= 全部放行）。
+ */
+export function loadApprovalRulesFromFile(
+  filePath: string,
+  options: { logger?: (msg: string, err: unknown) => void } = {},
+): ApprovalRulesStore {
+  const log = options.logger;
+  if (!existsSync(filePath)) return new ApprovalRulesStore();
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(filePath, "utf8"));
+    const rawRules =
+      parsed && typeof parsed === "object" && Array.isArray((parsed as { userRules?: unknown }).userRules)
+        ? ((parsed as { userRules: unknown[] }).userRules)
+        : [];
+    const valid: ApprovalRule[] = [];
+    for (const item of rawRules) {
+      if (isApprovalRule(item)) valid.push(item);
+      else log?.("跳过非法的审批规则", item);
+    }
+    return ApprovalRulesStore.fromJSON({ userRules: valid });
+  } catch (err) {
+    log?.("审批规则文件无法解析，已回落到内置规则", err);
+    return new ApprovalRulesStore();
+  }
+}
+
+/** 把规则库写回文件（原子写）。 */
+export function saveApprovalRulesToFile(
+  filePath: string,
+  store: ApprovalRulesStore,
+): void {
+  mkdirSync(dirname(filePath), { recursive: true });
+  const tmp = join(dirname(filePath), `.${basename(filePath)}.${process.pid}.tmp`);
+  writeFileSync(tmp, `${JSON.stringify(store.toJSON(), null, 2)}\n`, "utf8");
+  renameSync(tmp, filePath);
+}
+
+/** 结构校验：宁少勿错——一条畸形规则绝不能被当成"无规则"从而放行高危命令。 */
+function isApprovalRule(value: unknown): value is ApprovalRule {
+  if (!value || typeof value !== "object") return false;
+  const r = value as Record<string, unknown>;
+  if (typeof r.id !== "string" || r.id === "") return false;
+  if (typeof r.description !== "string") return false;
+  if (!Array.isArray(r.tools) && r.tools !== "*") return false;
+  if (!["command", "path", "params"].includes(String(r.field))) return false;
+  if (!["allow", "deny", "ask"].includes(String(r.action))) return false;
+  const m = r.match;
+  if (!m || typeof m !== "object") return false;
+  const kind = (m as { kind?: unknown }).kind;
+  return (
+    kind === "regex" || kind === "glob" || kind === "contains" ||
+    kind === "prefix" || kind === "outside_workspace" || kind === "capability"
+  );
 }
