@@ -11,8 +11,12 @@
 // 从云端搬回本地：门禁 → 出包 → 把产物挂到该 tag 的正式 Release 上。
 //
 // 读项目根目录 pipeline.config.json 的 "localPublish" 段：
-//   steps      出包步骤（逐条执行，任一失败即停）
-//   artifacts  产物 glob（相对项目根），命中的文件挂到 Release；用 --no-release 可只要产物
+//   steps      出包步骤（逐条执行，任一失败即停）。留空 = 纯文本发布
+//   artifacts  产物 glob（相对项目根），命中的文件挂到 Release。留空 = 纯文本发布
+//
+// 「发布」不必等于「出安装包」：文档站、纯库、只发版本说明的项目，两个数组都留空即可 ——
+// 建一个带 release notes 的正式 Release，不挂任何文件。
+//
 // 换技术栈只改配置，不改本文件。
 //
 // 用法（在项目根目录；建 Release 需已安装并登录 gh）：
@@ -264,10 +268,17 @@ function ghReady() {
     );
     process.exit(1);
   }
+  // 只读本地凭据、**不发网络请求** —— `gh auth status` 要联网校验 token，
+  // 在需要代理的网络里会失败，于是把「已登录」误判成「未登录」，白白挡住发版。
+  if (process.env.GH_TOKEN || process.env.GITHUB_TOKEN) return;
   try {
-    execSync("gh auth status", { stdio: "pipe" });
+    execSync("gh auth token", { stdio: "pipe" });
   } catch {
-    console.error("\ngh 未登录。先 `gh auth login`；或只出包不建 Release（加 --no-release）。");
+    console.error(
+      "\ngh 没有可用凭据：先 `gh auth login`，或设置 GH_TOKEN / GITHUB_TOKEN 环境变量；\n" +
+        "只想在本地出包就加 --no-release。\n" +
+        "（若你的网络访问 GitHub 需要代理，请先设好 HTTPS_PROXY / HTTP_PROXY —— 真正上传产物时要用。）"
+    );
     process.exit(1);
   }
 }
@@ -280,20 +291,13 @@ console.log(`\n[publish-local] 仓库：${ROOT}`);
 console.log(`[publish-local] tag：${tag}${dryRun ? "   （dry-run）" : ""}`);
 console.log(`[publish-local] 出包步骤：${steps.length} 条 · 产物 glob：${artifactGlobs.length} 条`);
 
-if (steps.length === 0 && !noRelease) {
-  console.error(
-    `\n配置里没有 localPublish.steps —— 没有可执行的出包步骤。\n` +
-      `在 pipeline.config.json 里补上，例如（node-pkg）：\n` +
-      `  "localPublish": {\n` +
-      `    "versionFrom": "package.json",\n` +
-      `    "steps": [\n` +
-      `      { "name": "build", "cmd": "npm run build" },\n` +
-      `      { "name": "pack",  "cmd": "npm pack" }\n` +
-      `    ],\n` +
-      `    "artifacts": ["*.tgz"]\n` +
-      `  }`
+// steps 与 artifacts 都允许为空 —— 那意味着「纯文本发布」：只建带 release notes 的
+// Release、不挂任何文件。文档站、纯库、只发版本说明的项目都属于这一类，
+// "发布"不必等于"出安装包"。
+if (steps.length === 0 && artifactGlobs.length === 0) {
+  console.log(
+    "\n[publish-local] 未配置出包步骤与产物 —— 走**纯文本发布**（只建 Release + release notes，不出任何包）。"
   );
-  process.exit(1);
 }
 
 // 1) 工作区
@@ -365,20 +369,23 @@ for (const s of steps) shStep(s.cmd, s.cwd);
 
 // 6) 收集产物
 const files = artifactGlobs.flatMap((g) => expandGlob(g)).filter((f, i, a) => a.indexOf(f) === i);
-console.log(`\n[publish-local] 产物：`);
-if (files.length === 0) {
-  console.log("  （无）");
-  if (!noRelease && !dryRun) {
-    console.error(
-      `\n没有匹配到任何产物文件（glob：${artifactGlobs.join(", ")}）。\n` +
-        `检查配置的 artifacts 是否与刚才出包的真实输出路径一致。`
-    );
-    process.exit(1);
-  }
+if (artifactGlobs.length === 0) {
+  console.log("\n[publish-local] 未配置 artifacts —— 纯文本发布，不挂任何文件。");
 } else {
-  for (const f of files) {
-    const size = fs.statSync(f).size;
-    console.log(`  - ${rel(f)}  (${(size / 1024).toFixed(1)} KiB)`);
+  console.log(`\n[publish-local] 产物：`);
+  if (files.length === 0) {
+    console.log(dryRun ? "  （dry-run：未执行出包，产物要真跑一次才会产生）" : "  （一个都没匹配到）");
+    if (!dryRun) {
+      console.warn(
+        `  ⚠ 这不一定是错：跨平台形态里"本机没出的包"本来就匹配不到（如 Tauri 在 Windows 上不会产出 .dmg）——\n` +
+          `    确认 glob 写对了就继续；写错了就改配置。当前 glob：${artifactGlobs.join(", ")}`
+      );
+    }
+  } else {
+    for (const f of files) {
+      const size = fs.statSync(f).size;
+      console.log(`  - ${rel(f)}  (${(size / 1024).toFixed(1)} KiB)`);
+    }
   }
 }
 
@@ -425,7 +432,10 @@ try {
     const quoted = files.map((f) => `"${f}"`).join(" ");
     const notesArgs = notesFile ? `--notes-file "${notesFile}"` : "--generate-notes";
     sh(`gh release create "${tag}" ${quoted} --title "${tag}" ${notesArgs} --latest`);
-    console.log(`\n[publish-local] ✓ 已创建 Release ${tag}（${files.length} 个产物）`);
+    console.log(
+      `\n[publish-local] ✓ 已创建 Release ${tag}` +
+        (files.length > 0 ? `（${files.length} 个产物）` : "（纯文本发布，无产物）")
+    );
   } else if (clobber) {
     const quoted = files.map((f) => `"${f}"`).join(" ");
     sh(`gh release upload "${tag}" ${quoted} --clobber`);
