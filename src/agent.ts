@@ -40,6 +40,11 @@ import { allTools } from "./tools/index.js";
 import { execToolsForMode } from "./tools/exec.js";
 import { allExtensions, type ExtensionFactory } from "./extensions/index.js";
 import { loadScaffoldSkills, resolveSkillPaths, type LoadedSkill } from "./skills/index.js";
+import {
+  loadScaffoldPromptTemplates,
+  resolvePromptTemplatePaths,
+  type LoadedPromptTemplate,
+} from "./prompt-templates/index.js";
 import { badRequest } from "./http/errors.js";
 import { assertSessionFileAllowed } from "./sessions/store.js";
 import { formatKnowledgeCatalog, loadScaffoldKnowledge, type KnowledgeDoc } from "./knowledge/index.js";
@@ -134,6 +139,11 @@ export interface BuildAgentOptions {
   /** 额外知识库目录（叠在 src/knowledge 之上，同名时仓库内置优先） */
   extraKnowledgeDirs?: string[];
   /**
+   * 额外提示词模板路径（目录或 `.md` 文件，叠在 src/prompt-templates 之上，同名时内置优先）。
+   * 交给 SDK `additionalPromptTemplatePaths`，`session.prompt("/<name>")` 自动展开。
+   */
+  extraPromptTemplatePaths?: string[];
+  /**
    * 是否加载包内置的**示例**知识库（`about.md`）。默认 true。
    *
    * `extraKnowledgeDirs` 是叠加不是替换，且内置目录排在最前、同名时内置优先——
@@ -149,6 +159,13 @@ export interface BuildAgentOptions {
    * 否则 SDK 仍会把技能目录写进 `<available_skills>`，出现「清单里没有、提示词里有」的漂移。
    */
   builtinSkills?: boolean;
+  /**
+   * 是否加载包内置的**示例**提示词模板（`review`）。默认 true。同样只有这个开关能关掉它。
+   *
+   * 与技能一致：关掉时必须同时从交给 SDK 的 `additionalPromptTemplatePaths` 里去掉，
+   * 否则 SDK 仍会把模板登记到可展开的斜杠命令清单里。
+   */
+  builtinPromptTemplates?: boolean;
   /** sqlite 路径。默认 :memory:，也读 PI_DATABASE_PATH */
   databasePath?: string;
   /** 注入已打开的数据库。传了就不再 openScaffoldDatabase */
@@ -194,6 +211,8 @@ export interface BuiltAgent {
   builtinTools: BuiltinToolMode;
   skills: LoadedSkill[];
   knowledge: KnowledgeDoc[];
+  /** 已加载的提示词模板清单（名称/说明/正文），供 /prompt-templates 与 capabilities 展示。 */
+  promptTemplates: LoadedPromptTemplate[];
   database: DatabaseStore;
   /** 当前已配好 Key、可以切过去的模型 */
   listModels(): Promise<Model<any>[]>;
@@ -265,6 +284,15 @@ export async function buildAgent(options: BuildAgentOptions = {}): Promise<Built
   const knowledge = loadScaffoldKnowledge(options.extraKnowledgeDirs, {
     includeBuiltin: options.builtinKnowledge,
   });
+  // Prompt templates follow the same isolation rule as skills/extensions: the loader never
+  // scans ~/.pi (noPromptTemplates), only repo + injected paths go through additionalPromptTemplatePaths.
+  const promptTemplatePaths = resolvePromptTemplatePaths(options.extraPromptTemplatePaths ?? [], {
+    includeBuiltin: options.builtinPromptTemplates,
+    onSkip: (file, reason) => {
+      getLogger().warn("提示词模板已跳过", { file, reason });
+    },
+  });
+  const promptTemplates = loadScaffoldPromptTemplates(promptTemplatePaths);
   const database =
     options.database ??
     openScaffoldDatabase({
@@ -333,7 +361,9 @@ export async function buildAgent(options: BuildAgentOptions = {}): Promise<Built
       noExtensions: true,
       noSkills: true,
       noContextFiles: true,
+      noPromptTemplates: true,
       additionalSkillPaths: skillPaths,
+      additionalPromptTemplatePaths: promptTemplatePaths,
       systemPromptOverride: () => systemPrompt,
       appendSystemPromptOverride: () => [],
       extensionFactories: [
@@ -406,6 +436,7 @@ export async function buildAgent(options: BuildAgentOptions = {}): Promise<Built
     builtinTools: cfg.builtinTools,
     skills,
     knowledge,
+    promptTemplates,
     database,
     listModels: async () => [...(await modelRuntime.getAvailable())],
     switchModel: async (ref) => {

@@ -20,6 +20,7 @@ function fakeAgent(overrides: {
   abort?: () => void;
   skills?: BuiltAgent["skills"];
   knowledge?: BuiltAgent["knowledge"];
+  promptTemplates?: BuiltAgent["promptTemplates"];
   database?: BuiltAgent["database"];
 } = {}): BuiltAgent {
   const listeners = new Set<Listener>();
@@ -40,6 +41,7 @@ function fakeAgent(overrides: {
     builtinTools: "off",
     skills: overrides.skills ?? [],
     knowledge: overrides.knowledge ?? [],
+    promptTemplates: overrides.promptTemplates ?? [],
     database,
     listModels: async () => [model],
     switchModel: async (ref) => {
@@ -200,6 +202,9 @@ test("GET /skills /knowledge /db 用虚拟数据测连接，不调模型", async
     agent: fakeAgent({
       skills: loadSkillsFromDirs([skillRoot]),
       knowledge: loadKnowledgeFromDirs([knowledgeRoot]),
+      promptTemplates: [
+        { name: "review", description: "只列未满足的约束", content: "对照上一轮结论。\n" },
+      ],
       database,
     }),
     staticDir: false,
@@ -225,6 +230,23 @@ test("GET /skills /knowledge /db 用虚拟数据测连接，不调模型", async
     const doc = await json(`${url}/knowledge/faq`);
     assert.equal(doc.status, 200);
     assert.match((doc.body as { doc: { body: string } }).doc.body, /POST \/model/);
+
+    const ptList = await json(`${url}/prompt-templates`);
+    assert.equal(ptList.status, 200);
+    assert.equal(
+      (ptList.body as { promptTemplates: { name: string }[] }).promptTemplates[0]?.name,
+      "review",
+    );
+
+    const pt = await json(`${url}/prompt-templates/review`);
+    assert.equal(pt.status, 200);
+    assert.match(
+      (pt.body as { promptTemplate: { body: string } }).promptTemplate.body,
+      /对照上一轮/,
+    );
+
+    const missingPt = await json(`${url}/prompt-templates/nope`);
+    assert.equal(missingPt.status, 404);
 
     const ping = await json(`${url}/db`);
     assert.equal(ping.status, 200);

@@ -128,6 +128,7 @@ function makeAgent(): BuiltAgent & { sessions: FakeSession[]; created: number } 
     builtinTools: "off" as const,
     skills: [],
     knowledge: [],
+    promptTemplates: [],
     database: {
       driver: "sqlite",
       path: ":memory:",

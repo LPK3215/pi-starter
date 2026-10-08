@@ -70,6 +70,7 @@ const agent = {
   builtinTools: "off",
   skills: [{ name: "s1", description: "d1" }],
   knowledge: [{ name: "k1", title: "t1", description: "d1" }],
+  promptTemplates: [{ name: "t1", description: "d1" }],
   model: { provider: "p", id: "m", name: "m" },
   session: { model: { provider: "p", id: "m", name: "m" } },
   listModels: async () => [{ provider: "p", id: "m", name: "m" }],

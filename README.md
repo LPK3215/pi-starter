@@ -59,6 +59,7 @@ Truth source for the table above: [`package.json`](package.json). When versions 
 - **Pluggable tools**: define them under `src/tools/`, register in `tools/index.ts`, and they are auto-registered into the agent
 - **Skill management**: `src/skills/<name>/SKILL.md`, loaded via the SDK's `DefaultResourceLoader.additionalSkillPaths`; the catalog is injected by `formatSkillsForPrompt` and full text is read by the built-in `read` tool through `<location>`
 - **Knowledge base**: `src/knowledge/*.md` — the system prompt carries only the catalog; bodies are fetched on demand via `search_knowledge` / `read_knowledge` (the SDK has no native knowledge base)
+- **Prompt templates**: `src/prompt-templates/<name>.md` are the SDK's slash-command templates — `session.prompt("/name")` expands them (positional `$1`, `$@`, defaults `${1:-x}`); loaded via `additionalPromptTemplatePaths`, with `~/.pi` scanning off
 - **Database**: Node's built-in `node:sqlite`, in-memory by default with sample `notes`; `GET /db` for liveness, `db_query` for read-only queries
 - **Extensions**: hooks via `pi.on()` under `src/extensions/`. Ships with `guard` (pre-execution interception) and `audit` (timing logs)
 - **One-command write into Pi native config**: `npm run setup` merges into `~/.pi/agent/models.json` + `auth.json`; no compatibility layer at runtime
@@ -79,6 +80,7 @@ The scaffold is a **vertical-agent starting point**, not another coding-assistan
 | Custom tools registered in `src/tools/` (ready example: `current_time`) | SDK built-in `bash` / `edit` / `write` (`off` still enables `read`, for skills) |
 | `src/skills/` via SDK `additionalSkillPaths`, full text loaded by the built-in `read` | Local `~/.pi/agent/skills`, Claude Code / Codex skill directories |
 | `src/knowledge/` base + `search_knowledge` / `read_knowledge` | Vector stores / external RAG |
+| `src/prompt-templates/<name>.md` via SDK `additionalPromptTemplatePaths` (`/name` expands) | Global `~/.pi/agent/prompts` and project `.pi/prompts` scanning |
 | In-memory SQLite + `GET /db` / `db_query` | Remote Postgres / connection pools (inject your own `database`) |
 | `persona.md` + `rules.md` system prompt | File extensions from `~/.pi/agent/extensions` and `<cwd>/.pi/extensions` |
 | `guard` intercepting dangerous bash and paths outside cwd (`read SKILL.md` excepted) | Full sandboxing / container isolation |
@@ -279,6 +281,9 @@ pi-starter/
 │   ├── knowledge/        # knowledge base: *.md, scanned at startup
 │   │   ├── index.ts
 │   │   └── about.md
+│   ├── prompt-templates/ # slash-command templates: <name>.md → /<name>, SDK additionalPromptTemplatePaths
+│   │   ├── index.ts
+│   │   └── review.md
 │   ├── db/               # database: node:sqlite, in-memory + sample notes
 │   │   └── index.ts
 │   └── extensions/       # extension layer: hooks on agent lifecycle
@@ -431,6 +436,23 @@ Restart and it is live. The model calls `search_knowledge({ query: "how much is 
 
 This is in-process Markdown search, not a vector store. For RAG, write your own tool and register it in `extraTools`.
 
+### Add a prompt template
+
+A prompt template is the SDK's slash-command mechanism: the filename becomes `/<name>`, and `session.prompt("/name")` expands it into the full body before sending (supporting positional `$1`, `$@` / `$ARGUMENTS`, defaults `${1:-x}`, and slicing `${@:N:L}`).
+
+```
+src/prompt-templates/refund.md
+```
+
+```md
+---
+description: Handle a refund for order $1
+---
+Check the refund policy for order $1, then draft the reply. Extra notes: ${2:-none}
+```
+
+Restart and it is live: `GET /prompt-templates` lists it, and sending `/refund ORD-42` expands the body. Loading goes through the SDK's `additionalPromptTemplatePaths`; `noPromptTemplates: true` keeps the loader from scanning global `~/.pi/agent/prompts` (same isolation rule as skills / extensions). As a library: `buildAgent({ extraPromptTemplatePaths: ["./prompts"] })`; drop the bundled `review` example with `buildAgent({ builtinPromptTemplates: false })`.
+
 ### Attach a database
 
 The SDK has no native database. The scaffold uses Node 22's `node:sqlite`, defaulting to `:memory:` with two sample `notes` rows written at startup. `GET /db` for liveness, `POST /db/query` runs SELECT only. Agent-side tools: `db_status` / `db_query`.
@@ -481,6 +503,8 @@ Backend endpoints are listed below. Build your own page later; do not edit the s
 | GET | `/knowledge` | knowledge catalog |
 | GET | `/knowledge/search?q=` | keyword search |
 | GET | `/knowledge/:name` | full document |
+| GET | `/prompt-templates` | prompt-template catalog (no model call) |
+| GET | `/prompt-templates/:name` | full template body |
 | GET | `/db` | sqlite liveness |
 | GET | `/db/notes` | sample table |
 | POST | `/db/query` | `{ "sql": "SELECT …" }`, read-only, row-capped (200) |
@@ -510,7 +534,7 @@ The scaffold does the following; everything else is left to business code:
 | CLI + HTTP share one `buildAgent`; the web tier runs several conversations per connection (cap 8 + LRU) | Multi-user. The `busy` gate only guards the shared-session path |
 | Repo skills via the SDK ResourceLoader; Markdown knowledge search; sqlite liveness + read-only query | Vector stores, external RAG, scanning local `~/.pi/agent/skills` |
 | `guard` blocks dangerous bash and paths escaping cwd | Sandboxing. Regexes cannot stop command substitution, encoded bypasses, symlinks. Use containers for isolation |
-| `noExtensions` / `noSkills`: local extensions and skills are not scanned | Public-internet exposure. **Binds `127.0.0.1` by default, with no auth**; only a non-loopback `PI_HOST` actually exposes it, and startup warns loudly when you do |
+| `noExtensions` / `noSkills` / `noPromptTemplates`: local extensions, skills and prompt templates are not scanned | Public-internet exposure. **Binds `127.0.0.1` by default, with no auth**; only a non-loopback `PI_HOST` actually exposes it, and startup warns loudly when you do |
 | Default `PI_BUILTIN_TOOLS=off` | Turning on `coding` hands disk edits and shell execution to the model |
 
 Why coding tools are off by default while `read` stays on: we**always** pass `tools` to `createAgentSession()`, and it becomes the SDK's `allowedToolNames` allowlist — passing nothing is what enables the full `read` / `bash` / `edit` / `write` set. The list comes from `sessionToolPolicy(tier)` driven by `PI_BUILTIN_TOOLS` (`off` yields just `read`), so bash/edit/write must be opened explicitly.
@@ -530,7 +554,7 @@ Why local extensions and skills are not loaded: pi extensions/skills on your mac
 - **Enable coding tools**: `PI_BUILTIN_TOOLS=coding` or `--builtin-tools coding`. That also turns on `exec` / `exec_jobs` / `exec_stop`. Even then, `guard` still blocks dangerous bash / exec and paths escaping cwd. It is not an interactive PTY.
 - **Model switching**: at startup `--model provider/modelId`; in CLI `/model`; over HTTP `POST /model`. Only models with configured keys are accepted, via `session.setModel`, no session rebuild.
 - **Skills / knowledge / database**: skills into `src/skills/`; knowledge into `src/knowledge/`; the DB is in-memory by default, or set `PI_DATABASE_PATH` / pass `buildAgent({ database })`. For vector stores or remote SQL, write a tool and pass it through `extraTools`.
-- **Turning off the built-in example content**: `buildAgent({ builtinKnowledge: false, builtinSkills: false })`. The bundled `about.md` (a document describing the scaffold itself) and the `summarize` skill land in the system prompt, and `extraKnowledgeDirs` / `extraSkillPaths` are **additive, not replacing** — so this is the only way to exclude them. Worth doing when embedding into someone else's service.
+- **Turning off the built-in example content**: `buildAgent({ builtinKnowledge: false, builtinSkills: false, builtinPromptTemplates: false })`. The bundled `about.md` (a document describing the scaffold itself), the `summarize` skill and the `review` prompt template land in the system prompt / slash-command menu, and `extraKnowledgeDirs` / `extraSkillPaths` / `extraPromptTemplatePaths` are **additive, not replacing** — so this is the only way to exclude them. Worth doing when embedding into someone else's service.
 - **Custom WS commands**: `attachWebSocket(server, { commands: { my_cmd: defineCommand<{ a: number }>({ handler }) } })`. Clients invoke it with `{type:"my_cmd"}`; **unregistered commands get an explicit error frame** rather than silence. Built-ins cannot be shadowed by a same-named registration.
 - **Custom HTTP routes**: `createApp({ configure: (app) => app.get("/biz", ...) })`. **Use this hook** — do not add routes after grabbing `app`: the error handler is mounted inside `createApp`, so later routes are registered after it and their thrown errors escape translation (measured: internal details reaching the client). If you already added routes, call the returned `seal()`.
 - **Resource cleanup**: the values returned by `createApp()` / `attachWebSocket()` expose `addDisposer(fn)`, invoked on `dispose()` / `close()`. Register timers, child processes and temp files opened by your extension.

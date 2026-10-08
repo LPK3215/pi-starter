@@ -65,6 +65,13 @@ export {
   type LoadedSkill,
 } from "./skills/index.js";
 export {
+  loadScaffoldPromptTemplates,
+  resolvePromptTemplatePaths,
+  resolvePromptTemplatesDir,
+  type LoadedPromptTemplate,
+  type LoadPromptTemplateOptions,
+} from "./prompt-templates/index.js";
+export {
   formatModelChoices,
   modelDisplayName,
   resolveModelRef,
@@ -370,6 +377,11 @@ export {
   MAX_SKILL_PATHS,
   type LoadSkillsOptions,
 } from "./skills/index.js";
+
+export {
+  MAX_PROMPT_TEMPLATES,
+  MAX_PROMPT_TEMPLATE_BYTES,
+} from "./prompt-templates/index.js";
 
 /* ─────────────── MCP / 计划模式 / 子代理 / 多密钥 ─────────────── */
 

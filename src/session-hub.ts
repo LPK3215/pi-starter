@@ -18,7 +18,7 @@
 import { existsSync } from "node:fs";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { AgentSessionEvent, SessionManager } from "@earendil-works/pi-coding-agent";
-import type { Model } from "@earendil-works/pi-ai";
+import type { Model, ImageContent } from "@earendil-works/pi-ai";
 import type { BuiltAgent } from "./agent.js";
 import type { RuntimeConfig } from "./config.js";
 import { SnapshotEmitter } from "./snapshot.js";
@@ -647,10 +647,54 @@ export class Conversation {
     return this.session;
   }
 
-  prompt(text: string): Promise<void> {
+  prompt(text: string, images?: ImageContent[]): Promise<void> {
     if (this.title === "New conversation" && text.trim()) this.title = deriveTitle(text);
     this.lastActiveAt = Date.now();
-    return this.session.prompt(text);
+    return this.session.prompt(text, images ? { images } : undefined);
+  }
+
+  /**
+   * 运行中插入一条消息（steering）。
+   *
+   * 与 `prompt` 的区别是**语义**：`prompt` 会另起一轮，`steer` 是在当前轮的工具调用之间
+   * 插话，让模型在下一步就带上这条信息（"别改那个文件了"）。SDK 在非流式时会拒绝，
+   * 所以这里先给出明确理由，而不是让 SDK 抛一个泛化错误。
+   */
+  async steer(text: string, images?: ImageContent[]): Promise<void> {
+    if (!this.session.isStreaming) {
+      throw new AppError("conflict", "当前没有正在进行的生成，请直接用 prompt 发送", { expose: true });
+    }
+    this.lastActiveAt = Date.now();
+    await this.session.steer(text, images);
+    this.getState();
+  }
+
+  /**
+   * 排队一条消息，等本轮彻底结束后再处理（follow-up）。
+   *
+   * 与 `steer` 的区别：steer 会打断当前轮的后续工具调用，follow-up 只在模型不再有工具
+   * 调用时投递。SDK 在非流式时同样拒绝，理由同上。
+   */
+  async followUp(text: string, images?: ImageContent[]): Promise<void> {
+    if (!this.session.isStreaming) {
+      throw new AppError("conflict", "当前没有正在进行的生成，请直接用 prompt 发送", { expose: true });
+    }
+    this.lastActiveAt = Date.now();
+    await this.session.followUp(text, images);
+    this.getState();
+  }
+
+  /**
+   * 取消正在进行的压缩。
+   *
+   * 无压缩在跑时是**幂等空操作**：SDK 的 `abortCompaction()` 本身就是幂等的，重复调用
+   * 不会报错。这里不额外抛错——「已经停了」和「刚停掉」对调用方是同一个结果。
+   */
+  abortCompaction(): void {
+    const abortFn = (this.session as { abortCompaction?: () => void }).abortCompaction;
+    if (typeof abortFn !== "function") return;
+    abortFn.call(this.session);
+    this.getState();
   }
 
   abort(): Promise<void> {
@@ -1152,9 +1196,25 @@ export class ClientSession {
 
   /* ─────────────── 命令转发 ─────────────── */
 
-  async prompt(text: string): Promise<void> {
+  async prompt(text: string, images?: ImageContent[]): Promise<void> {
     const conv = this.active ?? (await this.newConversation());
-    await conv.prompt(text);
+    await conv.prompt(text, images);
+  }
+
+  async steer(text: string, images?: ImageContent[]): Promise<void> {
+    const conv = this.active;
+    if (!conv) throw new AppError("conflict", "还没有对话，先发一条消息", { expose: true });
+    await conv.steer(text, images);
+  }
+
+  async followUp(text: string, images?: ImageContent[]): Promise<void> {
+    const conv = this.active;
+    if (!conv) throw new AppError("conflict", "还没有对话，先发一条消息", { expose: true });
+    await conv.followUp(text, images);
+  }
+
+  abortCompaction(): void {
+    this.active?.abortCompaction();
   }
 
   async abort(): Promise<void> {

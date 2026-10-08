@@ -171,7 +171,7 @@ export type ClientMessage =
   | { type: "get_state" }
   | { type: "ping" }
   // 对话运行
-  | { type: "prompt"; text: string }
+  | { type: "prompt"; text: string; images?: { mimeType: string; data: string }[] }
   | { type: "abort" }
   /**
    * 主动压缩上下文。
@@ -209,6 +209,10 @@ export type ClientMessage =
       /** decision = modify 时改写后的工具入参（JSON）。 */
       modifiedArgs?: Record<string, unknown>;
     }
+  // 对话进行中的干预（idle 时会被拒绝，改用 prompt）
+  | { type: "steer"; text: string; images?: { mimeType: string; data: string }[] }
+  | { type: "follow_up"; text: string; images?: { mimeType: string; data: string }[] }
+  | { type: "abort_compaction" }
   // 运行模式
   | { type: "set_plan_mode"; enabled: boolean; conversationId?: string }
   // 设置
@@ -322,12 +326,13 @@ export type ServerMessage =
   | { type: "pong" }
   | { type: "error"; message: string };
 
-/** 能力目录：工具 / 技能 / 知识库 / 斜杠命令。 */
+/** 能力目录：工具 / 技能 / 知识库 / 提示词模板 / 斜杠命令。 */
 export interface UiCapabilities {
   builtinTools: string;
   tools: UiTool[];
   skills: { name: string; description: string }[];
   knowledge: { name: string; title: string; description: string }[];
+  promptTemplates: { name: string; description: string }[];
   commands: { name: string; description: string }[];
   /**
    * 新会话的默认计划模式档位（settings.planMode）。
@@ -379,6 +384,9 @@ export const CLIENT_MESSAGE_TYPES = [
   "search_knowledge",
   "approval_response",
   "set_plan_mode",
+  "steer",
+  "follow_up",
+  "abort_compaction",
   "get_settings",
   "set_settings",
   "compact_context",

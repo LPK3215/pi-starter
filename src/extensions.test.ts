@@ -66,7 +66,7 @@ function makeAgent(): BuiltAgent {
     session: shared,
     get model() { return sessions[0]!.model as Model<any>; },
     builtinTools: "off" as const,
-    skills: [], knowledge: [],
+    skills: [], knowledge: [], promptTemplates: [],
     database: {
       driver: "sqlite", path: ":memory:",
       ping: () => ({ ok: true as const, driver: "sqlite", path: ":memory:" }),

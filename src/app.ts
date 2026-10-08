@@ -154,7 +154,7 @@ export interface CreateAppResult {
 }
 
 export function createApp(options: CreateAppOptions): CreateAppResult {
-  const { session, builtinTools, switchModel, listModels, skills, knowledge, database } =
+  const { session, builtinTools, switchModel, listModels, skills, knowledge, promptTemplates, database } =
     options.agent;
   const registry = options.registry;
   const settings = options.settings;
@@ -249,6 +249,11 @@ export function createApp(options: CreateAppOptions): CreateAppResult {
         name: item.name,
         title: item.title,
         description: item.description,
+      })),
+      promptTemplates: promptTemplates.map((item) => ({
+        name: item.name,
+        description: item.description,
+        ...(item.argumentHint ? { argumentHint: item.argumentHint } : {}),
       })),
       db,
     });

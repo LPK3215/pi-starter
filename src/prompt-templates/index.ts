@@ -10,17 +10,20 @@
  * 不要内置示例（`review`）：`buildAgent({ builtinPromptTemplates: false })`。
  */
 
-import { existsSync, readdirSync, statSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { loadPromptTemplates, type PromptTemplate } from "@earendil-works/pi-coding-agent";
+import type { PromptTemplate } from "@earendil-works/pi-coding-agent";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 export const MAX_PROMPT_TEMPLATES = 32;
 export const MAX_PROMPT_TEMPLATE_BYTES = 64 * 1024;
 
-export type LoadedPromptTemplate = Pick<PromptTemplate, "name" | "description">;
+export type LoadedPromptTemplate = Pick<
+  PromptTemplate,
+  "name" | "description" | "argumentHint" | "content"
+>;
 
 export interface LoadPromptTemplateOptions {
   /** 是否带上包内的 `review`。默认 true。 */
@@ -100,15 +103,57 @@ export function resolvePromptTemplatePaths(
   return out;
 }
 
-/** 用 SDK 读模板，只要名称和说明。`includeDefaults: false`，不扫 `~/.pi`。 */
+/**
+ * 解析模板，只要名称/说明/正文，供 /prompt-templates 与 capabilities 展示。
+ *
+ * 真正的 `/name` 展开仍由 SDK 的 `DefaultResourceLoader` 完成（见 `additionalPromptTemplatePaths`）；
+ * 这里不能依赖 `loadPromptTemplates`——它不是包的主入口导出（主包只 re-export 了 `PromptTemplate` 类型），
+ * 所以清单自行解析 frontmatter，与交给 SDK 的是同一批文件。
+ */
 export function loadScaffoldPromptTemplates(
   paths: readonly string[],
 ): LoadedPromptTemplate[] {
-  if (paths.length === 0) return [];
-  return loadPromptTemplates({
-    cwd: process.cwd(),
-    agentDir: process.cwd(),
-    promptPaths: [...paths],
-    includeDefaults: false,
-  }).map((item) => ({ name: item.name, description: item.description }));
+  const out: LoadedPromptTemplate[] = [];
+  for (const file of paths) {
+    let raw: string;
+    try {
+      raw = readFileSync(file, "utf-8");
+    } catch {
+      continue;
+    }
+    const { frontmatter, body } = splitFrontmatter(raw);
+    const name = basename(file).replace(/\.md$/, "");
+    const description = frontmatter.description ?? firstNonEmptyLine(body) ?? name;
+    const template: LoadedPromptTemplate = { name, description, content: body };
+    const hint = frontmatter["argument-hint"];
+    if (hint) template.argumentHint = hint;
+    out.push(template);
+  }
+  return out;
+}
+
+/** Split a leading `---` frontmatter block from the body, parsing flat `key: value` lines. */
+function splitFrontmatter(raw: string): { frontmatter: Record<string, string>; body: string } {
+  const match = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/.exec(raw);
+  if (!match) return { frontmatter: {}, body: raw };
+  const [, block, body] = match;
+  const frontmatter: Record<string, string> = {};
+  for (const line of (block ?? "").split(/\r?\n/)) {
+    const kv = /^([A-Za-z0-9_-]+):\s*(.*)$/.exec(line.trim());
+    if (kv) {
+      const key = kv[1]!;
+      const value = kv[2]!.trim().replace(/^['"]|['"]$/g, "");
+      if (value) frontmatter[key] = value;
+    }
+  }
+  return { frontmatter, body: body ?? "" };
+}
+
+/** First non-empty line of the body (used as the description fallback, matching the spec). */
+function firstNonEmptyLine(body: string): string | undefined {
+  for (const line of body.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (trimmed) return trimmed.replace(/^#+\s*/, "");
+  }
+  return undefined;
 }

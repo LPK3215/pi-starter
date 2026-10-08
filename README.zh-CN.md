@@ -48,7 +48,7 @@
 | Schema | [TypeBox](https://www.npmjs.com/package/typebox) | `^1.1.39` | 工具 `parameters` 定义 |
 | WebSocket | [ws](https://www.npmjs.com/package/ws) | `^8.18.0` | 预留传输层扩展 |
 | 测试 | Node 内置 test runner，走 `tsx --test` | `^4.22.4` | 10 个文件 · 39 个冒烟用例，不调模型 |
-| 构建 | `tsc -p tsconfig.build.json` + `scripts/dist-assets.cjs` | `^5.6.0` | 把 `prompts/`、`skills/`、`knowledge/` 拷到 `dist/` |
+| 构建 | `tsc -p tsconfig.build.json` + `scripts/dist-assets.cjs` | `^5.6.0` | 把 `prompts/`、`skills/`、`prompt-templates/`、`knowledge/` 拷到 `dist/` |
 
 上面这张表的单一真源是 [`package.json`](package.json)。版本变更时，代码与本表同步；架构 SVG 自动刷新（`node scripts/visualization/generate_architecture.mjs`）。
 
@@ -59,6 +59,7 @@
 - **工具即插即用**：`src/tools/` 下定义，`tools/index.ts` 登记，自动注册进 Agent
 - **技能管理**：`src/skills/<name>/SKILL.md`，走 SDK `DefaultResourceLoader.additionalSkillPaths`，目录由 `formatSkillsForPrompt` 注入，全文用内置 `read` 按 `<location>` 加载
 - **知识库**：`src/knowledge/*.md`，系统提示词只放目录，正文由 `search_knowledge` / `read_knowledge` 按需取（SDK 没有原生知识库）
+- **提示词模板**：`src/prompt-templates/<name>.md` 就是 SDK 的斜杠命令模板——`session.prompt("/name")` 会展开成完整正文再发（支持位置参数 `$1`、`$@`、默认值 `${1:-x}`）；走 `additionalPromptTemplatePaths` 加载，`~/.pi` 扫描关闭
 - **数据库**：Node 内置 `node:sqlite`，默认内存库 + 示例 `notes`；`GET /db` 探活，`db_query` 只读查询
 - **扩展机制**：`src/extensions/` 下用 `pi.on()` 挂钩子。已带 `guard`（执行前拦截）和 `audit`（耗时日志）
 - **一键写入 Pi 原生配置**：`npm run setup` merge 进 `~/.pi/agent/models.json` + `auth.json`，运行时不加兼容层
@@ -75,6 +76,7 @@
 | `src/tools/` 里登记的自定义工具（现成示例：`current_time`） | SDK 内置 `bash` / `edit` / `write`（`off` 仍开 `read`，给技能用） |
 | `src/skills/` 走 SDK `additionalSkillPaths`，全文用内置 `read` | 本机 `~/.pi/agent/skills`、Claude Code / Codex 技能目录 |
 | `src/knowledge/` 知识库 + `search_knowledge` / `read_knowledge` | 向量库 / 外部 RAG |
+| `src/prompt-templates/<name>.md` 走 SDK `additionalPromptTemplatePaths`（`/name` 展开） | 全局 `~/.pi/agent/prompts` 与项目 `.pi/prompts` 的扫描 |
 | 内存 SQLite + `GET /db` / `db_query` | 远程 Postgres / 连接池（自己注入 `database`） |
 | `persona.md` + `rules.md` 系统提示词 | `~/.pi/agent/extensions` 和 `<cwd>/.pi/extensions` 里的文件扩展 |
 | `guard` 拦截危险 bash、路径越出 cwd（`read SKILL.md` 例外） | 完整沙箱 / 容器隔离 |
@@ -259,6 +261,9 @@ pi-starter/
 │   ├── knowledge/        # 知识库：*.md，扫描加载
 │   │   ├── index.ts
 │   │   └── about.md
+│   ├── prompt-templates/ # 斜杠命令模板：<name>.md → /<name>，SDK additionalPromptTemplatePaths
+│   │   ├── index.ts
+│   │   └── review.md
 │   ├── db/               # 数据库：node:sqlite，默认内存 + 示例 notes
 │   │   └── index.ts
 │   └── extensions/       # 扩展层：在 Agent 干活环节挂钩子
@@ -266,7 +271,7 @@ pi-starter/
 │       ├── guard.ts      #   示例：tool_call 拦截（危险 bash / 路径越界）
 │       └── audit.ts      #   示例：工具调用审计日志
 ├── scripts/
-│   ├── dist-assets.cjs   # clean / copy 将 prompts+skills+knowledge 拷到 dist/
+│   ├── dist-assets.cjs   # clean / copy 将 prompts+skills+prompt-templates+knowledge 拷到 dist/
 │   ├── verify-embed.mjs  # 嵌入路径自检（已并入 npm run verify）
 │   └── visualization/    # README 图产出脚本（见下）
 │       ├── generate_architecture.mjs
@@ -318,7 +323,7 @@ const { app, dispose } = createApp({ agent, staticDir: false });
 // 把 app 挂到已有 Express；登录、多用户、前端自己包
 ```
 
-`extraExtensions` 排在内置 `guard` / `audit` 后面。`createApp({ staticDir: false })` 只暴露接口，前端自己接。技能和知识库同名时仓库内置优先。
+`extraExtensions` 排在内置 `guard` / `audit` 后面。`createApp({ staticDir: false })` 只暴露接口，前端自己接。技能、知识库和提示词模板同名时仓库内置优先。
 
 ### 加一个工具
 
@@ -402,7 +407,24 @@ description: 套餐、单价、计费周期
 
 重启即可。模型先 `search_knowledge({ query: "专业版多少钱" })`，再 `read_knowledge({ name: "pricing" })`。当库用：`buildAgent({ extraKnowledgeDirs: ["/path/to/docs"] })`。
 
-这是进程内 Markdown 检索，不是向量库。要接 RAG 就自己写工具，登记进 `extraTools`。
+这是进程内 Markdown 检索，不是向量库。要接 RAG 自己写工具，登记进 `extraTools`。
+
+### 加一个提示词模板
+
+提示词模板就是 SDK 的斜杠命令机制：文件名即 `/<name>`，`session.prompt("/name")` 会把模板展开成完整正文再发（支持位置参数 `$1`、`$@` / `$ARGUMENTS`、默认值 `${1:-x}`、切片 `${@:N:L}`）。
+
+```
+src/prompt-templates/refund.md
+```
+
+```md
+---
+description: 处理订单 $1 的退款
+---
+对照退款政策处理订单 $1，再起草回复。附加说明：${2:-无}
+```
+
+重启即可：`GET /prompt-templates` 会列出它，发送 `/refund ORD-42` 即展开正文。加载走 SDK 的 `additionalPromptTemplatePaths`；`noPromptTemplates: true` 让 loader 不扫全局 `~/.pi/agent/prompts`（与技能 / 扩展同一隔离规矩）。当库用：`buildAgent({ extraPromptTemplatePaths: ["./prompts"] })`；不要内置示例 `review`：`buildAgent({ builtinPromptTemplates: false })`。
 
 ### 接一个数据库
 
@@ -451,6 +473,8 @@ curl -X POST http://localhost:3000/db/query \
 | GET | `/knowledge` | 知识库目录 |
 | GET | `/knowledge/search?q=` | 关键词检索 |
 | GET | `/knowledge/:name` | 读文档全文 |
+| GET | `/prompt-templates` | 提示词模板目录（不调模型） |
+| GET | `/prompt-templates/:name` | 读模板全文 |
 | GET | `/db` | sqlite 探活 |
 | GET | `/db/notes` | 示例表 |
 | POST | `/db/query` | `{ "sql": "SELECT …" }`，只读 |
@@ -478,7 +502,7 @@ server.listen(3000);
 | CLI + HTTP 共用 `buildAgent`；Web 端每连接多对话并发（上限 8 + LRU） | 多用户。`busy` 闸门只作用于共享 session 那条路径 |
 | 仓库内技能走 SDK ResourceLoader；知识库 Markdown 检索；sqlite 探活 + 只读查询 | 向量库、外部 RAG、扫本机 `~/.pi/agent/skills` |
 | `guard` 拦危险 bash 和越出 cwd 的路径 | 沙箱。正则挡不住命令替换、编码绕过、symlink。要隔离用容器 |
-| `noExtensions` / `noSkills`，不扫本机扩展和技能 | 公网暴露。**默认只绑 `127.0.0.1` 且无鉴权**；`PI_HOST` 改成非回环地址才会真的暴露，启动时会告警 |
+| `noExtensions` / `noSkills` / `noPromptTemplates`，不扫本机扩展、技能与提示词模板 | 公网暴露。**默认只绑 `127.0.0.1` 且无鉴权**；`PI_HOST` 改成非回环地址才会真的暴露，启动时会告警 |
 | 默认 `PI_BUILTIN_TOOLS=off` | 打开 `coding` 等于把改磁盘、跑 shell 交给模型 |
 
 为什么默认关编码工具、仍开 `read`：我们**总是**给 `createAgentSession()` 传 `tools`，它会变成 SDK 的 `allowedToolNames` 硬白名单——不传反而会打开 `read` / `bash` / `edit` / `write` 全套。工具清单由 `sessionToolPolicy(档位)` 按 `PI_BUILTIN_TOOLS` 生成（`off` 只给 `read`），bash/edit/write 必须显式打开。
@@ -498,7 +522,7 @@ server.listen(3000);
 - **打开编码工具**：`PI_BUILTIN_TOOLS=coding` 或 `--builtin-tools coding`。这一档同时打开 `exec` / `exec_jobs` / `exec_stop`。打开后 `guard` 仍会拦截危险 bash / exec 和越出 cwd 的路径。不是交互式 PTY。
 - **模型切换**：启动时 `--model provider/modelId`；CLI `/model`；HTTP `POST /model`。只接受已配好 Key 的模型，走 `session.setModel`，不重建会话。
 - **技能 / 知识库 / 数据库**：技能丢进 `src/skills/`；知识库丢进 `src/knowledge/`；数据库默认内存，或 `PI_DATABASE_PATH` / `buildAgent({ database })`。要接向量库或远程 SQL，写成工具从 `extraTools` 进来。
-- **关掉内置示例内容**：`buildAgent({ builtinKnowledge: false, builtinSkills: false })`。内置的 `about.md`（一份介绍脚手架自己的文档）和 `summarize` 技能会进系统提示词，而 `extraKnowledgeDirs` / `extraSkillPaths` 是**叠加不是替换**、内置同名优先——所以这是唯一的关闭入口。当库嵌入别人服务时通常该关掉。
+- **关掉内置示例内容**：`buildAgent({ builtinKnowledge: false, builtinSkills: false, builtinPromptTemplates: false })`。内置的 `about.md`（一份介绍脚手架自己的文档）、`summarize` 技能与 `review` 提示词模板会进系统提示词 / 斜杠命令菜单，而 `extraKnowledgeDirs` / `extraSkillPaths` / `extraPromptTemplatePaths` 是**叠加不是替换**、内置同名优先——所以这是唯一的关闭入口。当库嵌入别人服务时通常该关掉。
 - **自定义 WS 命令**：`attachWebSocket(server, { commands: { my_cmd: defineCommand<{ a: number }>({ handler }) } })`。客户端发 `{type:"my_cmd"}` 即可调用；**未注册的命令会回明确错误帧**，不会静默。内置命令不可被同名覆盖。
 - **自定义 HTTP 路由**：`createApp({ configure: (app) => app.get("/biz", ...) })`。**必须用这个钩子**，不要拿到 `app` 之后再加——错误处理器已在其内部挂载，之后加的路由排在它后面，抛出的错不会被翻译（实测会把内部细节返回给客户端）。已经加完了才想起封口，用返回值的 `seal()`。
 - **注册资源回收**：`createApp()` / `attachWebSocket()` 的返回值有 `addDisposer(fn)`，`dispose()` / `close()` 时统一回收。扩展里开的定时器、子进程、临时文件都该登记。

@@ -32,6 +32,7 @@ import type { ClientSession, SessionHub } from "../session-hub.js";
 import type { ToolRegistry } from "../tools/registry.js";
 import type { SettingsService } from "../settings.js";
 import { searchKnowledge } from "../knowledge/index.js";
+import { parsePromptImages } from "../prompt-images.js";
 import { Metrics, metrics as defaultMetrics } from "../metrics.js";
 import { getLogger } from "../log.js";
 import { AppError } from "../http/errors.js";
@@ -203,6 +204,10 @@ function buildCapabilities(runtime: WsRuntime): UiCapabilities {
       title: k.title,
       description: k.description,
     })),
+    promptTemplates: runtime.agent.promptTemplates.map((t) => ({
+      name: t.name,
+      description: t.description,
+    })),
     commands: [...DEFAULT_COMMANDS, ...(runtime.slashCommands ?? [])],
     planModeDefault: runtime.settings.get().planMode,
   };
@@ -334,7 +339,26 @@ class ClientConn {
             break;
           }
           this.metrics.inc("promptsTotal");
-          await this.cs?.prompt(msg.text);
+          await this.cs?.prompt(msg.text, parsePromptImages(msg.images));
+          break;
+        case "steer":
+          if (!msg.text?.trim()) {
+            this.send({ type: "error", message: "steer text is required" });
+            break;
+          }
+          // Steering is only meaningful mid-run. When idle, steer() reports that as a
+          // conflict rather than queueing a message that would never be delivered.
+          await this.cs?.steer(msg.text, parsePromptImages(msg.images));
+          break;
+        case "follow_up":
+          if (!msg.text?.trim()) {
+            this.send({ type: "error", message: "follow_up text is required" });
+            break;
+          }
+          await this.cs?.followUp(msg.text, parsePromptImages(msg.images));
+          break;
+        case "abort_compaction":
+          this.cs?.abortCompaction();
           break;
         case "abort":
           await this.cs?.abort();

@@ -13,6 +13,7 @@ if (cmd === "copy") {
   const pairs = [
     ["src/prompts", "dist/prompts"],
     ["src/skills", "dist/skills"],
+    ["src/prompt-templates", "dist/prompt-templates"],
     ["src/knowledge", "dist/knowledge"],
   ];
   for (const [from, to] of pairs) {

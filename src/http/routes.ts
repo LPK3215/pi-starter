@@ -123,7 +123,7 @@ export function registerProbeRoutes(
 /* ────────────────────────── 资源目录 ────────────────────────── */
 
 export function registerResourceRoutes(app: Express, agent: BuiltAgent): void {
-  const { skills, knowledge } = agent;
+  const { skills, knowledge, promptTemplates } = agent;
 
   app.get("/skills", (_req, res) => {
     res.json({
@@ -171,6 +171,33 @@ export function registerResourceRoutes(app: Express, agent: BuiltAgent): void {
     res.json({
       ok: true,
       doc: { name: doc.name, title: doc.title, description: doc.description, body: doc.body },
+    });
+  });
+
+  // Prompt templates are the SDK's slash-command expansion. Body comes from the already
+  // loaded catalog (no re-reading disk), mirroring how /skills serves the SKILL.md text.
+  app.get("/prompt-templates", (_req, res) => {
+    res.json({
+      ok: true,
+      promptTemplates: promptTemplates.map((item) => ({
+        name: item.name,
+        description: item.description,
+        ...(item.argumentHint ? { argumentHint: item.argumentHint } : {}),
+      })),
+    });
+  });
+
+  app.get("/prompt-templates/:name", (req, res) => {
+    const template = promptTemplates.find((item) => item.name === req.params.name);
+    if (!template) throw notFound(`no such prompt template: ${req.params.name}`);
+    res.json({
+      ok: true,
+      promptTemplate: {
+        name: template.name,
+        description: template.description,
+        ...(template.argumentHint ? { argumentHint: template.argumentHint } : {}),
+        body: template.content,
+      },
     });
   });
 }
