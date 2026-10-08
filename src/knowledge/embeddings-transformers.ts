@@ -24,6 +24,8 @@ export interface TransformersEmbeddingsOptions {
   cacheDir?: string;
   /** 量化权重（更小更快），默认 true。 */
   quantized?: boolean;
+  /** 下载主机；默认 huggingface.co，可设 hf-mirror.com 等镜像。 */
+  remoteHost?: string;
 }
 
 const DEFAULT_MODEL = "Xenova/bge-small-zh-v1.5";
@@ -57,12 +59,14 @@ export class TransformersEmbeddings implements EmbeddingProvider {
   private readonly model: string;
   private readonly cacheDir?: string;
   private readonly quantized: boolean;
+  private readonly remoteHost?: string;
   private pipelinePromise: Promise<any> | undefined;
 
   constructor(options: TransformersEmbeddingsOptions = {}) {
     this.model = options.model?.trim() || DEFAULT_MODEL;
     this.cacheDir = options.cacheDir?.trim() || undefined;
     this.quantized = options.quantized ?? true;
+    this.remoteHost = options.remoteHost?.trim() || undefined;
     this.id = `transformers:${this.model}`;
   }
 
@@ -71,6 +75,7 @@ export class TransformersEmbeddings implements EmbeddingProvider {
       this.pipelinePromise = (async () => {
         const hf = await loadTransformers();
         if (this.cacheDir && hf.env) hf.env.cacheDir = this.cacheDir;
+        if (this.remoteHost && hf.env) hf.env.remoteHost = this.remoteHost;
         if (hf.env) hf.env.allowRemoteModels = true;
         // feature-extraction 即 embedding 池化管线。
         return hf.pipeline("feature-extraction", this.model, { quantized: this.quantized });

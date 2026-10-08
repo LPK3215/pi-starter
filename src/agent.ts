@@ -93,6 +93,7 @@ function buildEmbeddings(cfg: RetrievalEmbeddings): EmbeddingProvider {
     return new TransformersEmbeddings({
       ...(cfg.model ? { model: cfg.model } : {}),
       ...(cfg.cacheDir ? { cacheDir: cfg.cacheDir } : {}),
+      ...(cfg.remoteHost ? { remoteHost: cfg.remoteHost } : {}),
     });
   }
   if (!cfg.baseUrl || !cfg.model) {

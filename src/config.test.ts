@@ -105,6 +105,11 @@ test("resolveRetrievalConfig：默认 keyword；vector 需配 base+model 才给 
     resolveRetrievalConfig({ PI_KNOWLEDGE_RETRIEVAL: "vector", PI_EMBEDDINGS_PROVIDER: "transformers", PI_EMBEDDINGS_MODEL: "Xenova/x", PI_EMBEDDINGS_CACHE_DIR: "C:/hf" }),
     { mode: "vector", embeddings: { provider: "transformers", model: "Xenova/x", cacheDir: "C:/hf" } },
   );
+  // transformers + HF 镜像端点
+  assert.deepEqual(
+    resolveRetrievalConfig({ PI_KNOWLEDGE_RETRIEVAL: "vector", PI_EMBEDDINGS_PROVIDER: "transformers", PI_EMBEDDINGS_HF_ENDPOINT: "hf-mirror.com" }),
+    { mode: "vector", embeddings: { provider: "transformers", model: "", remoteHost: "hf-mirror.com" } },
+  );
   // sqlite 向量库后端
   assert.deepEqual(
     resolveRetrievalConfig({ PI_KNOWLEDGE_RETRIEVAL: "vector", PI_KNOWLEDGE_VECTOR_STORE: "sqlite", PI_KNOWLEDGE_VECTOR_DB_PATH: "./v.db" }),

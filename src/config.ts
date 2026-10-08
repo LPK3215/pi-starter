@@ -334,6 +334,7 @@ export interface RetrievalEmbeddings {
   model: string;
   apiKey?: string;
   cacheDir?: string;
+  remoteHost?: string;
 }
 
 export interface RetrievalConfig {
@@ -350,7 +351,14 @@ function parseEmbeddings(env: Record<string, string | undefined>): RetrievalEmbe
   const cacheDir = clean(env.PI_EMBEDDINGS_CACHE_DIR);
   if (provider === "transformers") {
     // 进程内推理：不要求 base/model，model 缺省时用类里的默认小模型。
-    return { provider, ...(model ? { model } : { model: "" }), ...(apiKey ? { apiKey } : {}), ...(cacheDir ? { cacheDir } : {}) };
+    const remoteHost = clean(env.PI_EMBEDDINGS_HF_ENDPOINT);
+    return {
+      provider,
+      ...(model ? { model } : { model: "" }),
+      ...(apiKey ? { apiKey } : {}),
+      ...(cacheDir ? { cacheDir } : {}),
+      ...(remoteHost ? { remoteHost } : {}),
+    };
   }
   // openai / ollama 都需要 base + model
   if (!baseUrl || !model) return undefined;
