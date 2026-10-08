@@ -154,6 +154,10 @@ const agent = await buildAgent({
   modelId: flags.model,
   builtinTools: flags.builtinTools,
   inMemory: false,
+  // 内置示例内容可关：接自己知识库/技能时，关掉才不会被写进系统提示词。
+  // 这两个设置改动需要重启（见 ws.ts 的 set_settings 提示）。
+  builtinKnowledge: settings.get().builtinKnowledge,
+  builtinSkills: settings.get().builtinSkills,
   sessionDir,
   allowedSessionRoots,
   // Honour settings.promptTemplate (empty → default order, identical to before).

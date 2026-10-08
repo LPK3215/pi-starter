@@ -274,6 +274,13 @@ export const SETTINGS_DEFAULTS = {
   planMode: false,
   /** 外部 stdio MCP 服务器清单。空 = 不接任何外部工具。 */
   mcpServers: [] as McpServerConfig[],
+  /**
+   * 是否加载脚手架自带的示例知识库（`about.md`）。
+   * 业务方接自己的知识库时通常要关掉——它会被写进系统提示词。
+   */
+  builtinKnowledge: true,
+  /** 是否加载脚手架自带的示例技能（`summarize`）。同上。 */
+  builtinSkills: true,
 };
 
 export const SETTINGS_SCHEMA: SettingsSchema = {
@@ -287,6 +294,8 @@ export const SETTINGS_SCHEMA: SettingsSchema = {
   toolTimeoutSeconds: int({ min: 0, max: 86400 }),
   planMode: bool(),
   mcpServers: mcpServerList(),
+  builtinKnowledge: bool(),
+  builtinSkills: bool(),
 };
 
 export type Settings = typeof SETTINGS_DEFAULTS;

@@ -545,6 +545,7 @@ Why local extensions and skills are not loaded: pi extensions/skills on your mac
 | [`CONTRIBUTING.md`](CONTRIBUTING.md) | Dev setup, project map, self-check commands, commit conventions |
 | [`SECURITY.md`](SECURITY.md) | Vulnerability reporting and known protection boundaries |
 | [`FAQ.md`](FAQ.md) | Setup, runtime, model switching, deployment, development Q&A |
+| **[`docs/能力与边界.md`](docs/能力与边界.md)** | **Capability list, functional boundaries, why we do/don't mirror the reference project, facts pinned during review** |
 | **[`docs/嵌入指南.md`](docs/嵌入指南.md)** | **Embedding the agent into an existing Express service: two routes, auth placement, measured checklist** |
 | [`AUTHORS`](AUTHORS) | Maintainers |
 | [`scripts/visualization/README.md`](scripts/visualization/README.md) | How the diagrams above are regenerated |

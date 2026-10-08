@@ -513,6 +513,7 @@ server.listen(3000);
 | [`CONTRIBUTING.md`](CONTRIBUTING.md) | 开发环境、项目地图、自检命令、提交约定 |
 | [`SECURITY.md`](SECURITY.md) | 漏洞报告与内建安全边界 |
 | [`FAQ.md`](FAQ.md) | 安装 / 运行时 / 模型切换 / 部署 / 开发 常见问题 |
+| **[`docs/能力与边界.md`](docs/能力与边界.md)** | **能力清单、功能边界、与参考项目的取舍理由、复核时钉死的事实** |
 | **[`docs/嵌入指南.md`](docs/嵌入指南.md)** | **把 Agent 装进已有 Express 服务：两条路线、鉴权挂法、实测自检清单** |
 | [`AUTHORS`](AUTHORS) | 维护者 |
 | [`scripts/visualization/README.md`](scripts/visualization/README.md) | 上面两张图的重新生成方式 |

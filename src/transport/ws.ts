@@ -493,6 +493,19 @@ class ClientConn {
               runtime.registry.setEnabled(name, !disabled.has(name));
             }
             this.cs?.applyToolSet(runtime.registry.enabledNames());
+            // Some settings cannot be hot-applied: the skill/knowledge catalogs are baked into
+            // the system prompt when the agent is assembled. Accepting the change and staying
+            // silent would be the worst outcome — it looks applied and isn't. Say so instead.
+            const restartOnly = (["builtinKnowledge", "builtinSkills", "promptTemplate"] as const).filter(
+              (key) => key in msg.settings,
+            );
+            if (restartOnly.length > 0) {
+              this.send({
+                type: "notice",
+                level: "info",
+                text: `${restartOnly.join(" / ")} 需要重启服务后生效（它们在组装时写进系统提示词，无法热切换）`,
+              });
+            }
             this.send({ type: "settings_state", settings });
           } catch (err) {
             this.send({ type: "error", message: err instanceof Error ? err.message : String(err) });
