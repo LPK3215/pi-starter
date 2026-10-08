@@ -24,7 +24,7 @@ import { fileURLToPath } from "node:url";
 import express, { type Express } from "express";
 import type { Model } from "@earendil-works/pi-ai";
 import type { BuiltAgent } from "./agent.js";
-import { sse, translateEvent } from "./sse.js";
+import { jsonlError, jsonlEvent, jsonlSessionHeader, sse, translateEvent } from "./sse.js";
 import type { ToolRegistry } from "./tools/registry.js";
 import type { SettingsService } from "./settings.js";
 import { hardenApp, type TimeoutOptions } from "./http/hardening.js";
@@ -286,24 +286,42 @@ export function createApp(options: CreateAppOptions): CreateAppResult {
     const message = req.body?.message;
     if (typeof message !== "string" || !message) throw badRequest("message is required");
     if (busy) throw busyError();
+    // Raw official channel (json.md): one JSON object per line, no SSE framing.
+    const jsonl = req.query.format === "jsonl";
     busy = true;
 
     res.writeHead(200, {
-      "Content-Type": "text/event-stream",
+      "Content-Type": jsonl
+        ? "application/x-ndjson; charset=utf-8"
+        : "text/event-stream",
       "Cache-Control": "no-cache",
       Connection: "keep-alive",
       "X-Accel-Buffering": "no",
     });
     res.flushHeaders?.();
+    if (jsonl) {
+      try {
+        res.write(
+          jsonlSessionHeader({
+            id: session.sessionId,
+            timestamp: new Date().toISOString(),
+            cwd: process.cwd(),
+          }),
+        );
+      } catch {
+        /* response already broken */
+      }
+    }
 
     const off = session.subscribe((event) => {
-      const payload = translateEvent(event);
-      if (payload) {
-        try {
-          res.write(payload);
-        } catch {
-          /* response already broken (client left); ignore */
+      try {
+        if (jsonl) res.write(jsonlEvent(event));
+        else {
+          const payload = translateEvent(event);
+          if (payload) res.write(payload);
         }
+      } catch {
+        /* response already broken (client left); ignore */
       }
     });
 
@@ -322,7 +340,21 @@ export function createApp(options: CreateAppOptions): CreateAppResult {
     });
 
     try {
-      await session.prompt(message);
+      // preflightResult fires once before prompt() resolves: false = rejected before
+      // acceptance (no run started). Surface it as an explicit error instead of a silent,
+      // empty stream.
+      let accepted = true;
+      await session.prompt(message, { preflightResult: (ok) => {
+        accepted = ok;
+      } });
+      if (!accepted) {
+        const reason = "消息被拒绝，未开始处理";
+        try {
+          res.write(jsonl ? jsonlError(reason, "conflict") : sse("error", { message: reason, code: "conflict" }));
+        } catch {
+          /* response already broken */
+        }
+      }
     } catch (err: unknown) {
       // Status code is already committed (stream started), so the typed error handler can
       // never see this — it has to be translated here, by the same rules.
@@ -334,17 +366,26 @@ export function createApp(options: CreateAppOptions): CreateAppResult {
       const appErr = toAppError(err);
       getLogger().child({ component: "http" }).error("SSE 对话轮次失败", appErr.toLogFields());
       try {
-        res.write(sse("error", { message: appErr.clientMessage(), code: appErr.code }));
+        const clientMessage = appErr.clientMessage();
+        res.write(
+          jsonl
+            ? jsonlError(clientMessage, appErr.code)
+            : sse("error", { message: clientMessage, code: appErr.code }),
+        );
       } catch {
         /* response already broken */
       }
     } finally {
       settled = true;
       off();
-      try {
-        res.write(sse("done", {}));
-      } catch {
-        /* response already broken */
+      // The SSE contract ends with an explicit `done` frame; the raw NDJSON channel follows
+      // json.md and lets the stream close be the terminal signal.
+      if (!jsonl) {
+        try {
+          res.write(sse("done", {}));
+        } catch {
+          /* response already broken */
+        }
       }
       res.end();
       busy = false;

@@ -5,15 +5,23 @@
  * `additionalPromptTemplatePaths` 的文件。`noPromptTemplates: true` 关掉
  * `~/.pi/agent/prompts` 和项目 `.pi/prompts` 的默认扫描，和技能、扩展同一规矩。
  *
+ * 清单不再自行解析 frontmatter：交给 SDK 的 `DefaultResourceLoader.getPrompts()` 从同一批
+ * `additionalPromptTemplatePaths` 直接拿回 `PromptTemplate[]`（名称/说明/正文），与每会话装载器
+ * 能展开的那批完全一致——单一真源，清单与可展开命令不可能漂移。
+ *
  * 新增模板：`src/prompt-templates/<name>.md`，文件名就是 `/<name>`。
  * 当库用：`buildAgent({ extraPromptTemplatePaths: ["/path/to/dir-or-file.md"] })`。
  * 不要内置示例（`review`）：`buildAgent({ builtinPromptTemplates: false })`。
  */
 
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { existsSync, readdirSync, statSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { PromptTemplate } from "@earendil-works/pi-coding-agent";
+import {
+  DefaultResourceLoader,
+  getAgentDir,
+  type PromptTemplate,
+} from "@earendil-works/pi-coding-agent";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -104,56 +112,31 @@ export function resolvePromptTemplatePaths(
 }
 
 /**
- * 解析模板，只要名称/说明/正文，供 /prompt-templates 与 capabilities 展示。
+ * 交给 SDK 装载器读取模板清单（名称/说明/正文），供 /prompt-templates 与 capabilities 展示。
  *
- * 真正的 `/name` 展开仍由 SDK 的 `DefaultResourceLoader` 完成（见 `additionalPromptTemplatePaths`）；
- * 这里不能依赖 `loadPromptTemplates`——它不是包的主入口导出（主包只 re-export 了 `PromptTemplate` 类型），
- * 所以清单自行解析 frontmatter，与交给 SDK 的是同一批文件。
+ * 走官方 `DefaultResourceLoader.getPrompts()`——不自己解析 frontmatter。用只加载模板的最小
+ * 装载器（不跑扩展工厂、不联网、不调模型）；路径就是随后交给每会话装载器的同一批。
  */
-export function loadScaffoldPromptTemplates(
+export async function loadScaffoldPromptTemplates(
   paths: readonly string[],
-): LoadedPromptTemplate[] {
-  const out: LoadedPromptTemplate[] = [];
-  for (const file of paths) {
-    let raw: string;
-    try {
-      raw = readFileSync(file, "utf-8");
-    } catch {
-      continue;
-    }
-    const { frontmatter, body } = splitFrontmatter(raw);
-    const name = basename(file).replace(/\.md$/, "");
-    const description = frontmatter.description ?? firstNonEmptyLine(body) ?? name;
-    const template: LoadedPromptTemplate = { name, description, content: body };
-    const hint = frontmatter["argument-hint"];
-    if (hint) template.argumentHint = hint;
-    out.push(template);
-  }
-  return out;
-}
-
-/** Split a leading `---` frontmatter block from the body, parsing flat `key: value` lines. */
-function splitFrontmatter(raw: string): { frontmatter: Record<string, string>; body: string } {
-  const match = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/.exec(raw);
-  if (!match) return { frontmatter: {}, body: raw };
-  const [, block, body] = match;
-  const frontmatter: Record<string, string> = {};
-  for (const line of (block ?? "").split(/\r?\n/)) {
-    const kv = /^([A-Za-z0-9_-]+):\s*(.*)$/.exec(line.trim());
-    if (kv) {
-      const key = kv[1]!;
-      const value = kv[2]!.trim().replace(/^['"]|['"]$/g, "");
-      if (value) frontmatter[key] = value;
-    }
-  }
-  return { frontmatter, body: body ?? "" };
-}
-
-/** First non-empty line of the body (used as the description fallback, matching the spec). */
-function firstNonEmptyLine(body: string): string | undefined {
-  for (const line of body.split(/\r?\n/)) {
-    const trimmed = line.trim();
-    if (trimmed) return trimmed.replace(/^#+\s*/, "");
-  }
-  return undefined;
+  cwd: string = process.cwd(),
+): Promise<LoadedPromptTemplate[]> {
+  if (paths.length === 0) return [];
+  const loader = new DefaultResourceLoader({
+    cwd,
+    agentDir: getAgentDir(),
+    noExtensions: true,
+    noSkills: true,
+    noContextFiles: true,
+    noPromptTemplates: true,
+    additionalPromptTemplatePaths: [...paths],
+    extensionFactories: [],
+  });
+  await loader.reload();
+  return loader.getPrompts().prompts.map((item) => ({
+    name: item.name,
+    description: item.description,
+    ...(item.argumentHint !== undefined ? { argumentHint: item.argumentHint } : {}),
+    content: item.content,
+  }));
 }

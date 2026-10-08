@@ -58,3 +58,32 @@ export function translateEvent(event: AgentSessionEvent): string | null {
       return null;
   }
 }
+
+/**
+ * 官方 JSON 事件流（json.md）：一条事件 = 一行 JSON，不做 SSE 封装。
+ * 与 translateEvent 并存：后者是给前端的精简协议，这里给跨语言 / 自定义 UI 的原始事件出口。
+ */
+export function jsonlEvent(event: AgentSessionEvent): string {
+  return `${JSON.stringify(event)}\n`;
+}
+
+/** NDJSON 首行的会话头，对齐 json.md 的 `{"type":"session",...}`。 */
+export function jsonlSessionHeader(info: {
+  id: string;
+  timestamp: string;
+  cwd: string;
+  version?: number;
+}): string {
+  return `${JSON.stringify({
+    type: "session",
+    version: info.version ?? 3,
+    id: info.id,
+    timestamp: info.timestamp,
+    cwd: info.cwd.replace(/\\/g, "/"),
+  })}\n`;
+}
+
+/** 原始通道里一条非事件的错误行（失败/预检拒绝），仍是合法 JSON 行。 */
+export function jsonlError(message: string, code?: string): string {
+  return `${JSON.stringify({ type: "error", message, ...(code ? { code } : {}) })}\n`;
+}

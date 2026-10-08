@@ -189,7 +189,15 @@ export type ClientMessage =
   | { type: "close_conversation"; conversationId: string }
   | { type: "list_conversations" }
   | { type: "rename_conversation"; conversationId: string; title: string }
-  | { type: "rollback_conversation"; conversationId: string; entryId: string }
+  | {
+      type: "rollback_conversation";
+      conversationId: string;
+      entryId: string;
+      /** 走 SDK 官方 `navigateTree` 带分支摘要（后端可用时）。 */
+      summarize?: boolean;
+      /** 摘要时"该保留什么"的额外指令，交给 navigateTree 的 customInstructions。 */
+      instructions?: string;
+    }
   | { type: "edit_message"; conversationId: string; entryId: string }
   | { type: "fork_conversation"; conversationId: string; entryId?: string }
   // 模型与思考

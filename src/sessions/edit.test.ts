@@ -225,6 +225,18 @@ class TreeSession {
   getFollowUpMessages(): readonly string[] {
     return [];
   }
+
+  /** 官方 navigateTree 的测试替身：记下调用、挪叶子、刷新模型看到的消息。 */
+  readonly navigateTreeCalls: Array<{ id: string; options?: unknown }> = [];
+  navigateTree(
+    id: string,
+    options?: { summarize?: boolean; customInstructions?: string },
+  ): Promise<{ cancelled: boolean }> {
+    this.navigateTreeCalls.push({ id, options });
+    this.sessionManager.branch(id);
+    this.agent.state.messages = this.sessionManager.buildSessionContext().messages;
+    return Promise.resolve({ cancelled: false });
+  }
 }
 
 function conversation(manager: SessionManager): { conv: Conversation; frames: ServerMessage[] } {
@@ -243,7 +255,7 @@ function conversation(manager: SessionManager): { conv: Conversation; frames: Se
   return { conv, frames };
 }
 
-test("对话上的回退会换掉模型看到的消息，正在生成时拒绝且不写标记", () => {
+test("对话上的回退会换掉模型看到的消息，正在生成时拒绝且不写标记", async () => {
   const cwd = mkdtempSync(join(tmpdir(), "pi-edit-"));
   const dir = join(cwd, "sessions");
   mkdirSync(dir);
@@ -254,7 +266,8 @@ test("对话上的回退会换掉模型看到的消息，正在生成时拒绝�
   const live = session;
   live.isStreaming = true;
   const leaf = manager.getLeafId();
-  assert.throws(() => conv.rollbackTo(ids.a1), (err: unknown) => {
+  // 回退现在是 async：流式闸门在 await 之前抛，会变成 rejected Promise 而非同步 throw。
+  await assert.rejects(() => conv.rollbackTo(ids.a1), (err: unknown) => {
     assert.ok(err instanceof AppError);
     assert.equal(err.code, "conflict");
     return true;
@@ -262,13 +275,46 @@ test("对话上的回退会换掉模型看到的消息，正在生成时拒绝�
   assert.equal(manager.getLeafId(), leaf);
 
   live.isStreaming = false;
-  conv.rollbackTo(ids.a1);
+  await conv.rollbackTo(ids.a1);
   assert.deepEqual(texts(manager), ["第一句", "第一答"]);
   const snapshots = frames.filter((frame) => frame.type === "snapshot");
   const last = snapshots[snapshots.length - 1];
   assert.ok(last && last.type === "snapshot");
   assert.deepEqual(last.state.messages.map((message) => message.text), ["第一句", "第一答"]);
   assert.ok(last.state.messages.every((message) => Boolean(message.entryId)));
+});
+
+test("回退 summarize:true 且 SDK 提供 navigateTree 时走官方树导航、不把指令吞掉", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "pi-edit-"));
+  const dir = join(cwd, "sessions");
+  mkdirSync(dir);
+  const { manager, ids } = transcript(dir, cwd);
+  const { conv } = conversation(manager);
+  const session = (conv as unknown as { session: TreeSession }).session;
+
+  await conv.rollbackTo(ids.a1, { summarize: true, instructions: "保留结论" });
+
+  assert.equal(session.navigateTreeCalls.length, 1, "应走 navigateTree 而不是 branch 回落");
+  assert.equal(session.navigateTreeCalls[0]!.id, ids.a1);
+  assert.deepEqual(session.navigateTreeCalls[0]!.options, {
+    summarize: true,
+    customInstructions: "保留结论",
+  });
+  assert.deepEqual(texts(manager), ["第一句", "第一答"]);
+});
+
+test("回退不带 summarize 时走 branch + 标记路径（不碰 navigateTree）", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "pi-edit-"));
+  const dir = join(cwd, "sessions");
+  mkdirSync(dir);
+  const { manager, ids } = transcript(dir, cwd);
+  const { conv } = conversation(manager);
+  const session = (conv as unknown as { session: TreeSession }).session;
+
+  await conv.rollbackTo(ids.a1);
+
+  assert.equal(session.navigateTreeCalls.length, 0, "没请求摘要就不应走 navigateTree");
+  assert.deepEqual(texts(manager), ["第一句", "第一答"]);
 });
 
 test("改名写进会话文件，占位标题不会在下一条消息时被盖掉", () => {
@@ -342,7 +388,7 @@ test("没打开的对话可以改名，不能回退；分叉会打开新文件�
   const hub = new SessionHub(agent as never as BuiltAgent, resolveRuntimeConfig(), cwd, () => 6, 8, () => 0, [dir], catalog);
   await hub.attach("c1", () => {});
 
-  assert.throws(() => hub.rollbackConversation("c1", sourceId, ids.a1), (err: unknown) => {
+  await assert.rejects(() => hub.rollbackConversation("c1", sourceId, ids.a1), (err: unknown) => {
     assert.ok(err instanceof AppError);
     assert.match(err.message, /open_conversation/);
     return true;

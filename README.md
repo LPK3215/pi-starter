@@ -509,7 +509,7 @@ Backend endpoints are listed below. Build your own page later; do not edit the s
 | GET | `/db/notes` | sample table |
 | POST | `/db/query` | `{ "sql": "SELECT …" }`, read-only, row-capped (200) |
 | POST | `/model` | `{ "model": "provider/modelId" }`, switch in current session |
-| POST | `/chat` | `{ "message": "..." }`, response is an SSE stream |
+| POST | `/chat` | `{ "message": "..."}`, response is an SSE stream. Add `?format=jsonl` for the raw official JSON event stream (one event per line, `json.md` vocabulary) |
 
 `/db/query` accepts a **single** read-only statement. Validation strips comments and string literals first, then scans the whole statement for write/DDL keywords — so `WITH x AS (DELETE …) SELECT …` is rejected even though it starts with `WITH`. Rejections state the specific reason (e.g. `检测到非只读关键字：DELETE`) so a model can self-correct. Results are capped at 200 rows and report `truncated` / `totalRows`.
 
@@ -541,7 +541,7 @@ Why coding tools are off by default while `read` stays on: we**always** pass `to
 
 The cost: the allowlist cannot be extended after construction (the SDK exposes no way to change it — only `setActiveToolsByName` to toggle enablement). Tools added at runtime (MCP) must therefore be**recomputed per session**: `resolveToolList()` is deliberately evaluated *inside* `createSession`, so reopening a conversation picks them up. Computing it once at build time would make MCP tools unreachable forever.
 
-Also: the SDK only writes the skill catalog into the system prompt when the tool set contains `read`, and the model uses `read` to load SKILL.md — this is the official path; there is no separate `read_skill` wrapper.
+Also: the SDK only writes the skill catalog into the system prompt when the tool set contains `read`, and the model uses `read` to load SKILL.md — this is the official path; there is no separate `read_skill` wrapper. The scaffold relies on that SDK-injected `<available_skills>` and no longer composes its own second catalog (the `{{skills}}` template layer was removed; the token still renders empty for backward compatibility with custom templates). The `/skills` and `/prompt-templates` inventories come straight from the loader (`getSkills()` / `getPrompts()`), so the catalog and what the system prompt / slash-expansion actually carries can never drift.
 
 Why local extensions and skills are not loaded: pi extensions/skills on your machine may re-register bash/write, or push unrelated workflows into this vertical agent.
 
@@ -553,6 +553,9 @@ Why local extensions and skills are not loaded: pi extensions/skills on your mac
 - **Multi-user**: one `buildAgent()` + independent session per user; do not reuse the current single `busy` flag.
 - **Enable coding tools**: `PI_BUILTIN_TOOLS=coding` or `--builtin-tools coding`. That also turns on `exec` / `exec_jobs` / `exec_stop`. Even then, `guard` still blocks dangerous bash / exec and paths escaping cwd. It is not an interactive PTY.
 - **Model switching**: at startup `--model provider/modelId`; in CLI `/model`; over HTTP `POST /model`. Only models with configured keys are accepted, via `session.setModel`, no session rebuild.
+- **Custom providers**: `setup.ts` writes `~/.pi/agent/models.json` (the official custom-models path, enough for OpenAI/Anthropic-compatible vendors). For a proxy gateway, private endpoint, or custom auth resolution, register a provider through the SDK's `pi.registerProvider(name, config)` — see `src/extensions/custom-provider.example.ts` (not wired by default; pass it via `buildAgent({ extraExtensions })`). Interactive OAuth (`/login`, device code) is TUI-only and deliberately **not** implemented in this headless backend.
+- **Consuming pi packages**: the backend keeps `noExtensions` / `noSkills` / `noPromptTemplates` isolation and does not run `pi install` / `pi update` (those belong to the `pi` CLI). To use a package's resources, point its `skills/`, `prompts/`, `extensions/` directories at the existing inject params — `extraSkillPaths` / `extraPromptTemplatePaths` / `extraExtensions` — which is the headless equivalent of the loader's `extendResources`.
+- **JSON event stream**: `POST /chat?format=jsonl` emits the raw SDK events as NDJSON (first line `{"type":"session",...}`, then one event per line) instead of the translated SSE frames — a language-agnostic exit for custom UIs, off by default so the existing SSE contract is unchanged.
 - **Skills / knowledge / database**: skills into `src/skills/`; knowledge into `src/knowledge/`; the DB is in-memory by default, or set `PI_DATABASE_PATH` / pass `buildAgent({ database })`. For vector stores or remote SQL, write a tool and pass it through `extraTools`.
 - **Turning off the built-in example content**: `buildAgent({ builtinKnowledge: false, builtinSkills: false, builtinPromptTemplates: false })`. The bundled `about.md` (a document describing the scaffold itself), the `summarize` skill and the `review` prompt template land in the system prompt / slash-command menu, and `extraKnowledgeDirs` / `extraSkillPaths` / `extraPromptTemplatePaths` are **additive, not replacing** — so this is the only way to exclude them. Worth doing when embedding into someone else's service.
 - **Custom WS commands**: `attachWebSocket(server, { commands: { my_cmd: defineCommand<{ a: number }>({ handler }) } })`. Clients invoke it with `{type:"my_cmd"}`; **unregistered commands get an explicit error frame** rather than silence. Built-ins cannot be shadowed by a same-named registration.

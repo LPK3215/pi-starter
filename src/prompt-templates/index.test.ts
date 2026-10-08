@@ -59,12 +59,14 @@ test("超大模板与超出数量上限的模板被跳过，不进 SDK 路径", 
   assert.equal(many.length, 1, "受 maxTemplates 截断");
 });
 
-test("loadScaffoldPromptTemplates 读到真实 review 的名称、说明与正文", () => {
+test("loadScaffoldPromptTemplates 走官方 loader：从 review.md 读到名称、说明与正文", async () => {
   const builtinDir = resolvePromptTemplatesDir();
   assert.ok(builtinDir);
-  const loaded = loadScaffoldPromptTemplates([join(builtinDir, "review.md")]);
+  const loaded = await loadScaffoldPromptTemplates([join(builtinDir, "review.md")]);
   const review = loaded.find((t) => t.name === "review");
   assert.ok(review, "review 模板应被加载");
   assert.ok(review!.description.trim().length > 0, "说明非空");
   assert.ok(review!.content.trim().length > 0, "正文非空");
+  // 空路径不建 loader。
+  assert.deepEqual(await loadScaffoldPromptTemplates([]), []);
 });

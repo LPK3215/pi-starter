@@ -82,13 +82,6 @@ function renderSystemPrompt(template: string | undefined, layers: PromptLayers):
   return composePrompt(trimmed ? trimmed : defaultPromptTemplate(), layers);
 }
 
-/** One-line-per-skill catalog for the `{{skills}}` prompt layer (empty when no skills). */
-function formatSkillCatalog(skills: readonly LoadedSkill[]): string | undefined {
-  if (skills.length === 0) return undefined;
-  const lines = skills.map((skill) => `- ${skill.name}: ${skill.description}`);
-  return `Available skills (load with /<name>):\n${lines.join("\n")}`;
-}
-
 /** 组装 Agent 的配置选项 */
 export interface BuildAgentOptions {
   /** 指定 provider（如 modelscope / zhipu），不传则读 .env 的 PI_PROVIDER */
@@ -292,7 +285,7 @@ export async function buildAgent(options: BuildAgentOptions = {}): Promise<Built
       getLogger().warn("提示词模板已跳过", { file, reason });
     },
   });
-  const promptTemplates = loadScaffoldPromptTemplates(promptTemplatePaths);
+  const promptTemplates = await loadScaffoldPromptTemplates(promptTemplatePaths);
   const database =
     options.database ??
     openScaffoldDatabase({
@@ -300,12 +293,14 @@ export async function buildAgent(options: BuildAgentOptions = {}): Promise<Built
     });
 
   const knowledgeCatalog = formatKnowledgeCatalog(knowledge);
+  // The skill catalog is NOT composed here anymore: the SDK's buildSystemPrompt appends its
+  // own `<available_skills>` (via formatSkillsForPrompt) whenever `read` is in the tool set,
+  // which the `off` tier guarantees. Injecting a second one here produced two catalogs.
   const layers: PromptLayers = {
     persona: "",
     rules: "",
     knowledge: knowledgeCatalog || undefined,
     cwd: process.cwd(),
-    skills: formatSkillCatalog(skills),
     append: options.promptAppend,
   };
 

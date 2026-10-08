@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
-import { sse, toolResultPreview, translateEvent } from "./sse.js";
+import { jsonlError, jsonlEvent, jsonlSessionHeader, sse, toolResultPreview, translateEvent } from "./sse.js";
 
 function asEvent(event: object): AgentSessionEvent {
   return event as unknown as AgentSessionEvent;
@@ -67,4 +67,21 @@ test("无关事件返回 null，sse 信封符合规范", () => {
   assert.equal(translateEvent(asEvent({ type: "agent_settled" })), null);
   assert.equal(sse("done", {}), `data: ${JSON.stringify({ type: "done", data: {} })}\n\n`);
   assert.equal(toolResultPreview({ content: [{ type: "text", text: "ok" }] }), "ok");
+});
+
+test("官方 JSON 事件流：每行一条合法 JSON，首行为会话头，错误行也合法", () => {
+  // 事件不重新包装（raw 通道），只逐行 JSON.stringify。
+  const line = jsonlEvent(
+    asEvent({ type: "agent_start" }),
+  );
+  assert.ok(line.endsWith("\n"), "NDJSON 每行以换行结尾");
+  assert.deepEqual(JSON.parse(line), { type: "agent_start" });
+  // 官方 json.md 首行的会话头。
+  const header = JSON.parse(jsonlSessionHeader({ id: "s1", timestamp: "T", cwd: "C:\\x" }));
+  assert.equal(header.type, "session");
+  assert.equal(header.version, 3);
+  assert.equal(header.id, "s1");
+  assert.equal(header.cwd, "C:/x", "cwd 反斜杠归一为正斜杠（对齐 json.md）");
+  const errLine = JSON.parse(jsonlError("被拒绝", "conflict"));
+  assert.deepEqual(errLine, { type: "error", message: "被拒绝", code: "conflict" });
 });

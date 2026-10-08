@@ -35,11 +35,26 @@ export interface PromptLayers {
   context?: string;
 }
 
-/** 默认拼接顺序（等价于改造前的 persona + rules + knowledge）。 */
-export const DEFAULT_PROMPT_ORDER = ["persona", "rules", "append", "tools", "skills", "knowledge", "context"] as const;
+/** 默认拼接顺序（等价于改造前的 persona + rules + knowledge）。
+ * 注意：`skills` 不在默认顺序里——技能目录由 SDK 的 `buildSystemPrompt` 以 `<available_skills>`
+ * 追加（见 A1），这里再拼一份就会出现两份清单。`{{skills}}` 仍是**已知** token（渲染为空），
+ * 仅为兼容旧模板不报错，不再作为清单注入点。 */
+export const DEFAULT_PROMPT_ORDER = ["persona", "rules", "append", "tools", "knowledge", "context"] as const;
 
-/** 引擎认识的 token 集合。 */
-const KNOWN_TOKENS: ReadonlySet<string> = new Set(DEFAULT_PROMPT_ORDER);
+/** 引擎认识的全部层 token（含不在默认顺序里的 skills / cwd），供 renderToken 与 unknownTokens 共用。 */
+export const PROMPT_LAYER_KEYS = [
+  "persona",
+  "rules",
+  "tools",
+  "knowledge",
+  "skills",
+  "cwd",
+  "append",
+  "context",
+] as const;
+
+/** 引擎认识的 token 集合。已知层缺失渲染空串；未知 token 原样保留。 */
+const KNOWN_TOKENS: ReadonlySet<string> = new Set<string>(PROMPT_LAYER_KEYS);
 
 /** 默认模板：按 DEFAULT_PROMPT_ORDER 用空行连接。 */
 export function defaultPromptTemplate(): string {
@@ -81,7 +96,10 @@ export function composeFromLayers(layers: PromptLayers): string {
 }
 
 /** 校验模板里的 token 是否都被支持（返回未知 token 列表）。 */
-export function unknownTokens(template: string, allowed: readonly string[] = DEFAULT_PROMPT_ORDER): string[] {
+export function unknownTokens(
+  template: string,
+  allowed: readonly string[] = PROMPT_LAYER_KEYS,
+): string[] {
   const allowedSet = new Set<string>(allowed);
   const unknown: string[] = [];
   for (const match of template.matchAll(TOKEN_RE)) {

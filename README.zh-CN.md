@@ -479,7 +479,7 @@ curl -X POST http://localhost:3000/db/query \
 | GET | `/db/notes` | 示例表 |
 | POST | `/db/query` | `{ "sql": "SELECT …" }`，只读 |
 | POST | `/model` | `{ "model": "provider/modelId" }`，当前会话切换 |
-| POST | `/chat` | `{ "message": "..." }`，响应是 SSE 流 |
+| POST | `/chat` | `{ "message": "..." }`，响应是 SSE 流；加 `?format=jsonl` 走官方原始 JSON 事件流（一行一个事件，`json.md` 词表） |
 
 嵌进已有 Express 时用 `createApp({ agent, staticDir: false })`，不要再开一个端口。完整装配、鉴权挂法与实测结论见 **[`docs/嵌入指南.md`](docs/嵌入指南.md)**。
 
@@ -509,7 +509,7 @@ server.listen(3000);
 
 代价是白名单**构造后不可增补**（SDK 没有公开的修改方法，只有 `setActiveToolsByName` 切启用状态），所以运行期新增的工具（MCP）必须**按会话重算**——`resolveToolList()` 刻意在 `createSession` 内部求值，重开会话即生效。清单放在 build 时算一次会让 MCP 工具永远进不去。
 
-另：SDK 只有在工具集含 `read` 时才把技能目录写进系统提示词，模型也用 `read` 加载 SKILL.md——这是官方路径，不另包 `read_skill`。
+另：SDK 只有在工具集含 `read` 时才把技能目录写进系统提示词，模型也用 `read` 加载 SKILL.md——这是官方路径，不另包 `read_skill`。脚手架就依赖这份 SDK 注入的 `<available_skills>`，不再自己拼第二份目录（`{{skills}}` 模板层已移除；为兼容旧模板，该 token 仍渲染为空）。`/skills` 与 `/prompt-templates` 的清单直接取自装载器（`getSkills()` / `getPrompts()`），所以清单与系统提示词 / 斜杠展开实际带的那批不可能再漂移。
 
 为什么不加载本机扩展和技能：用户机器上的 pi 扩展 / 技能可能再次注册 bash/write，或把不相干的工作流塞进这个垂直 Agent。
 
@@ -521,6 +521,9 @@ server.listen(3000);
 - **多用户**：每个用户一个 `buildAgent()` + 独立 session；不要共用现在这个 `busy` 标志。
 - **打开编码工具**：`PI_BUILTIN_TOOLS=coding` 或 `--builtin-tools coding`。这一档同时打开 `exec` / `exec_jobs` / `exec_stop`。打开后 `guard` 仍会拦截危险 bash / exec 和越出 cwd 的路径。不是交互式 PTY。
 - **模型切换**：启动时 `--model provider/modelId`；CLI `/model`；HTTP `POST /model`。只接受已配好 Key 的模型，走 `session.setModel`，不重建会话。
+- **自定义 provider**：`setup.ts` 把 provider 写进 `~/.pi/agent/models.json`（官方 custom-models 路径，OpenAI/Anthropic 兼容厂商够用）。要接代理网关、私有端点或自定义鉴权解析，走 SDK 的 `pi.registerProvider(name, config)`——见 `src/extensions/custom-provider.example.ts`（默认不接线，用 `buildAgent({ extraExtensions })` 传进去）。交互式 OAuth（`/login`、设备码）属 TUI，无头后端**不实现**。
+- **消费 pi packages**：后端保持 `noExtensions` / `noSkills` / `noPromptTemplates` 隔离，不跑 `pi install` / `pi update`（那是 `pi` CLI 的事）。要用某个包的资源，把它的 `skills/`、`prompts/`、`extensions/` 目录经现有注入参数传进来——`extraSkillPaths` / `extraPromptTemplatePaths` / `extraExtensions`，等价于装载器的 `extendResources`。
+- **JSON 事件流**：`POST /chat?format=jsonl` 把原始 SDK 事件按 NDJSON 逐行输出（首行 `{"type":"session",...}`，之后一行一个事件），而不是翻译后的 SSE 帧——给自定义 UI / 跨语言的出口，默认关，不动现有 SSE 契约。
 - **技能 / 知识库 / 数据库**：技能丢进 `src/skills/`；知识库丢进 `src/knowledge/`；数据库默认内存，或 `PI_DATABASE_PATH` / `buildAgent({ database })`。要接向量库或远程 SQL，写成工具从 `extraTools` 进来。
 - **关掉内置示例内容**：`buildAgent({ builtinKnowledge: false, builtinSkills: false, builtinPromptTemplates: false })`。内置的 `about.md`（一份介绍脚手架自己的文档）、`summarize` 技能与 `review` 提示词模板会进系统提示词 / 斜杠命令菜单，而 `extraKnowledgeDirs` / `extraSkillPaths` / `extraPromptTemplatePaths` 是**叠加不是替换**、内置同名优先——所以这是唯一的关闭入口。当库嵌入别人服务时通常该关掉。
 - **自定义 WS 命令**：`attachWebSocket(server, { commands: { my_cmd: defineCommand<{ a: number }>({ handler }) } })`。客户端发 `{type:"my_cmd"}` 即可调用；**未注册的命令会回明确错误帧**，不会静默。内置命令不可被同名覆盖。

@@ -232,6 +232,7 @@ export {
 
 export {
   DEFAULT_PROMPT_ORDER,
+  PROMPT_LAYER_KEYS,
   composeFromLayers,
   composePrompt,
   defaultPromptTemplate,

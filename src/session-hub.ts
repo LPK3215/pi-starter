@@ -389,7 +389,9 @@ export class Conversation {
         break;
       }
       case "queue_update": {
-        // Steering / follow-up queues changed; snapshot carries them.
+        // Steering / follow-up 队列变了。快照里的 `queue` 是权威来源，但默认只在边界才刷；
+        // 队列随时可能变（用户 steer/followUp 排队），这里立即出一份快照，不必等下一个增量。
+        this.getState();
         break;
       }
       case "entry_appended": {
@@ -647,10 +649,22 @@ export class Conversation {
     return this.session;
   }
 
-  prompt(text: string, images?: ImageContent[]): Promise<void> {
+  async prompt(text: string, images?: ImageContent[]): Promise<void> {
     if (this.title === "New conversation" && text.trim()) this.title = deriveTitle(text);
     this.lastActiveAt = Date.now();
-    return this.session.prompt(text, images ? { images } : undefined);
+    // preflightResult 在 prompt() resolve 之前回调一次：false = 被预检拒绝（未开始一轮）。
+    // SDK 此时不抛错、只静默返回，所以这里把它翻成明确的类型化错误，让 WS/REST 给出反馈
+    // 而不是让调用方以为已经发了。
+    let accepted = true;
+    await this.session.prompt(text, {
+      ...(images ? { images } : {}),
+      preflightResult: (ok) => {
+        accepted = ok;
+      },
+    });
+    if (!accepted) {
+      throw new AppError("conflict", "消息被拒绝，未开始处理", { expose: true });
+    }
   }
 
   /**
@@ -868,10 +882,38 @@ export class Conversation {
     return next;
   }
 
-  /** 叶子留在这条记录上，后半段离开当前路径。标记写入文件，重启后还在。 */
-  rollbackTo(entryId: string): void {
+  /**
+   * 叶子留在这条记录上，后半段离开当前路径。标记写入文件，重启后还在。
+   *
+   * `summarize` 为真且 SDK 提供了 `navigateTree` 时，走**官方树导航**：把叶子挪到
+   * 目标记录并对被丢掉的后半段生成分支摘要（`customInstructions` 说"该保留什么"）。
+   * `navigateTree` 不可用（替身 / 老版本）时回落到原先的 `branch()` + custom 标记路径，
+   * 行为与接入前一致。两条路之后都要 `adoptTree` 让模型消息与投影缓存跟着走。
+   */
+  async rollbackTo(
+    entryId: string,
+    opts?: { summarize?: boolean; instructions?: string },
+  ): Promise<void> {
     if (this.session.isStreaming) {
       throw new AppError("conflict", "对话正在生成，先停掉再回退");
+    }
+    const navigate = (
+      this.session as {
+        navigateTree?: (
+          id: string,
+          options?: { summarize?: boolean; customInstructions?: string; label?: string },
+        ) => Promise<unknown>;
+      }
+    ).navigateTree;
+    if (opts?.summarize && typeof navigate === "function") {
+      await navigate.call(this.session, entryId.trim(), {
+        summarize: true,
+        ...(opts.instructions ? { customInstructions: opts.instructions } : {}),
+      });
+      const manager = this.sessionManager();
+      if (manager) this.adoptTree(manager);
+      else this.getState();
+      return;
     }
     const manager = this.requireManager();
     rollbackSession(manager, entryId);
@@ -1511,9 +1553,14 @@ export class SessionHub {
   }
 
   /** 没打开的对话不静默加载。回退会改模型接下来看到的上下文，必须是用户正在看的那条。 */
-  rollbackConversation(clientId: string, conversationId: string, entryId: string): void {
+  async rollbackConversation(
+    clientId: string,
+    conversationId: string,
+    entryId: string,
+    opts?: { summarize?: boolean; instructions?: string },
+  ): Promise<void> {
     const conv = this.requireLoaded(clientId, conversationId);
-    conv.rollbackTo(entryId);
+    await conv.rollbackTo(entryId, opts);
     this.remember(conv);
   }
 

@@ -434,7 +434,10 @@ class ClientConn {
                 this.send({ type: "error", message: "entryId is required" });
                 break;
               }
-              runtime.hub.rollbackConversation(this.clientId, msg.conversationId, msg.entryId);
+              await runtime.hub.rollbackConversation(this.clientId, msg.conversationId, msg.entryId, {
+                summarize: msg.summarize,
+                instructions: msg.instructions,
+              });
             } else if (msg.type === "edit_message") {
               if (!msg.entryId?.trim()) {
                 this.send({ type: "error", message: "entryId is required" });

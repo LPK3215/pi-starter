@@ -16,7 +16,7 @@ import { loadSkillsFromDirs } from "./skills/index.js";
 type Listener = (event: AgentSessionEvent) => void;
 
 function fakeAgent(overrides: {
-  prompt?: () => Promise<void>;
+  prompt?: (message: string, options?: { preflightResult?: (ok: boolean) => void }) => Promise<void>;
   abort?: () => void;
   skills?: BuiltAgent["skills"];
   knowledge?: BuiltAgent["knowledge"];
@@ -25,6 +25,7 @@ function fakeAgent(overrides: {
 } = {}): BuiltAgent {
   const listeners = new Set<Listener>();
   const session = {
+    sessionId: "chat-test-session",
     subscribe(listener: Listener) {
       listeners.add(listener);
       return () => listeners.delete(listener);
@@ -341,6 +342,66 @@ test("POST /chat 缺 message 400，忙时 429", async () => {
     const done = await first;
     assert.equal(done.status, 200);
     assert.match(await done.text(), /"type":"done"/);
+  } finally {
+    await close();
+    dispose();
+  }
+});
+
+test("POST /chat?format=jsonl 走官方 NDJSON：首行会话头，无 SSE 封装", async () => {
+  const { app, dispose } = createApp({
+    agent: fakeAgent({ prompt: async () => undefined }),
+    staticDir: false,
+  });
+  const { url, close } = await listen(app);
+  try {
+    const res = await fetch(`${url}/chat?format=jsonl`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ message: "hi" }),
+    });
+    assert.match(res.headers.get("content-type") ?? "", /application\/x-ndjson/);
+    const text = await res.text();
+    assert.ok(!text.includes("data: "), "NDJSON 通道不得带 SSE 信封");
+    const first = text.split("\n")[0]!;
+    const header = JSON.parse(first);
+    assert.equal(header.type, "session");
+    assert.equal(typeof header.id, "string");
+    // 默认（不带 format）仍是 SSE，并以 done 收尾。
+    const sseRes = await fetch(`${url}/chat`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ message: "hi" }),
+    });
+    assert.match(sseRes.headers.get("content-type") ?? "", /text\/event-stream/);
+    assert.match(await sseRes.text(), /"type":"done"/);
+  } finally {
+    await close();
+    dispose();
+  }
+});
+
+test("POST /chat 预检拒绝（preflightResult false）时回明确 conflict，不静默", async () => {
+  const { app, dispose } = createApp({
+    agent: fakeAgent({
+      // SDK 在被预检拒时不报错、只回调 false 后静默 resolve；这里要把它翻成可见错误。
+      prompt: async (_m, opts) => {
+        opts?.preflightResult?.(false);
+      },
+    }),
+    staticDir: false,
+  });
+  const { url, close } = await listen(app);
+  try {
+    const res = await fetch(`${url}/chat`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ message: "hi" }),
+    });
+    const text = await res.text();
+    assert.match(text, /"code":"conflict"/, "预检拒绝应回 conflict 码");
+    assert.match(text, /消息被拒绝/, "并给出可读原因");
+    assert.match(text, /"type":"done"/, "流仍干净收尾");
   } finally {
     await close();
     dispose();
