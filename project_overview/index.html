@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>π-starter · Project Overview</title>
+<meta name="description" content="pi-starter — an agent scaffold on the @earendil-works/pi-coding-agent SDK. Interactive project panorama: architecture, tech stack, API, retrieval, quality.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="./style.css">
+</head>
+<body>
+<div id="progress" aria-hidden="true"></div>
+
+<header class="nav" id="topnav">
+  <div class="nav-inner">
+    <a href="#hero" class="brand"><span class="pi">π</span> pi-starter</a>
+    <button class="hamburger" id="hamburger" aria-label="Toggle menu"><span></span><span></span><span></span></button>
+    <nav class="links" id="navlinks">
+      <a href="#intro">Overview</a>
+      <a href="#architecture">Architecture</a>
+      <a href="#retrieval">Retrieval</a>
+      <a href="#stack">Stack</a>
+      <a href="#capabilities">Capabilities</a>
+      <a href="#structure">Structure</a>
+      <a href="#quickstart">Quickstart</a>
+      <a href="#api">API</a>
+      <a href="#quality">Quality</a>
+      <a href="#docs">Docs</a>
+    </nav>
+    <button class="theme-toggle" id="themeToggle" aria-label="Toggle color theme">◐</button>
+  </div>
+</header>
+
+<main>
+<section class="hero" id="hero">
+  <div class="hero-card">
+    <p class="eyebrow">Agent scaffold · built on the pi-agent SDK</p>
+    <h1>π-starter</h1>
+    <p class="tagline">Clone it and it runs. Add tools, extensions, skills, knowledge, or a new persona — and it becomes a <strong>vertical agent</strong>.</p>
+    <div class="badges">
+      <span class="badge"><span class="bl">release</span> v0.2.0</span>
+      <span class="badge"><span class="bl">node</span> ≥22.19</span>
+      <span class="badge"><span class="bl">license</span> MIT</span>
+      <span class="badge"><span class="bl">upstream</span> pi-coding-agent 0.83.0</span>
+    </div>
+    <div class="stats">
+      <div class="stat"><span class="num" data-count="4">0</span><span class="label">entry points</span></div>
+      <div class="stat"><span class="num" data-count="308">0</span><span class="label">test cases</span></div>
+      <div class="stat"><span class="num" data-count="37">0</span><span class="label">test files</span></div>
+      <div class="stat"><span class="num" data-count="100">0</span><span class="label">TypeScript files</span></div>
+    </div>
+    <p class="repo">Repo: <a href="https://github.com/LPK3215/pi-starter">github.com/LPK3215/pi-starter</a> · Upstream SDK: <a href="https://github.com/earendil-works/pi">earendil-works/pi</a></p>
+  </div>
+</section>
+
+<section id="intro">
+  <div class="section-head"><h2>What it solves</h2><p class="sub">Positioning, value, and how it differs</p></div>
+  <div class="grid-3">
+    <article class="card"><h3>🧱 A runnable skeleton, not a demo</h3><p>Wraps the SDK's <code>createAgentSession</code> into a single <code>buildAgent()</code>, then layers HTTP+SSE, WebSocket, an in-process CLI, and the official RPC stdio JSONL transport on the same core.</p></article>
+    <article class="card"><h3>🎯 Vertical-agent friendly</h3><p>Business logic enters through injection params (<code>extraTools</code>, <code>extraSkillPaths</code>, <code>extraKnowledgeDirs</code>, <code>extraExtensions</code>). User-level <code>~/.pi</code> scanning stays off so nothing leaks into a deployed agent.</p></article>
+    <article class="card"><h3>🛡️ Safety is a first-class axis</h3><p>Three built-in-tool tiers (<code>off</code> / <code>readonly</code> / <code>coding</code>), fail-closed path guard, read-only SQL, approval gate — all local-first with no auth by default.</p></article>
+  </div>
+  <div class="callout">Single-process by design: one <code>buildAgent()</code> holds one conversation for REST; WebSocket runs multiple conversations per connection. Multi-user / public exposure is intentionally out of scope (see Security).</div>
+</section>
+
+<section id="architecture">
+  <div class="section-head"><h2>Architecture panorama</h2><p class="sub">Generated from source — <code>scripts/visualization/generate_architecture.mjs</code></p></div>
+  <figure class="diagram"><img loading="lazy" src="./assets/architecture.svg" alt="pi-starter layered architecture"></figure>
+  <div class="grid-3">
+    <div class="card mini"><h4>Transports</h4><p>CLI, HTTP+SSE, library, official RPC stdio — one core behind all four.</p></div>
+    <div class="card mini"><h4>Session stack</h4><p><code>SessionHub → ClientSession → Conversation → SnapshotEmitter → WebSocket</code>, snapshot-driven with per-connection queues.</p></div>
+    <div class="card mini"><h4>Assembly</h4><p>model + prompts + tools + skills + knowledge(+retrieval) + database + extensions → <code>AgentSession</code>, with scopedModels cycling.</p></div>
+  </div>
+</section>
+
+<section id="retrieval">
+  <div class="section-head"><h2>Pluggable knowledge retrieval (RAG)</h2><p class="sub">The SDK ships no RAG — it prescribes "register your own searchable tool". Generated by <code>generate_retrieval.mjs</code>.</p></div>
+  <figure class="diagram"><img loading="lazy" src="./assets/knowledge-retrieval.svg" alt="Pluggable knowledge retrieval pipeline"></figure>
+  <div class="grid-2">
+    <article class="card"><h3>Two entry points, one source</h3><p><code>search_knowledge</code> (SDK tool) and <code>GET /knowledge/search</code> share the same <code>Retriever</code> — no second implementation to drift.</p></article>
+    <article class="card"><h3>Default & opt-in</h3><p><code>KeywordRetriever</code> is zero-dependency by default. <code>PI_KNOWLEDGE_RETRIEVAL=vector</code> switches to <code>VectorRetriever</code> (chunk → embed → cosine → aggregate by doc), with pluggable <code>EmbeddingProvider</code> + <code>VectorStore</code>.</p></article>
+  </div>
+</section>
+
+<section id="sse">
+  <div class="section-head"><h2>Request → SSE lifecycle</h2><p class="sub">Generated by <code>generate_request_flow.mjs</code></p></div>
+  <figure class="diagram"><img loading="lazy" src="./assets/sse-protocol.svg" alt="POST /chat SSE lifecycle"></figure>
+</section>
+
+<section id="stack">
+  <div class="section-head"><h2>Tech stack</h2><p class="sub">Versions from <code>package.json</code> (single source)</p></div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Layer</th><th>Choice</th><th>Version</th></tr></thead>
+      <tbody>
+        <tr><td>Runtime</td><td>Node.js (built-in <code>node:sqlite</code>)</td><td>≥ 22.19</td></tr>
+        <tr><td>Language</td><td>TypeScript, strict ESM</td><td>5.x</td></tr>
+        <tr><td>Agent SDK</td><td><code>@earendil-works/pi-agent-core</code> · <code>pi-ai</code> · <code>pi-coding-agent</code></td><td>0.83.0</td></tr>
+        <tr><td>HTTP</td><td>Express</td><td>^5.2.1</td></tr>
+        <tr><td>Schema</td><td>TypeBox</td><td>^1.1.39</td></tr>
+        <tr><td>WebSocket</td><td>ws</td><td>^8.18.0</td></tr>
+        <tr><td>Embeddings (optional)</td><td><code>@huggingface/transformers</code></td><td>^4.3.1</td></tr>
+        <tr><td>Tests</td><td>Node built-in test runner via <code>tsx --test</code></td><td>37 files · 308 cases</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="capabilities">
+  <div class="section-head"><h2>Capabilities</h2><p class="sub">Everything wired into the core</p></div>
+  <div class="cap-grid">
+    <div class="chip">Layered prompts (persona + rules)</div>
+    <div class="chip">Pluggable tools + registry</div>
+    <div class="chip">Skills (<code>SKILL.md</code>)</div>
+    <div class="chip">Knowledge base + RAG</div>
+    <div class="chip">Prompt templates (<code>/name</code>)</div>
+    <div class="chip">Multi-model + runtime switch</div>
+    <div class="chip">Model cycling (scopedModels)</div>
+    <div class="chip">Provider auth status</div>
+    <div class="chip">Auto + manual compaction</div>
+    <div class="chip">Session tree (branch/edit/rollback/labels)</div>
+    <div class="chip">Steer / follow-up</div>
+    <div class="chip">Image input</div>
+    <div class="chip">Extension hooks</div>
+    <div class="chip">Process execution</div>
+    <div class="chip">Approval gate</div>
+    <div class="chip">Read-only SQLite tools</div>
+    <div class="chip">MCP (stdio) bridge</div>
+    <div class="chip">Subagents (delegate)</div>
+    <div class="chip">Plan mode (read-only)</div>
+    <div class="chip">Files service</div>
+    <div class="chip">JSONL event stream</div>
+    <div class="chip">Official RPC mode</div>
+    <div class="chip">AGENTS.md opt-in</div>
+    <div class="chip">Dockerfile sandbox</div>
+  </div>
+</section>
+
+<section id="structure">
+  <div class="section-head"><h2>Project structure</h2><p class="sub">Expand / collapse each directory</p></div>
+  <div class="tree">
+    <details open><summary><span class="dir">src/</span> — all TypeScript source</summary>
+      <div class="tree-body">
+        <details><summary><span class="dir">approval/</span></summary><div class="leaf">policy.ts · rules.ts · gate.ts · watchdog.ts — tool-permission approval (deny rule cannot be bypassed)</div></details>
+        <details><summary><span class="dir">context/</span></summary><div class="leaf">budget.ts — context-window budgeting / auto-compaction (official SDK)</div></details>
+        <details><summary><span class="dir">db/</span></summary><div class="leaf">index.ts — node:sqlite, zero-dep, in-memory by default, read-only SQL</div></details>
+        <details><summary><span class="dir">exec/</span></summary><div class="leaf">runner.ts — non-interactive process execution: foreground/background, timeout, kill process tree</div></details>
+        <details><summary><span class="dir">extensions/</span></summary><div class="leaf">guard.ts · audit.ts · example-command.ts · custom-provider.example.ts · sandbox.example.ts</div></details>
+        <details><summary><span class="dir">files/</span></summary><div class="leaf">service.ts — safe workspace file read/write, path checks, audit</div></details>
+        <details><summary><span class="dir">http/</span></summary><div class="leaf">routes.ts · errors.ts · file-routes.ts · approval-routes.ts · provider-key-routes.ts · hardening.ts</div></details>
+        <details><summary><span class="dir">knowledge/</span></summary><div class="leaf">index.ts · retrieval.ts · embeddings.ts · embeddings-transformers.ts · vector-store-sqlite.ts — pluggable RAG</div></details>
+        <details><summary><span class="dir">mcp/</span></summary><div class="leaf">client.ts · bridge.ts — stdio MCP server, tool discovery, call forwarding</div></details>
+        <details><summary><span class="dir">modes/</span></summary><div class="leaf">plan-mode.ts — read-only planning via official tool whitelist</div></details>
+        <details><summary><span class="dir">prompt-templates/</span></summary><div class="leaf">index.ts · review.md — slash-command templates via SDK additionalPromptTemplatePaths</div></details>
+        <details><summary><span class="dir">prompts/</span></summary><div class="leaf">composer.ts · persona.md · rules.md — layered system prompt</div></details>
+        <details><summary><span class="dir">sessions/</span></summary><div class="leaf">store.ts · edit.ts · cap.ts — session tree, edit, budget cap</div></details>
+        <details><summary><span class="dir">skills/</span></summary><div class="leaf">index.ts · summarize/SKILL.md — SDK additionalSkillPaths</div></details>
+        <details><summary><span class="dir">subagents/</span></summary><div class="leaf">index.ts — delegate to independent sub-agent sessions</div></details>
+        <details><summary><span class="dir">tools/</span></summary><div class="leaf">registry.ts · index.ts · knowledge.ts · database.ts · exec.ts · current-time.ts</div></details>
+        <details><summary><span class="dir">transport/</span></summary><div class="leaf">ws.ts — snapshot-driven WebSocket with per-connection queues</div></details>
+        <div class="leaf files">Top-level: <code>agent.ts</code> · <code>app.ts</code> · <code>rpc.ts</code> · <code>config.ts</code> · <code>server.ts</code> · <code>index.ts</code> · <code>lib.ts</code> · <code>setup.ts</code> · <code>session-hub.ts</code> · <code>sse.ts</code> · <code>snapshot.ts</code> · <code>protocol.ts</code> · <code>models.ts</code> · <code>provider-keys.ts</code> · <code>settings.ts</code> · <code>metrics.ts</code> · <code>log.ts</code> · <code>graceful.ts</code></div>
+      </div>
+    </details>
+    <details><summary><span class="dir">docs/</span></summary><div class="leaf">generated SVGs + guides (嵌入指南.md · 能力与边界.md · 项目分析报告.md)</div></details>
+    <details><summary><span class="dir">scripts/</span></summary><div class="leaf">dist-assets.cjs · smoke-ws.mjs · e2e-restart.mjs · verify-embed.mjs · rag-smoke.mjs · visualization/</div></details>
+    <details><summary><span class="dir">public/</span></summary><div class="leaf">index.html — sample chat page (try endpoints, not a product frontend)</div></details>
+    <details><summary><span class="dir">.github/workflows/</span></summary><div class="leaf">ci.yml — typecheck + test + smoke + audit + build (ubuntu / windows / macos)</div></details>
+    <div class="leaf">Root: <code>Dockerfile</code> · <code>README.md</code> · <code>README.zh-CN.md</code> · <code>CONTRIBUTING.md</code> · <code>SECURITY.md</code> · <code>CHANGELOG.md</code> · <code>FAQ.md</code> · <code>AUTHORS</code> · <code>LICENSE</code></div>
+  </div>
+</section>
+
+<section id="quickstart">
+  <div class="section-head"><h2>Quickstart</h2><p class="sub">Pick a mode</p></div>
+  <div class="tabs" data-tabs>
+    <div class="tab-bar">
+      <button class="tab-btn active" data-tab="cli">CLI</button>
+      <button class="tab-btn" data-tab="web">Web (HTTP+SSE)</button>
+      <button class="tab-btn" data-tab="rpc">RPC</button>
+      <button class="tab-btn" data-tab="lib">Library</button>
+      <button class="tab-btn" data-tab="docker">Docker</button>
+    </div>
+    <div class="tab-panel active" data-panel="cli">
+      <div class="codeblock"><button class="copy" aria-label="Copy">copy</button><pre><code>npm install
+cp .env.example .env      <span class="cm"># fill PI_API_KEY / PI_MODEL</span>
+npm run setup             <span class="cm"># merge credentials into ~/.pi/agent/</span>
+npm run dev               <span class="cm"># interactive chat;  /models  /model  /cycle</span></code></pre></div>
+    </div>
+    <div class="tab-panel" data-panel="web">
+      <div class="codeblock"><button class="copy" aria-label="Copy">copy</button><pre><code>npm run web               <span class="cm"># binds 127.0.0.1:3000 by default</span>
+curl http://localhost:3000/health
+curl http://localhost:3000/skills
+curl "http://localhost:3000/knowledge/search?q=model"</code></pre></div>
+    </div>
+    <div class="tab-panel" data-panel="rpc">
+      <div class="codeblock"><button class="copy" aria-label="Copy">copy</button><pre><code>npm run dev -- --mode rpc <span class="cm"># official SDK runRpcMode over stdio JSONL</span>
+<span class="cm"># headless; shares the same resourceLoaderOptions as buildAgent()</span></code></pre></div>
+    </div>
+    <div class="tab-panel" data-panel="lib">
+      <div class="codeblock"><button class="copy" aria-label="Copy">copy</button><pre><code>npm run build             <span class="cm"># → dist/</span></code></pre><pre><code><span class="kw">import</span> { buildAgent, createApp } <span class="kw">from</span> <span class="st">"pi-starter"</span>;
+<span class="kw">const</span> agent = <span class="kw">await</span> <span class="fn">buildAgent</span>({
+  builtinTools: <span class="st">"off"</span>,
+  extraTools: [myTool],
+  extraKnowledgeDirs: [<span class="st">"/path/to/docs"</span>],
+  knowledgeRetrieval: <span class="st">"vector"</span>,   <span class="cm">// opt-in RAG</span>
+});
+<span class="kw">const</span> { app, dispose } = <span class="fn">createApp</span>({ agent, staticDir: <span class="brw">false</span> });</code></pre></div>
+    </div>
+    <div class="tab-panel" data-panel="docker">
+      <div class="codeblock"><button class="copy" aria-label="Copy">copy</button><pre><code>docker build -t pi-starter .
+docker run --rm -p 127.0.0.1:3000:3000 \
+  -v <span class="st">"$HOME/.pi/agent:/home/pi/.pi/agent:ro"</span> pi-starter
+<span class="cm"># publish to loopback only — the service has no auth</span></code></pre></div>
+    </div>
+  </div>
+</section>
+
+<section id="api">
+  <div class="section-head"><h2>HTTP API (sample)</h2><p class="sub">Full table in README; kernel routes here</p></div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Method · path</th><th>Purpose</th></tr></thead>
+      <tbody>
+        <tr><td><span class="m-get">GET</span> /health · /info</td><td>Liveness / capability snapshot</td></tr>
+        <tr><td><span class="m-post">POST</span> /chat</td><td>Stream a prompt (SSE, or <code>?format=jsonl</code>)</td></tr>
+        <tr><td><span class="m-post">POST</span> /interrupt · /model · /model/cycle</td><td>Abort turn · switch model · cycle rotation</td></tr>
+        <tr><td><span class="m-post">POST</span> /compact · /thinking · /context/compact</td><td>Context / reasoning controls</td></tr>
+        <tr><td><span class="m-get">GET</span> /model · /providers · /capabilities</td><td>Model list · provider auth status · capability matrix</td></tr>
+        <tr><td><span class="m-get">GET</span> /skills · /knowledge/search · /prompt-templates · /db</td><td>Resource discovery</td></tr>
+        <tr><td><span class="m-post">POST</span> /session · /session/edit · /session/rollback</td><td>Session tree: new branch · edit · rollback</td></tr>
+        <tr><td><span class="m-post">POST</span> /mcp/servers · /subagents/run · /approvals/:id</td><td>MCP add · run subagent · approve/reject tool call</td></tr>
+        <tr><td><span class="m-get">WS</span> /ws?session=</td><td>Bidirectional snapshot-driven transport</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="quality">
+  <div class="section-head"><h2>Testing &amp; quality</h2><p class="sub">Offline contract tests, never call a real model</p></div>
+  <div class="grid-3">
+    <div class="card stat-card"><span class="num" data-count="308">0</span><p>test cases · 37 files</p></div>
+    <div class="card stat-card"><span class="num" data-count="17">0</span><p>real WebSocket smoke checks</p></div>
+    <div class="card stat-card"><span class="num" data-count="3">0</span><p>CI OSes (ubuntu / windows / macos)</p></div>
+  </div>
+  <div class="callout">Gates via <code>npm run verify</code>: typecheck · test · smoke · lint:unused (dead-code) · build · verify:embed · e2e (real restart/resume, no key). Contract smoke tests use an in-process SDK session double.</div>
+</section>
+
+<section id="docs">
+  <div class="section-head"><h2>Documentation index</h2><p class="sub">Everything on disk</p></div>
+  <ul class="doclist">
+    <li><a href="../README.md"><code>README.md</code></a> — main guide (English)</li>
+    <li><a href="../README.zh-CN.md"><code>README.zh-CN.md</code></a> — 中文文档（Chinese edition）</li>
+    <li><a href="../docs/嵌入指南.md"><code>docs/嵌入指南.md</code></a> — embedding into an existing Express app (Chinese)</li>
+    <li><a href="../docs/能力与边界.md"><code>docs/能力与边界.md</code></a> — capability matrix &amp; boundaries vs the SDK (Chinese)</li>
+    <li><a href="../docs/项目分析报告.md"><code>docs/项目分析报告.md</code></a> — engineering review (Chinese)</li>
+    <li><a href="../CONTRIBUTING.md"><code>CONTRIBUTING.md</code></a> — dev setup, PR flow, gates</li>
+    <li><a href="../SECURITY.md"><code>SECURITY.md</code></a> — security model &amp; deployment cautions</li>
+    <li><a href="../CHANGELOG.md"><code>CHANGELOG.md</code></a> — release history (v0.2.0)</li>
+    <li><a href="../FAQ.md"><code>FAQ.md</code></a> — configuration &amp; behaviour questions</li>
+  </ul>
+</section>
+
+<section id="license">
+  <div class="section-head"><h2>License &amp; authors</h2></div>
+  <div class="grid-2">
+    <div class="card"><h3>MIT License</h3><p>Copyright (c) 2026 LPK3215. Full text: <a href="../LICENSE">LICENSE</a>.</p></div>
+    <div class="card"><h3>Authors</h3><p>LPK3215 &lt;17538703215@163.com&gt; — creator and primary maintainer. See <a href="../AUTHORS">AUTHORS</a> and the <a href="https://github.com/LPK3215/pi-starter/graphs/contributors">contributors graph</a>.</p></div>
+  </div>
+  <p class="cite">Cite as: <code>LPK3215/pi-starter — an agent scaffold on the @earendil-works/pi-coding-agent SDK, v0.2.0.</code></p>
+</section>
+</main>
+
+<footer class="foot">
+  <div>π-starter · v0.2.0 · built on the pi-agent SDK · MIT</div>
+  <a href="#hero">Back to top ↑</a>
+</footer>
+
+<button id="backTop" aria-label="Back to top">↑</button>
+<script src="./script.js"></script>
+<!-- Generated by Qoder agent · for pi-starter project overview -->
+</body>
+</html>
