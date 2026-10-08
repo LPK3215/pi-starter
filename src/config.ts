@@ -321,13 +321,40 @@ export function resolveDefaultModel(
 export { modelDisplayName };
 
 /**
- * 知识检索配置（默认 keyword，行为不变）。`PI_KNOWLEDGE_RETRIEVAL=vector` 才开向量检索；
- * 需同时给 `PI_EMBEDDINGS_BASE_URL` + `PI_EMBEDDINGS_MODEL`（OpenAI 兼容 /v1/embeddings，
- * Ollama 的 `/v1/embeddings` 也兼容），`PI_EMBEDDINGS_KEY` 可选。provider 实例在 agent 层构造。
+ * 知识检索配置（默认 keyword，行为不变）。`PI_KNOWLEDGE_RETRIEVAL=vector` 才开向量检索。
+ * embedding 源：`PI_EMBEDDINGS_PROVIDER` = openai（默认，需 base+model）| ollama（同 openai）
+ * | transformers（进程内，直接下载权重，可留空 model 用默认小模，`PI_EMBEDDINGS_CACHE_DIR` 指定缓存目录）。
+ * 向量库：`PI_KNOWLEDGE_VECTOR_STORE` = memory（默认）| sqlite（`PI_KNOWLEDGE_VECTOR_DB_PATH` 持久化）。
  */
+export type EmbeddingsProvider = "openai" | "ollama" | "transformers";
+
+export interface RetrievalEmbeddings {
+  provider: EmbeddingsProvider;
+  baseUrl?: string;
+  model: string;
+  apiKey?: string;
+  cacheDir?: string;
+}
+
 export interface RetrievalConfig {
   mode: "keyword" | "vector";
-  embeddings?: { baseUrl: string; model: string; apiKey?: string };
+  embeddings?: RetrievalEmbeddings;
+  vectorStore?: { backend: "memory" | "sqlite"; path?: string };
+}
+
+function parseEmbeddings(env: Record<string, string | undefined>): RetrievalEmbeddings | undefined {
+  const provider = (clean(env.PI_EMBEDDINGS_PROVIDER)?.toLowerCase() ?? "openai") as EmbeddingsProvider;
+  const model = clean(env.PI_EMBEDDINGS_MODEL);
+  const baseUrl = clean(env.PI_EMBEDDINGS_BASE_URL);
+  const apiKey = clean(env.PI_EMBEDDINGS_KEY);
+  const cacheDir = clean(env.PI_EMBEDDINGS_CACHE_DIR);
+  if (provider === "transformers") {
+    // 进程内推理：不要求 base/model，model 缺省时用类里的默认小模型。
+    return { provider, ...(model ? { model } : { model: "" }), ...(apiKey ? { apiKey } : {}), ...(cacheDir ? { cacheDir } : {}) };
+  }
+  // openai / ollama 都需要 base + model
+  if (!baseUrl || !model) return undefined;
+  return { provider, baseUrl, model, ...(apiKey ? { apiKey } : {}) };
 }
 
 export function resolveRetrievalConfig(
@@ -335,11 +362,15 @@ export function resolveRetrievalConfig(
 ): RetrievalConfig {
   const mode = clean(env.PI_KNOWLEDGE_RETRIEVAL)?.toLowerCase() === "vector" ? "vector" : "keyword";
   if (mode !== "vector") return { mode: "keyword" };
-  const baseUrl = clean(env.PI_EMBEDDINGS_BASE_URL);
-  const model = clean(env.PI_EMBEDDINGS_MODEL);
-  const apiKey = clean(env.PI_EMBEDDINGS_KEY);
   const cfg: RetrievalConfig = { mode: "vector" };
-  if (baseUrl && model) cfg.embeddings = { baseUrl, model, ...(apiKey ? { apiKey } : {}) };
+  const embeddings = parseEmbeddings(env);
+  if (embeddings) cfg.embeddings = embeddings;
+  const storeBackend = clean(env.PI_KNOWLEDGE_VECTOR_STORE)?.toLowerCase();
+  if (storeBackend === "sqlite") {
+    cfg.vectorStore = { backend: "sqlite", ...(clean(env.PI_KNOWLEDGE_VECTOR_DB_PATH) ? { path: clean(env.PI_KNOWLEDGE_VECTOR_DB_PATH) } : {}) };
+  } else if (storeBackend === "memory") {
+    cfg.vectorStore = { backend: "memory" };
+  }
   return cfg;
 }
 

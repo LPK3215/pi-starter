@@ -13,11 +13,13 @@ function doc(name: string, title: string, body: string, description = ""): Knowl
   return { name, title, description, filePath: `/x/${name}.md`, body };
 }
 
-// 确定性假 embedding：按小词表命中计数成向量（无需网络即可验证语义排序）。
+// 确定性假 embedding：按小词表命中计数成向量（无需网络即可验证语义排序）。可记录调用次数。
 class FakeEmbeddings implements EmbeddingProvider {
   readonly id = "fake";
+  calls = 0;
   constructor(private readonly vocab: string[]) {}
   async embed(texts: string[]): Promise<number[][]> {
+    this.calls += 1;
     return texts.map((t) => this.vocab.map((w) => (t.includes(w) ? 1 : 0.001)));
   }
 }
@@ -73,4 +75,15 @@ test("InMemoryVectorStore：cosine topK 排序、维度不一致跳过", async (
   await store.upsert([{ id: "c", vector: [1, 0, 0] }]);
   const after = await store.query([1, 0], 5);
   assert.ok(!after.some((r) => r.id === "c"), "维度不符的条目不进结果");
+});
+
+test("持久化 store（has）下，第二次 build 不重新 embedding", async () => {
+  const store = new InMemoryVectorStore();
+  const emb = new FakeEmbeddings(["切换", "模型"]);
+  await VectorRetriever.build(docs, emb, store);
+  const callsAfterFirst = emb.calls;
+  assert.ok(callsAfterFirst >= 1, "第一次必须真的算过 embedding");
+  const emb2 = new FakeEmbeddings(["切换", "模型"]);
+  await VectorRetriever.build(docs, emb2, store); // 复用已填充的 store
+  assert.equal(emb2.calls, 0, "已入库且内容未变的 chunk 不再重算");
 });

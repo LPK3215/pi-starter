@@ -42,6 +42,8 @@ export interface VectorSearchResult {
 export interface VectorStore {
   upsert(items: VectorItem[]): Promise<void>;
   query(vector: number[], topK: number): Promise<VectorSearchResult[]>;
+  /** 可选：已知某 id 已入库则跳过重新 embedding（持久化后端靠它做"重启不重算"）。 */
+  has?(id: string): boolean | Promise<boolean>;
 }
 
 /** 默认后端：关键词打分，包成 async。行为与迁移前一致。 */
@@ -59,6 +61,10 @@ export class InMemoryVectorStore implements VectorStore {
 
   async upsert(items: VectorItem[]): Promise<void> {
     for (const item of items) this.vectors.set(item.id, normalize(item.vector));
+  }
+
+  has(id: string): boolean {
+    return this.vectors.has(id);
   }
 
   async query(vector: number[], topK: number): Promise<VectorSearchResult[]> {
@@ -101,8 +107,20 @@ export const MAX_CHUNK_CHARS = 2000;
 export const EMBED_BATCH = 64;
 
 interface ChunkMeta {
+  /** 内容寻址 id：同一 (文档, 段序, 正文) 稳定；正文变了→新 id，自然重算。 */
+  id: string;
   name: string;
   text: string;
+}
+
+/** 稳定小哈希（FNV-1a → base36），不加密、只为内容变则 id 变。 */
+function chunkHash(text: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < text.length; i += 1) {
+    h ^= text.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h.toString(36);
 }
 
 function chunkDoc(doc: KnowledgeDoc): string[] {
@@ -126,11 +144,12 @@ function chunkDoc(doc: KnowledgeDoc): string[] {
 /**
  * 向量检索：启动时把文档切段→求 embedding→存进 VectorStore；检索时把 query 也向量化，
  * 取 topK 个 chunk 后**按文档聚合**（一篇取最高分 chunk 作分），snippet 用命中的 chunk。
+ * 持久化 store（实现 `has`）下，已入库且内容未变的 chunk 不重新 embedding——"重启不重算"。
  * 构建是异步（要调 embedding 源），用静态 `build()` 拿到一个就绪实例。
  */
 export class VectorRetriever implements Retriever {
   readonly kind = "vector" as const;
-  private metas: ChunkMeta[] = [];
+  private readonly chunkById = new Map<string, ChunkMeta>();
 
   private constructor(
     private readonly docsByName: Map<string, KnowledgeDoc>,
@@ -138,7 +157,7 @@ export class VectorRetriever implements Retriever {
     private readonly store: VectorStore,
   ) {}
 
-  /** 切段 → 分批 embedding → 存进 store，返回一个就绪实例。 */
+  /** 切段 → 只对未入库的 chunk 分批 embedding → upsert，返回就绪实例。 */
   static async build(
     docs: readonly KnowledgeDoc[],
     embeddings: EmbeddingProvider,
@@ -151,12 +170,21 @@ export class VectorRetriever implements Retriever {
     );
     const metas: ChunkMeta[] = [];
     for (const doc of docs) {
-      for (const chunk of chunkDoc(doc)) {
-        metas.push({ name: doc.name, text: chunk });
+      const chunks = chunkDoc(doc);
+      for (let i = 0; i < chunks.length; i += 1) {
+        const text = chunks[i]!;
+        metas.push({ id: `${doc.name}#${i}#${chunkHash(text)}`, name: doc.name, text });
       }
     }
-    for (let i = 0; i < metas.length; i += EMBED_BATCH) {
-      const batch = metas.slice(i, i + EMBED_BATCH);
+    for (const m of metas) retriever.chunkById.set(m.id, m);
+    // 持久 store 已含且内容未变→跳过 embedding；InMemory/无 has 时 hasKnown=false。
+    const toEmbed: ChunkMeta[] = [];
+    for (const m of metas) {
+      const known = store.has ? await store.has(m.id) : false;
+      if (!known) toEmbed.push(m);
+    }
+    for (let i = 0; i < toEmbed.length; i += EMBED_BATCH) {
+      const batch = toEmbed.slice(i, i + EMBED_BATCH);
       // 把 title 拼进待向量化文本，让整段命中不只看 body。
       const vectors = await embeddings.embed(
         batch.map((m) => `${retriever.docsByName.get(m.name)?.title ?? ""}\n${m.text}`),
@@ -166,29 +194,30 @@ export class VectorRetriever implements Retriever {
           `embedding 返回 ${vectors.length} 条，期望 ${batch.length} 条（provider ${embeddings.id}）`,
         );
       }
-      await store.upsert(vectors.map((vector, j) => ({ id: String(i + j), vector })));
+      await store.upsert(vectors.map((vector, j) => ({ id: batch[j]!.id, vector })));
     }
-    retriever.metas = metas;
     return retriever;
   }
 
   async search(query: string, limit = 5): Promise<RetrievalHit[]> {
     const q = query.trim();
-    if (!q || this.metas.length === 0) return [];
+    if (!q || this.chunkById.size === 0) return [];
     const [qvec] = await this.embeddings.embed([q]);
     if (!qvec) return [];
-    const results = await this.store.query(qvec, Math.min(this.metas.length, Math.max(1, limit) * 3));
+    const results = await this.store.query(
+      qvec,
+      Math.min(this.chunkById.size, Math.max(1, limit) * 3),
+    );
     // 按文档聚合：同一篇取最高分 chunk。
-    const best = new Map<string, { score: number; chunkIndex: number }>();
+    const best = new Map<string, { score: number; chunk: ChunkMeta }>();
     for (const r of results) {
-      const idx = Number(r.id);
-      const meta = this.metas[idx];
+      const meta = this.chunkById.get(r.id);
       if (!meta) continue;
       const cur = best.get(meta.name);
-      if (!cur || r.score > cur.score) best.set(meta.name, { score: r.score, chunkIndex: idx });
+      if (!cur || r.score > cur.score) best.set(meta.name, { score: r.score, chunk: meta });
     }
     const hits: RetrievalHit[] = [];
-    for (const [name, { score, chunkIndex }] of best) {
+    for (const [name, { score, chunk }] of best) {
       const doc = this.docsByName.get(name);
       if (!doc) continue;
       hits.push({
@@ -196,7 +225,7 @@ export class VectorRetriever implements Retriever {
         title: doc.title,
         description: doc.description,
         score,
-        snippet: snippet(this.metas[chunkIndex]!.text),
+        snippet: snippet(chunk.text),
       });
     }
     hits.sort((a, b) => b.score - a.score || a.name.localeCompare(b.name));

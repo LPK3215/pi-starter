@@ -81,6 +81,14 @@ export {
   type OllamaEmbeddingsOptions,
 } from "./knowledge/embeddings.js";
 export {
+  TransformersEmbeddings,
+  type TransformersEmbeddingsOptions,
+} from "./knowledge/embeddings-transformers.js";
+export {
+  SqliteVectorStore,
+  type SqliteVectorStoreOptions,
+} from "./knowledge/vector-store-sqlite.js";
+export {
   loadScaffoldSkills,
   loadSkillsFromDirs,
   resolveSkillPaths,

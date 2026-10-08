@@ -89,7 +89,7 @@ test("parseCliFlags：--mode 仅在传了时出现，缺省不改变旧形状", 
 test("resolveRetrievalConfig：默认 keyword；vector 需配 base+model 才给 embeddings", () => {
   assert.deepEqual(resolveRetrievalConfig({}), { mode: "keyword" });
   assert.deepEqual(resolveRetrievalConfig({ PI_KNOWLEDGE_RETRIEVAL: "keyword" }), { mode: "keyword" });
-  // vector 但缺 base/model → mode=vector、无 embeddings（agent 会据此报错）
+  // vector 但缺 base/model（openai）→ mode=vector、无 embeddings（agent 会据此报错）
   assert.deepEqual(resolveRetrievalConfig({ PI_KNOWLEDGE_RETRIEVAL: "vector" }), { mode: "vector" });
   assert.deepEqual(
     resolveRetrievalConfig({
@@ -98,6 +98,16 @@ test("resolveRetrievalConfig：默认 keyword；vector 需配 base+model 才给 
       PI_EMBEDDINGS_MODEL: "m",
       PI_EMBEDDINGS_KEY: "k",
     }),
-    { mode: "vector", embeddings: { baseUrl: "https://x/v1", model: "m", apiKey: "k" } },
+    { mode: "vector", embeddings: { provider: "openai", baseUrl: "https://x/v1", model: "m", apiKey: "k" } },
+  );
+  // transformers：进程内推理，不要求 base/model
+  assert.deepEqual(
+    resolveRetrievalConfig({ PI_KNOWLEDGE_RETRIEVAL: "vector", PI_EMBEDDINGS_PROVIDER: "transformers", PI_EMBEDDINGS_MODEL: "Xenova/x", PI_EMBEDDINGS_CACHE_DIR: "C:/hf" }),
+    { mode: "vector", embeddings: { provider: "transformers", model: "Xenova/x", cacheDir: "C:/hf" } },
+  );
+  // sqlite 向量库后端
+  assert.deepEqual(
+    resolveRetrievalConfig({ PI_KNOWLEDGE_RETRIEVAL: "vector", PI_KNOWLEDGE_VECTOR_STORE: "sqlite", PI_KNOWLEDGE_VECTOR_DB_PATH: "./v.db" }),
+    { mode: "vector", vectorStore: { backend: "sqlite", path: "./v.db" } },
   );
 });

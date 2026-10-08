@@ -411,7 +411,7 @@ description: 套餐、单价、计费周期
 
 重启即可。模型先 `search_knowledge({ query: "专业版多少钱" })`，再 `read_knowledge({ name: "pricing" })`。当库用：`buildAgent({ extraKnowledgeDirs: ["/path/to/docs"] })`。
 
-默认是进程内关键词检索（不是向量库）。RAG 是**可选且可插拔**的：设 `PI_KNOWLEDGE_RETRIEVAL=vector` 加一个 embedding 源（`PI_EMBEDDINGS_BASE_URL`/`PI_EMBEDDINGS_MODEL`，如 Ollama 的 `/v1/embeddings` 或任意 OpenAI 兼容端点），`search_knowledge` 就会透明切到 embedding + 内存 cosine。这正好符合官方姿势：SDK 不带 RAG，只让你注册一个可搜索工具（本脚手架已经这么做），检索后端自己选。要用真正的向量库（Qdrant/pgvector），实现 `VectorStore` 接口并经 `buildAgent({ vectorStore })` 传入，工具侧与模型侧完全不变。
+默认是进程内关键词检索（不是向量库）。RAG 是**可选且可插拔**的：设 `PI_KNOWLEDGE_RETRIEVAL=vector` + embedding 源 `PI_EMBEDDINGS_PROVIDER=openai|ollama|transformers`。`transformers` 是**进程内**跑 `@huggingface/transformers`（首次用自动从 HF Hub 下 ONNX 权重到 `PI_EMBEDDINGS_CACHE_DIR`，不需 Ollama/外部服务；靠懒加载 opt-in，默认仍零依赖）。`search_knowledge` 透明切到 embedding + `VectorStore` cosine（默认内存；`PI_KNOWLEDGE_VECTOR_STORE=sqlite` 用 node:sqlite 持久化，重启不重算）。要用真正的向量库（Qdrant/pgvector），实现 `VectorStore` 并经 `buildAgent({ vectorStore })` 传入，工具侧与模型侧完全不变。这正是官方姿势：SDK 不带 RAG，只让你注册一个可搜索工具（本脚手架已经这么做），检索后端自己选。
 
 ### 加一个提示词模板
 
@@ -535,6 +535,7 @@ server.listen(3000);
 - **条目标签**：官方 `SessionManager.appendLabelChange`/`getLabel` 经 WS `set_label` 与快照 `labels` 暴露——给转录条目做书签。与回退用的 `pi-starter.tree` 标记不同：标签只用于导航，不防重启叶子漂移。
 - **消费 pi packages**：后端保持 `noExtensions` / `noSkills` / `noPromptTemplates` 隔离，不跑 `pi install` / `pi update`（那是 `pi` CLI 的事）。要用某个包的资源，把它的 `skills/`、`prompts/`、`extensions/` 目录经现有注入参数传进来——`extraSkillPaths` / `extraPromptTemplatePaths` / `extraExtensions`，等价于装载器的 `extendResources`。
 - **JSON 事件流**：`POST /chat?format=jsonl` 把原始 SDK 事件按 NDJSON 逐行输出（首行 `{"type":"session",...}`，之后一行一个事件），而不是翻译后的 SSE 帧——给自定义 UI / 跨语言的出口，默认关，不动现有 SSE 契约。
+- **隔离（官方姿势）**：`guard` 仍是默认软闸门（正则+路径、零依赖、不是沙箱）。官方规定的硬隔离是部署层（docs/containerization.md：Docker / Gondolin micro-VM / OpenShell）或 `pi.registerTool` 工具路由扩展；`src/extensions/sandbox.example.ts` 演示那个覆盖机制（把 `bash` 路由出宿主，默认不接线）。真要隔离需要 Docker/QEMU——代码给你接缝，不替你跑。
 - **技能 / 知识库 / 数据库**：技能丢进 `src/skills/`；知识库丢进 `src/knowledge/`；数据库默认内存，或 `PI_DATABASE_PATH` / `buildAgent({ database })`。要接向量库或远程 SQL，写成工具从 `extraTools` 进来。
 - **关掉内置示例内容**：`buildAgent({ builtinKnowledge: false, builtinSkills: false, builtinPromptTemplates: false })`。内置的 `about.md`（一份介绍脚手架自己的文档）、`summarize` 技能与 `review` 提示词模板会进系统提示词 / 斜杠命令菜单，而 `extraKnowledgeDirs` / `extraSkillPaths` / `extraPromptTemplatePaths` 是**叠加不是替换**、内置同名优先——所以这是唯一的关闭入口。当库嵌入别人服务时通常该关掉。
 - **自定义 WS 命令**：`attachWebSocket(server, { commands: { my_cmd: defineCommand<{ a: number }>({ handler }) } })`。客户端发 `{type:"my_cmd"}` 即可调用；**未注册的命令会回明确错误帧**，不会静默。内置命令不可被同名覆盖。

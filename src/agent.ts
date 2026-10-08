@@ -63,6 +63,7 @@ import { badRequest } from "./http/errors.js";
 import { assertSessionFileAllowed } from "./sessions/store.js";
 import { formatKnowledgeCatalog, loadScaffoldKnowledge, type KnowledgeDoc, type KnowledgeHit } from "./knowledge/index.js";
 import {
+  InMemoryVectorStore,
   KeywordRetriever,
   VectorRetriever,
   type EmbeddingProvider,
@@ -70,7 +71,10 @@ import {
   type VectorStore,
 } from "./knowledge/retrieval.js";
 import { OpenAICompatEmbeddings } from "./knowledge/embeddings.js";
-import { resolveRetrievalConfig } from "./config.js";
+import { OllamaEmbeddings } from "./knowledge/embeddings.js";
+import { TransformersEmbeddings } from "./knowledge/embeddings-transformers.js";
+import { SqliteVectorStore } from "./knowledge/vector-store-sqlite.js";
+import { resolveRetrievalConfig, type RetrievalEmbeddings } from "./config.js";
 import {
   composePrompt,
   defaultPromptTemplate,
@@ -83,15 +87,32 @@ import { createDbQueryTool, createDbStatusTool } from "./tools/database.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-/** 按 `PI_EMBEDDINGS_*` 环境构造默认 embedding provider（OpenAI 兼容，Ollama 的 /v1 也兼容）。 */
-function resolveEmbeddingsFromEnv(): EmbeddingProvider {
+/** 按 RetrievalEmbeddings 配置构造 embedding provider（openai 兼容 / ollama / 进程内 transformers）。 */
+function buildEmbeddings(cfg: RetrievalEmbeddings): EmbeddingProvider {
+  if (cfg.provider === "transformers") {
+    return new TransformersEmbeddings({
+      ...(cfg.model ? { model: cfg.model } : {}),
+      ...(cfg.cacheDir ? { cacheDir: cfg.cacheDir } : {}),
+    });
+  }
+  if (!cfg.baseUrl || !cfg.model) {
+    throw new Error(
+      "知识检索=vector（openai/ollama）需要配 PI_EMBEDDINGS_BASE_URL + PI_EMBEDDINGS_MODEL，或改用 PI_EMBEDDINGS_PROVIDER=transformers，或显式传 buildAgent({ embeddings })。",
+    );
+  }
+  return cfg.provider === "ollama"
+    ? new OllamaEmbeddings({ baseUrl: cfg.baseUrl, model: cfg.model })
+    : new OpenAICompatEmbeddings({ baseUrl: cfg.baseUrl, model: cfg.model, ...(cfg.apiKey ? { apiKey: cfg.apiKey } : {}) });
+}
+
+function defaultEmbeddingsFromEnv(): EmbeddingProvider {
   const cfg = resolveRetrievalConfig().embeddings;
   if (!cfg) {
     throw new Error(
-      "知识检索=vector 需要配 PI_EMBEDDINGS_BASE_URL + PI_EMBEDDINGS_MODEL（可选 PI_EMBEDDINGS_KEY），或显式传 buildAgent({ embeddings })。",
+      "知识检索=vector 需要配 PI_EMBEDDINGS_*（base+model 或 PROVIDER=transformers），或显式传 buildAgent({ embeddings })。",
     );
   }
-  return new OpenAICompatEmbeddings(cfg);
+  return buildEmbeddings(cfg);
 }
 
 function resolvePromptsDir(): string {
@@ -439,14 +460,19 @@ export async function buildAgent(options: BuildAgentOptions = {}): Promise<Built
 
   // 知识检索：默认关键词（行为与从前一致）；vector 模式走 embedding + 可插拔向量库。
   // 无文档时无论何模式都用关键词（空索引没意义），不触发 embedding 调用。
-  const retrievalMode = options.knowledgeRetrieval ?? resolveRetrievalConfig().mode;
+  const retrievalCfg = resolveRetrievalConfig();
+  const retrievalMode = options.knowledgeRetrieval ?? retrievalCfg.mode;
+  let sqliteStore: SqliteVectorStore | undefined;
+  const store: VectorStore =
+    options.vectorStore ??
+    (retrievalCfg.vectorStore?.backend === "sqlite"
+      ? (sqliteStore = new SqliteVectorStore(
+          retrievalCfg.vectorStore.path ? { path: retrievalCfg.vectorStore.path } : {},
+        ))
+      : new InMemoryVectorStore());
   const retriever: Retriever =
     retrievalMode === "vector" && knowledge.length > 0
-      ? await VectorRetriever.build(
-          knowledge,
-          options.embeddings ?? resolveEmbeddingsFromEnv(),
-          options.vectorStore,
-        )
+      ? await VectorRetriever.build(knowledge, options.embeddings ?? defaultEmbeddingsFromEnv(), store)
       : new KeywordRetriever(knowledge);
 
   const dynamicTools = [
@@ -667,6 +693,7 @@ export async function buildAgent(options: BuildAgentOptions = {}): Promise<Built
     dispose: () => {
       session.dispose();
       execEnv?.dispose();
+      sqliteStore?.close();
       database.close();
     },
   };
