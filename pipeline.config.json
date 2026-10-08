@@ -32,5 +32,15 @@
   "precommit": [
     { "name": "typecheck", "cmd": "npm run typecheck" },
     { "name": "unused symbols", "cmd": "npm run lint:unused" }
-  ]
+  ],
+
+  "_localPublish说明": "CI 跑不起来时的**正式**发版路径（本仓的 Actions 目前因账号计费锁定无法启动）：`npm run publish:local`。语义与 CI 出包一致 —— 门禁 → 出包 → 把产物挂到该 tag 的 Release 上；可重跑（--clobber 覆盖产物）。",
+  "localPublish": {
+    "versionFrom": "package.json",
+    "steps": [
+      { "name": "build", "cmd": "npm run build" },
+      { "name": "pack", "cmd": "npm pack" }
+    ],
+    "artifacts": ["*.tgz"]
+  }
 }

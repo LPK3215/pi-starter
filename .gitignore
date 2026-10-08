@@ -23,6 +23,9 @@ data/
 coverage/
 .nyc_output/
 
+# 打包产物（publish:local 与 CI 出包都会生成）
+*.tgz
+
 # Editors / IDEs
 .vscode/
 .idea/
