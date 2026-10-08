@@ -44,7 +44,7 @@
 | Agent SDK | [`@earendil-works/pi-agent-core`](https://github.com/earendil-works/pi) | `0.83.0` | 钉版本 |
 | AI 适配 | [`@earendil-works/pi-ai`](https://github.com/earendil-works/pi) | `0.83.0` | 钉版本 |
 | Coding Agent | [`@earendil-works/pi-coding-agent`](https://github.com/earendil-works/pi) | `0.83.0` | 工具 / 扩展契约 |
-| HTTP | [Express](https://expressjs.com/) | `^5.2.1` | 单进程、单会话 |
+| HTTP | [Express](https://expressjs.com/) | `^5.2.1` | 单进程；Web 端每连接多对话并发 |
 | Schema | [TypeBox](https://www.npmjs.com/package/typebox) | `^1.1.39` | 工具 `parameters` 定义 |
 | WebSocket | [ws](https://www.npmjs.com/package/ws) | `^8.18.0` | 预留传输层扩展 |
 | 测试 | Node 内置 test runner，走 `tsx --test` | `^4.22.4` | 10 个文件 · 39 个冒烟用例，不调模型 |
@@ -79,7 +79,11 @@
 | `persona.md` + `rules.md` 系统提示词 | `~/.pi/agent/extensions` 和 `<cwd>/.pi/extensions` 里的文件扩展 |
 | `guard` 拦截危险 bash、路径越出 cwd（`read SKILL.md` 例外） | 完整沙箱 / 容器隔离 |
 | `audit` 打印工具耗时 | 登录、多用户会话、公网暴露 |
-| CLI 落盘会话；HTTP 内存会话、单用户防并发 | |
+| 快照驱动的 WebSocket（重启 / 重连自愈、背压丢快照、超慢客户端断开） | 跨客户端对话过户 |
+| 多对话并发（上限 8 + LRU）、会话 / 设置 / 规则落盘 | 目标审查循环、审查委派、SCM、后台任务跟踪 |
+| 工具看门狗（挂死工具不永久阻塞）、审批规则引擎（六种匹配器 + 编辑接口） | 插件市场 |
+| 计划模式（会话级只规划不实施）、子代理、MCP 桥（stdio + 热生效） | 完整 PTY 终端、附件与视觉桥 |
+| 多把 API 密钥（原始值永不出服务端）、类型化错误、限流、指标、脱敏日志 | OAuth、多用户、支付 |
 
 打开内置工具（优先级：命令行 > `.env` > 默认 `off`）：
 
@@ -458,13 +462,17 @@ curl -X POST http://localhost:3000/db/query \
 | 做了 | 刻意不做 |
 |---|---|
 | 模型目录、启动选模型、运行中切换 | 登录 / 用户体系。本地工具不需要；接到现有系统时用现有鉴权包一层 |
-| CLI + HTTP 共用 `buildAgent` | 多用户、多会话。现在一个进程一个 session，并发第二轮返回 429 |
+| CLI + HTTP 共用 `buildAgent`；Web 端每连接多对话并发（上限 8 + LRU） | 多用户。`busy` 闸门只作用于共享 session 那条路径 |
 | 仓库内技能走 SDK ResourceLoader；知识库 Markdown 检索；sqlite 探活 + 只读查询 | 向量库、外部 RAG、扫本机 `~/.pi/agent/skills` |
 | `guard` 拦危险 bash 和越出 cwd 的路径 | 沙箱。正则挡不住命令替换、编码绕过、symlink。要隔离用容器 |
 | `noExtensions` / `noSkills`，不扫本机扩展和技能 | 公网暴露。默认监听所有网卡，没有鉴权 |
 | 默认 `PI_BUILTIN_TOOLS=off` | 打开 `coding` 等于把改磁盘、跑 shell 交给模型 |
 
-为什么默认关编码工具、仍开 `read`：SDK 的 `createAgentSession()` 不传 `tools` 时会打开 `read` / `bash` / `edit` / `write`。脚手架是垂直 Agent 起点，所以 bash/edit/write 必须显式打开。但 SDK 只有在 `selectedTools` 含 `read` 时才把技能目录写进系统提示词，模型也用 `read` 加载 SKILL.md——这是官方路径，不另包 `read_skill`。
+为什么默认关编码工具、仍开 `read`：我们**总是**给 `createAgentSession()` 传 `tools`，它会变成 SDK 的 `allowedToolNames` 硬白名单——不传反而会打开 `read` / `bash` / `edit` / `write` 全套。工具清单由 `sessionToolPolicy(档位)` 按 `PI_BUILTIN_TOOLS` 生成（`off` 只给 `read`），bash/edit/write 必须显式打开。
+
+代价是白名单**构造后不可增补**（SDK 没有公开的修改方法，只有 `setActiveToolsByName` 切启用状态），所以运行期新增的工具（MCP）必须**按会话重算**——`resolveToolList()` 刻意在 `createSession` 内部求值，重开会话即生效。清单放在 build 时算一次会让 MCP 工具永远进不去。
+
+另：SDK 只有在工具集含 `read` 时才把技能目录写进系统提示词，模型也用 `read` 加载 SKILL.md——这是官方路径，不另包 `read_skill`。
 
 为什么不加载本机扩展和技能：用户机器上的 pi 扩展 / 技能可能再次注册 bash/write，或把不相干的工作流塞进这个垂直 Agent。
 
@@ -477,6 +485,12 @@ curl -X POST http://localhost:3000/db/query \
 - **打开编码工具**：`PI_BUILTIN_TOOLS=coding` 或 `--builtin-tools coding`。打开后 `guard` 仍会拦截危险 bash 和越出 cwd 的路径。
 - **模型切换**：启动时 `--model provider/modelId`；CLI `/model`；HTTP `POST /model`。只接受已配好 Key 的模型，走 `session.setModel`，不重建会话。
 - **技能 / 知识库 / 数据库**：技能丢进 `src/skills/`；知识库丢进 `src/knowledge/`；数据库默认内存，或 `PI_DATABASE_PATH` / `buildAgent({ database })`。要接向量库或远程 SQL，写成工具从 `extraTools` 进来。
+- **自定义 WS 命令**：`attachWebSocket(server, { commands: { my_cmd: defineCommand<{ a: number }>({ handler }) } })`。客户端发 `{type:"my_cmd"}` 即可调用；**未注册的命令会回明确错误帧**，不会静默。内置命令不可被同名覆盖。
+- **自定义 HTTP 路由**：`createApp({ configure: (app) => app.get("/biz", ...) })`。**必须用这个钩子**，不要拿到 `app` 之后再加——错误处理器已在其内部挂载，之后加的路由排在它后面，抛出的错不会被翻译（实测会把内部细节返回给客户端）。已经加完了才想起封口，用返回值的 `seal()`。
+- **注册资源回收**：`createApp()` / `attachWebSocket()` 的返回值有 `addDisposer(fn)`，`dispose()` / `close()` 时统一回收。扩展里开的定时器、子进程、临时文件都该登记。
+- **文件服务**：`createApp({ files: new FileService({ root }) })` 开放 `/files/*`（浏览 / 读 / 写 / 重命名 / 复制 / 删除 / Range 原始内容 / base64 上传），全部限制在 root 内，越界与符号链接逃逸一律拒绝。
+- **审批规则编辑**：`createApp({ approvalRules: store })` 开放 `/approval/rules`。改动**立即落盘**。
+- **重启后恢复**：`buildAgent({ inMemory: false, sessionDir })` + `createSessionHub(..., allowedSessionRoots)`，重启后本工作区的对话可列出并用 `open_conversation` 打开（只传会话 id，路径只从索引查）。
 
 ## 文档导航
 

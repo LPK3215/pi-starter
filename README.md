@@ -83,7 +83,11 @@ The scaffold is a **vertical-agent starting point**, not another coding-assistan
 | `persona.md` + `rules.md` system prompt | File extensions from `~/.pi/agent/extensions` and `<cwd>/.pi/extensions` |
 | `guard` intercepting dangerous bash and paths outside cwd (`read SKILL.md` excepted) | Full sandboxing / container isolation |
 | `audit` printing tool durations | Login, multi-user sessions, public-internet exposure |
-| CLI persists sessions to disk; HTTP keeps in-memory sessions with a single-user busy guard | |
+| Snapshot-driven WebSocket (restart/reconnect self-healing, backpressure drops, slow-client disconnect) | Cross-client conversation takeover |
+| Multi-conversation concurrency (cap 8 + LRU); sessions / settings / rules persisted | Goal-review loop, delegation, SCM, background-task tracking |
+| Tool watchdog (a hung tool can't block forever), approval rule engine (six matchers + editing API) | Plugin marketplace |
+| Plan mode (plan-only per conversation), subagents, MCP bridge (stdio + hot reload) | Full PTY terminals, attachments and vision bridge |
+| Multiple API keys (raw values never leave the server), typed errors, rate limits, metrics, redacted logs | OAuth, multi-user, payments |
 
 > **No built-in authentication — this is deliberate.** The scaffold binds `127.0.0.1` and warns loudly if `PI_HOST` is set to anything else, but nothing authenticates callers. Exposing it beyond loopback means exposing the agent *and its tools* to the network: put it behind your own auth proxy. Long-lived deployments should also note that settings are currently in-memory only, so `promptTemplate` / `disabledTools` reset on restart.
 
@@ -490,13 +494,17 @@ The scaffold does the following; everything else is left to business code:
 | Done on purpose | Deliberately not done |
 |---|---|
 | Model catalog, pick at startup, switch at runtime | Login / user system. A local tool needs none; when attaching to an existing backend, wrap with your existing auth |
-| CLI + HTTP share one `buildAgent` | Multi-user, multi-session. One process = one session; a concurrent second round returns 429 |
+| CLI + HTTP share one `buildAgent`; the web tier runs several conversations per connection (cap 8 + LRU) | Multi-user. The `busy` gate only guards the shared-session path |
 | Repo skills via the SDK ResourceLoader; Markdown knowledge search; sqlite liveness + read-only query | Vector stores, external RAG, scanning local `~/.pi/agent/skills` |
 | `guard` blocks dangerous bash and paths escaping cwd | Sandboxing. Regexes cannot stop command substitution, encoded bypasses, symlinks. Use containers for isolation |
 | `noExtensions` / `noSkills`: local extensions and skills are not scanned | Public-internet exposure. It binds all interfaces by default, with no auth |
 | Default `PI_BUILTIN_TOOLS=off` | Turning on `coding` hands disk edits and shell execution to the model |
 
-Why coding tools are off by default while `read` stays on: the SDK's `createAgentSession()` enables `read` / `bash` / `edit` / `write` when no `tools` are passed. The scaffold is a vertical-agent starting point, so bash/edit/write must be enabled explicitly. But the SDK only writes the skill catalog into the system prompt when `selectedTools` contains `read`, and the model uses `read` to load SKILL.md — this is the official path; there is no separate `read_skill` wrapper.
+Why coding tools are off by default while `read` stays on: we**always** pass `tools` to `createAgentSession()`, and it becomes the SDK's `allowedToolNames` allowlist — passing nothing is what enables the full `read` / `bash` / `edit` / `write` set. The list comes from `sessionToolPolicy(tier)` driven by `PI_BUILTIN_TOOLS` (`off` yields just `read`), so bash/edit/write must be opened explicitly.
+
+The cost: the allowlist cannot be extended after construction (the SDK exposes no way to change it — only `setActiveToolsByName` to toggle enablement). Tools added at runtime (MCP) must therefore be**recomputed per session**: `resolveToolList()` is deliberately evaluated *inside* `createSession`, so reopening a conversation picks them up. Computing it once at build time would make MCP tools unreachable forever.
+
+Also: the SDK only writes the skill catalog into the system prompt when the tool set contains `read`, and the model uses `read` to load SKILL.md — this is the official path; there is no separate `read_skill` wrapper.
 
 Why local extensions and skills are not loaded: pi extensions/skills on your machine may re-register bash/write, or push unrelated workflows into this vertical agent.
 
@@ -509,6 +517,12 @@ Why local extensions and skills are not loaded: pi extensions/skills on your mac
 - **Enable coding tools**: `PI_BUILTIN_TOOLS=coding` or `--builtin-tools coding`. Even then, `guard` still blocks dangerous bash and paths escaping cwd.
 - **Model switching**: at startup `--model provider/modelId`; in CLI `/model`; over HTTP `POST /model`. Only models with configured keys are accepted, via `session.setModel`, no session rebuild.
 - **Skills / knowledge / database**: skills into `src/skills/`; knowledge into `src/knowledge/`; the DB is in-memory by default, or set `PI_DATABASE_PATH` / pass `buildAgent({ database })`. For vector stores or remote SQL, write a tool and pass it through `extraTools`.
+- **Custom WS commands**: `attachWebSocket(server, { commands: { my_cmd: defineCommand<{ a: number }>({ handler }) } })`. Clients invoke it with `{type:"my_cmd"}`; **unregistered commands get an explicit error frame** rather than silence. Built-ins cannot be shadowed by a same-named registration.
+- **Custom HTTP routes**: `createApp({ configure: (app) => app.get("/biz", ...) })`. **Use this hook** — do not add routes after grabbing `app`: the error handler is mounted inside `createApp`, so later routes are registered after it and their thrown errors escape translation (measured: internal details reaching the client). If you already added routes, call the returned `seal()`.
+- **Resource cleanup**: the values returned by `createApp()` / `attachWebSocket()` expose `addDisposer(fn)`, invoked on `dispose()` / `close()`. Register timers, child processes and temp files opened by your extension.
+- **File service**: `createApp({ files: new FileService({ root }) })` exposes `/files/*` (browse / read / write / rename / copy / delete / Range raw content / base64 upload), all confined to `root`; traversal and symlink escapes are rejected.
+- **Approval rule editing**: `createApp({ approvalRules: store })` exposes `/approval/rules`. Changes hit disk **immediately**.
+- **Surviving restarts**: `buildAgent({ inMemory: false, sessionDir })` + `createSessionHub(..., allowedSessionRoots)` lets this workspace's conversations be listed after a restart and opened with `open_conversation` (clients send only the conversation id; the path is looked up in the index, never taken from the client).
 
 ## Documentation
 
