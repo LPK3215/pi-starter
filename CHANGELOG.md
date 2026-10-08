@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **真端到端测试**（`npm run e2e`，已并入 CI）：起**真实 server 进程** → 跑一次真实对话 → `SIGKILL` → 重启 → 验证会话从磁盘恢复 → 恢复后还能继续对话。不需要真实 API Key：把 `PI_CODING_AGENT_DIR` 指向临时目录并写一份指向本地假 OpenAI 兼容端点的 `models.json`，启动期不联网探测。此前`resume.test.ts` 只在同进程里重读一遍索引，**从未真重启过**——而落盘时机、会话目录推导、索引与 jsonl 的对应关系，同进程测试全都测不到。
+- **真端到端测试**（`npm run e2e`，已并入 CI）：起**真实 server 进程** → 跑一次真实对话 → `SIGKILL` → 重启 → 验证会话从磁盘恢复 → 恢复后还能继续对话；**恢复后带工具调用**（假 LLM 发 `ls` 工具调用 → 真执行 → 重启恢复 → 断言出站请求里每个 `tool_call` 都有对应 tool 结果、且无孤立结果——这正是真实 provider 会校验的配对，断了会报「消息格式非法」而极难反推）；索引指向已删文件时不出现幽灵条目、陈旧 id 明确报错。不需要真实 API Key：把 `PI_CODING_AGENT_DIR` 指向临时目录并写一份指向本地假 OpenAI 兼容端点的 `models.json`，启动期不联网探测。此前 `resume.test.ts` 只在同进程里重读一遍索引，**从未真重启过**——而落盘时机、会话目录推导、索引与 jsonl 的对应关系，同进程测试全都测不到。
 - **上下文主动压缩**：WS `compact_context { instructions? }` + `POST /context/compact`（REST 侧汇总所有连接，串行执行并报出每个结果）。此前只有 SDK 自动触发时的被动 notice，客户端看得见压缩发生了却无法主动发起，而「该保留什么」只有用户知道。三条前置条件都给出**明确中文理由**而非静默无效：正在流式 / 上下文太小（低于 `MIN_COMPACTABLE_TOKENS`，压了也省不下什么）/ SDK 不支持。压缩后**作废投影与 token 缓存**——若SDK 原地改写消息对象，WeakMap 键不变会命中压缩前的值，快照会继续显示被压掉的旧内容。
 - **后端体系加固（两轮）**：工具看门狗、慢客户端断连、类型化错误 `AppError`、速率限制、结构化脱敏日志、指标端点、审批规则引擎（六种匹配器 + 编辑接口）、未使用符号门禁、CI 六道关卡。
 - **扩展点体系**：WS 自定义命令（`attachWebSocket(server, { commands })`，未注册命令明确报错、内置不可被覆盖）、HTTP `configure` 钩子与 `seal()`、`addDisposer()` 统一回收。业务逻辑不碰内核即可接入。
@@ -27,6 +27,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **停机时打印的是请求端口而非实际绑定端口**：`--port 0`（让 OS 分配，E2E 与容器调度常用）会记出 `ws://127.0.0.1:0/ws`——调用方无法得知真实端口。改为读 `server.address().port`。这也顺带消除了 E2E 的端口竞态：旧做法是「探一个空闲端口→关掉→传给子进程」，探测与真正 listen 之间有窗口，CI 并行时表现为偶发 `EADDRINUSE`（本轮实际撞到）。
 - **`POST /chat` 流式失败泄漏内部细节且不记日志**：状态码已提交，`errorHandler` 再也看不到这个异常，于是 `err.message` 原样写进 SSE——数据库绝对路径、SQL、SDK 内部信息全都会到客户端。实测反向验证时确实返回了 `unable to open C:\Users\real\private\db.sqlite 密码 hunter2`。改为复用 `toAppError`：`internal` 只回通用文案 + `code`，面向调用方的码（如 `read_only_sql`）照常放行以便模型自我纠正；同时**补上服务端 error 级日志**，此前失败在服务端完全不可见。此前该路径零测试覆盖。
 - **E2E 里「不是兜底强退」的断言是假阳性**：它在停机 handler 根本没运行时也通过（因为没有超时日志只是因为压根没停机）。现在加了前提，且 Windows 上因 Node 不投递可捕获的 SIGTERM 而**显式报告 SKIP 与原因**，不再冒充通过。
+- **E2E 里「停机后端口已释放」是单次瞬时判定**（竞态）：进程刚退出时 listener 可能还没被 OS 收走，多次通过后偶发变红。改为轮询判定——真泄漏时 10s 后依然会红，不是在掩盖问题。
+- **E2E 用正则从日志里抓 `"knowledge":["about"]` 判断示例内容是否加载**：耦合的是日志排版，格式一改断言就假红。改为调用 `/capabilities`（文档化契约，且数据源正是写进系统提示词的那份清单）。
 - **三个依赖漏洞清零**（`npm audit` 从high 降为 0）：`brace-expansion` 5.0.7 → 5.0.12、`undici` 8.5.0 → 8.11.2、`proxy-addr` 2.0.7 → 2.0.8。前两者位于 `@earendil-works/pi-coding-agent` 的**嵌套依赖**里，顶层 override 不生效——必须删除 lockfile 让 npm 从零解析才会应用（`npm install` 与 `--package-lock-only` 都会因「lockfile 已满足」而跳过重算）。
 - **`package.json` 自依赖**（`"pi-starter": "file:pi-starter-0.1.0.tgz"`）会让 CI 的 `npm ci` 直接失败（该 tarball尚未构建）。已移除。
 - **符号链接逃逸测试在 Windows 上从未真正运行**：两个用例在 `symlinkSync` 抛 `EPERM`（未开开发者模式）时直接 `return`，看着通过、实际没跑——比显式 skip 更糟。改用 **junction**（NTFS reparse point，普通用户即可创建，且 `realpath` 同样穿过它），两个用例现在在 Windows 上真跑，并加了「这个链接确实指向根外」的前提断言。

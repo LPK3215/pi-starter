@@ -74,6 +74,14 @@ const cleanup = [];
 process.on("exit", () => { for (const fn of cleanup.reverse()) { try { fn(); } catch { /* ignore */ } } });
 
 /* ── 1. 假 LLM：OpenAI 兼容的 /chat/completions，只回文本，走 SSE ── */
+/**
+ * 工具调用模式开关。
+ *
+ * 默认关闭——前面所有段落都依赖「回文本」。打开后，第一次请求（还没有 tool 结果）
+ * 回一个 `ls` 工具调用，收到工具结果后的第二次请求回文本。**只在最后一段打开**，
+ * 否则会把前面每一段的断言都打乱。
+ */
+let llmToolMode = false;
 const seenRequests = [];
 const llm = createServer((req, res) => {
   if (!req.url?.endsWith("/chat/completions")) {
@@ -84,10 +92,40 @@ const llm = createServer((req, res) => {
   let body = "";
   req.on("data", (c) => { body += c; });
   req.on("end", () => {
-    seenRequests.push(JSON.parse(body || "{}"));
+    const parsed = JSON.parse(body || "{}");
+    seenRequests.push(parsed);
     // 必须第一块就 200：SDK 侧有重试包装，制造 5xx 会拖慢甚至放大失败。
     res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
     const send = (obj) => res.write(`data: ${JSON.stringify(obj)}\n\n`);
+
+    // 请求里是否已经带了工具结果（OpenAI 协议用 role: "tool"）。
+    const hasToolResult =
+      Array.isArray(parsed.messages) && parsed.messages.some((m) => m && m.role === "tool");
+    if (llmToolMode && !hasToolResult) {
+      send({
+        choices: [{
+          index: 0,
+          delta: {
+            role: "assistant",
+            tool_calls: [{
+              index: 0,
+              id: "call_e2e_ls",
+              type: "function",
+              function: { name: "ls", arguments: JSON.stringify({ path: "." }) },
+            }],
+          },
+          finish_reason: null,
+        }],
+      });
+      send({
+        choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }],
+        usage: { prompt_tokens: 11, completion_tokens: 7, total_tokens: 18 },
+      });
+      res.write("data: [DONE]\n\n");
+      res.end();
+      return;
+    }
+
     const text = "已收到：E2E 假回复";
     // 分两段吐字，让客户端的增量路径也跑到
     send({ choices: [{ index: 0, delta: { role: "assistant", content: text.slice(0, 5) }, finish_reason: null }] });
@@ -140,7 +178,7 @@ writeFileSync(
 // 旧做法是「先探一个空闲端口、关掉、再把它传给子进程」——探测与子进程真正 listen 之间
 // 存在窗口，CI 并行时会被别的进程抢走，表现为偶发 EADDRINUSE（本轮就撞到过一次）。
 // 让内核自己分配则没有这个窗口。server.ts 为此改成打印实际端口而非请求值。
-function startServer(tag) {
+function startServer(tag, extraEnv = {}) {
   const child = spawn(
     process.execPath,
     [join(REPO, "node_modules", "tsx", "dist", "cli.mjs"), join(REPO, "src", "server.ts"),
@@ -155,6 +193,9 @@ function startServer(tag) {
         // 明确关掉示例内容，避免子目录被算进知识库/技能清单影响断言
         PI_BUILTIN_KNOWLEDGE: "off",
         PI_BUILTIN_SKILLS: "off",
+        // 默认 off；需要工具调用的段落自己传（内置默认是 "off"）。
+        PI_BUILTIN_TOOLS: "off",
+        ...extraEnv,
       },
       stdio: ["ignore", "pipe", "pipe"],
     },
@@ -194,6 +235,22 @@ function connect() {
   socket.on("message", (d) => frames.push(JSON.parse(d.toString("utf8"))));
   socket.on("error", () => {});
   return { frames, socket };
+}
+
+/**
+ * 当前进程加载了哪些知识库/技能。
+ *
+ * `agent.knowledge` / `agent.skills` 就是写进系统提示词的那两份清单，`/capabilities`
+ * 直接暴露它们。**不要再用正则去日志里捞** `"knowledge":["about"]`——那耦合的是日志
+ * 排版，日志格式一改断言就假红，而它检验的其实是启动行为。
+ */
+async function loadCatalogs() {
+  const res = await fetch(`http://127.0.0.1:${PORT}/capabilities`);
+  const body = await res.json();
+  return {
+    knowledge: (body.knowledge ?? []).map((k) => k.name),
+    skills: (body.skills ?? []).map((s) => s.name),
+  };
 }
 const waitFrame = (frames, type, label) =>
   waitFor(`${label} 收到 ${type}`, () => frames.find((f) => f.type === type), 60_000);
@@ -237,9 +294,12 @@ console.log("── 第一段：起进程 → 真实对话 ──");
   const snap0 = await waitFrame(frames, "snapshot", "run1");
   conversationId = snap0.state.conversationId;
   check("进程 1: 握手后拿到 conversationId", !!conversationId, conversationId ?? "");
-  // 设置是从 agentDir 里的文件读的——这条同时验证「设置落盘真的生效」
-  check("进程 1: 内置示例内容确实未加载", !log.join("").includes('"knowledge":["about"]'),
-    log.join("").match(/"knowledge":\[[^\]]*\]/)?.[0] ?? "未匹配");
+  // 设置是从 agentDir 里的文件读的——这条同时验证「设置落盘真的生效」。
+  // 数据源用 `/capabilities`（文档化契约）而不是日志正则。
+  const catalogs = await loadCatalogs();
+  check("进程 1: 内置示例内容确实未加载",
+    !catalogs.knowledge.includes("about") && !catalogs.skills.includes("summarize"),
+    `knowledge=[${catalogs.knowledge.join(",")}] skills=[${catalogs.skills.join(",")}]`);
 
   socket.send(JSON.stringify({ type: "prompt", text: "记住这句话：pineapple" }));
 
@@ -350,9 +410,10 @@ console.log("\n── 设置：改 → 落盘 → 重启后生效 ──");
   // 7a. 起一个进程，在里面改设置
   const first = startServer("run3");
   await waitReady("run3", first.log);
+  const beforeCatalogs = await loadCatalogs();
   check("设置: 改之前示例内容确实是关的",
-    /"knowledge":\[[^\]]*\]/.test(first.log.join("")) && !/"knowledge":\[[^\]]*"about"/.test(first.log.join("")),
-    first.log.join("").match(/"knowledge":\[[^\]]*\]/)?.[0] ?? "未匹配");
+    !beforeCatalogs.knowledge.includes("about") && !beforeCatalogs.skills.includes("summarize"),
+    `knowledge=[${beforeCatalogs.knowledge.join(",")}] skills=[${beforeCatalogs.skills.join(",")}]`);
 
   const res = await fetch(`http://127.0.0.1:${PORT}/settings`, {
     method: "PATCH",
@@ -368,20 +429,21 @@ console.log("\n── 设置：改 → 落盘 → 重启后生效 ──");
     `落盘 builtinKnowledge=${onDisk.builtinKnowledge} builtinSkills=${onDisk.builtinSkills}`);
 
   // 同一进程内不该热切换——内核必须如实说「要重启」，而不是假装已生效
-  const stillOff = !/"knowledge":\[[^\]]*"about"/.test(first.log.join(""));
-  check("设置: 同进程内不热切换（系统提示词里仍无示例）", stillOff,
-    "示例内容在组装期写进提示词，热切换会前后不一致");
+  const stillOff = await loadCatalogs();
+  check("设置: 同进程内不热切换（系统提示词里仍无示例）",
+    !stillOff.knowledge.includes("about") && !stillOff.skills.includes("summarize"),
+    `knowledge=[${stillOff.knowledge.join(",")}] skills=[${stillOff.skills.join(",")}]`);
 
   await new Promise((r) => { first.child.once("exit", () => r(true)); first.child.kill("SIGKILL"); });
 
   // 7b. 再起一个进程：这次必须真的把示例内容加载回来
   const second = startServer("run4");
   await waitReady("run4", second.log);
-  const text = second.log.join("");
+  const afterCatalogs = await loadCatalogs();
   check("设置: 重启后示例知识真的被加载（knowledge 里有 about）",
-    /"knowledge":\[[^\]]*"about"/.test(text), text.match(/"knowledge":\[[^\]]*\]/)?.[0] ?? "未匹配");
+    afterCatalogs.knowledge.includes("about"), `knowledge=[${afterCatalogs.knowledge.join(",")}]`);
   check("设置: 重启后示例技能真的被加载（skills 里有 summarize）",
-    /"skills":\[[^\]]*"summarize"/.test(text), text.match(/"skills":\[[^\]]*\]/)?.[0] ?? "未匹配");
+    afterCatalogs.skills.includes("summarize"), `skills=[${afterCatalogs.skills.join(",")}]`);
 
   await new Promise((r) => { second.child.once("exit", () => r(true)); second.child.kill("SIGKILL"); });
 }
@@ -430,7 +492,13 @@ console.log("\n── 优雅停机：真进程 + 真信号 ──");
     check("停机: 有活跃 HTTP/WS 连接时也能干净退出（keep-alive 不卡住 close）", code === 0,
       "停机前已建立 fetch keep-alive + WS 连接");
   }
-  check("停机: 进程结束后端口已释放", await portFree(PORT), `port=${PORT}`);
+  // 端口释放是**最终**状态，不能单次瞬时判定：进程刚退出时 listener 可能还没被 OS
+  // 收走（这条曾在多次通过后偶发变红）。轮询给一个合理窗口，超时才算真失败——
+  // 若真的泄漏，10s 后依然会红，所以不是在掩盖问题。
+  const freed = await waitFor("停机后端口释放", () => portFree(PORT), 10_000)
+    .then(() => true)
+    .catch(() => false);
+  check("停机: 进程结束后端口已释放", freed, `port=${PORT}`);
 }
 
 /* ── 9. 索引指向一个已被删掉的文件 ──
@@ -509,6 +577,76 @@ console.log("\n── 索引与磁盘不一致：文件被外部删掉后重启 
         `请求 ${staleId}，返回 ${snapshotId} —— 若相同即为「打开不存在的会话却成功」`);
     }
   }
+
+  c2.socket.terminate();
+  await new Promise((r) => { second.child.once("exit", () => r(true)); second.child.kill("SIGKILL"); });
+}
+
+/* ── 10. 恢复后带工具调用 ──
+ * 这是升级 SDK 时最容易悄悄坏掉的地方：jsonl 里的 `tool_use` / `tool_result` 必须**成对**
+ * 恢复到下一次请求里。少一半就是悬空工具调用——真实 provider 会直接报错，
+ * 而错误信息通常指向「消息格式非法」，极难反推到「恢复时配对断了」。
+ *
+ * 断言打在**出站请求**上（而不是快照），因为那正是 provider 会校验的东西：
+ * 恢复后再问一轮，检查发给假 LLM 的 messages 里每个 tool_call 都有对应 tool 结果，反之亦然。 */
+console.log("\n── 恢复后带工具调用：tool_use / tool_result 必须成对 ──");
+{
+  llmToolMode = true;
+  const first = startServer("tool1", { PI_BUILTIN_TOOLS: "readonly" });
+  await waitReady("tool1", first.log);
+  const { frames, socket } = connect();
+  await once(socket, "open");
+  socket.send(JSON.stringify({ type: "hello", protocolVersion: PROTOCOL_VERSION }));
+  await waitFrame(frames, "ready", "tool1");
+  const snap0 = await waitFrame(frames, "snapshot", "tool1");
+  const toolConvId = snap0.state.conversationId;
+
+  const before = seenRequests.length;
+  socket.send(JSON.stringify({ type: "prompt", text: "列一下当前目录" }));
+  const end = await waitFrame(frames, "run_end", "tool1");
+  check("工具调用: 一轮真的跑完（含工具往返）", !!end, `stopReason=${end?.stopReason ?? "-"}`);
+  check("工具调用: 假 LLM 至少被调两次（工具前 + 工具后）",
+    seenRequests.length - before >= 2, `新增 ${seenRequests.length - before} 次`);
+  const toolEnd = frames.find((f) => f.type === "tool_status" && f.phase === "end");
+  check("工具调用: ls 真的被执行且未报错",
+    !!toolEnd && toolEnd.toolName === "ls" && !toolEnd.isError,
+    toolEnd ? `${toolEnd.toolName} isError=${toolEnd.isError}` : "未收到 tool_status end");
+
+  socket.terminate();
+  await new Promise((r) => { first.child.once("exit", () => r(true)); first.child.kill("SIGKILL"); });
+
+  // 重启 → 恢复 → 再问一轮，检查历史里的工具调用是否成对带过去了
+  const second = startServer("tool2", { PI_BUILTIN_TOOLS: "readonly" });
+  await waitReady("tool2", second.log);
+  const c2 = connect();
+  await once(c2.socket, "open");
+  c2.socket.send(JSON.stringify({ type: "hello", protocolVersion: PROTOCOL_VERSION }));
+  await waitFrame(c2.frames, "ready", "tool2");
+  c2.socket.send(JSON.stringify({ type: "open_conversation", conversationId: toolConvId }));
+  const resumed = await waitFor("tool2 恢复出带工具的历史", () =>
+    c2.frames.filter((f) => f.type === "snapshot").pop()?.state?.messages?.some((m) => m.role === "assistant"),
+    30_000,
+  ).catch(() => null);
+  check("工具调用: 重启后恢复了该会话", !!resumed, resumed ? "有助手消息" : "未恢复");
+
+  c2.socket.send(JSON.stringify({ type: "prompt", text: "继续" }));
+  await waitFrame(c2.frames, "run_end", "tool2");
+
+  const req = seenRequests[seenRequests.length - 1];
+  const msgs = Array.isArray(req?.messages) ? req.messages : [];
+  const callIds = new Set(
+    msgs.filter((m) => m.role === "assistant" && Array.isArray(m.tool_calls))
+      .flatMap((m) => m.tool_calls.map((tc) => tc.id)),
+  );
+  const resultIds = new Set(msgs.filter((m) => m.role === "tool").map((m) => m.tool_call_id));
+  check("恢复后: 历史里的工具调用确实带到了出站请求里", callIds.size > 0,
+    `tool_calls=${callIds.size}，tool 结果=${resultIds.size}`);
+  check("恢复后: 每个 tool_call 都有对应结果（无悬空调用）",
+    callIds.size > 0 && [...callIds].every((id) => resultIds.has(id)),
+    `calls=[${[...callIds].join(",")}] results=[${[...resultIds].join(",")}]`);
+  check("恢复后: 没有孤立的结果（无对应调用）",
+    [...resultIds].every((id) => callIds.has(id)),
+    `results=[${[...resultIds].join(",")}]`);
 
   c2.socket.terminate();
   await new Promise((r) => { second.child.once("exit", () => r(true)); second.child.kill("SIGKILL"); });
