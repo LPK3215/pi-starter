@@ -56,6 +56,14 @@ jobs:
         # origin checks, backpressure-driven disconnect.
         run: npm run smoke
 
+      - name: E2E (real process, real restart, session resume)
+        # The layer that matters most when the SDK is upgraded: it spawns actual
+        # server processes against a local fake OpenAI endpoint (no API key, no
+        # network), runs a turn, SIGKILLs the process, restarts it and asserts the
+        # conversation comes back off disk. Same-process fakes cannot catch a
+        # change in when/how the session transcript is written.
+        run: npm run e2e
+
       - name: Dependency audit
         # 5 runtime deps keeps the surface small; gate the build on a high-severity
         # advisory instead of leaving it to a periodic scan someone has to remember.

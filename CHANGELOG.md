@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **真端到端测试**（`npm run e2e`，已并入 CI）：起**真实 server 进程** → 跑一次真实对话 → `SIGKILL` → 重启 → 验证会话从磁盘恢复 → 恢复后还能继续对话。不需要真实 API Key：把 `PI_CODING_AGENT_DIR` 指向临时目录并写一份指向本地假 OpenAI 兼容端点的 `models.json`，启动期不联网探测。此前`resume.test.ts` 只在同进程里重读一遍索引，**从未真重启过**——而落盘时机、会话目录推导、索引与 jsonl 的对应关系，同进程测试全都测不到。
+- **上下文主动压缩**：WS `compact_context { instructions? }` + `POST /context/compact`（REST 侧汇总所有连接，串行执行并报出每个结果）。此前只有 SDK 自动触发时的被动 notice，客户端看得见压缩发生了却无法主动发起，而「该保留什么」只有用户知道。三条前置条件都给出**明确中文理由**而非静默无效：正在流式 / 上下文太小（低于 `MIN_COMPACTABLE_TOKENS`，压了也省不下什么）/ SDK 不支持。压缩后**作废投影与 token 缓存**——若SDK 原地改写消息对象，WeakMap 键不变会命中压缩前的值，快照会继续显示被压掉的旧内容。
 - **后端体系加固（两轮）**：工具看门狗、慢客户端断连、类型化错误 `AppError`、速率限制、结构化脱敏日志、指标端点、审批规则引擎（六种匹配器 + 编辑接口）、未使用符号门禁、CI 六道关卡。
 - **扩展点体系**：WS 自定义命令（`attachWebSocket(server, { commands })`，未注册命令明确报错、内置不可被覆盖）、HTTP `configure` 钩子与 `seal()`、`addDisposer()` 统一回收。业务逻辑不碰内核即可接入。
 - **文件服务**：`/files/*` 全套（浏览 / 读 / 写 / 新建 / 重命名 / 复制 / 删除 / Range 原始内容 / base64 上传）。路径穿越与**符号链接逃逸均 fail-closed**。
@@ -21,6 +23,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **三个依赖漏洞清零**（`npm audit` 从high 降为 0）：`brace-expansion` 5.0.7 → 5.0.12、`undici` 8.5.0 → 8.11.2、`proxy-addr` 2.0.7 → 2.0.8。前两者位于 `@earendil-works/pi-coding-agent` 的**嵌套依赖**里，顶层 override 不生效——必须删除 lockfile 让 npm 从零解析才会应用（`npm install` 与 `--package-lock-only` 都会因「lockfile 已满足」而跳过重算）。
+- **`package.json` 自依赖**（`"pi-starter": "file:pi-starter-0.1.0.tgz"`）会让 CI 的 `npm ci` 直接失败（该 tarball尚未构建）。已移除。
+- **符号链接逃逸测试在 Windows 上从未真正运行**：两个用例在 `symlinkSync` 抛 `EPERM`（未开开发者模式）时直接 `return`，看着通过、实际没跑——比显式 skip 更糟。改用 **junction**（NTFS reparse point，普通用户即可创建，且 `realpath` 同样穿过它），两个用例现在在 Windows 上真跑，并加了「这个链接确实指向根外」的前提断言。
+- **设置校验报错缺字段名**：`PATCH /settings` 传错类型只得到 `Expected boolean, got string`，同时改多个字段时无从定位是哪个。`patch()` 与启动读盘的 `normalize()` 现在都统一补上 `字段名: 原因`。
 - 文档给出的鉴权建议**无效且危险**：README（中英双版）写的是「在 `createApp()` 外面加中间件」，实测中间件排在内核路由之后，`/chat`、`/model`、`/skills` 全部绕过鉴权直接返回 200——等于把 Agent 端点无鉴权暴露。正确写法是把内核 app 作为子应用挂到父应用上（`server.use("/agent", auth, agentApp)`），已同步 README、`SECURITY.md`、`FAQ.md` 与嵌入指南。
 - 安全边界描述与实现相反：README / `SECURITY.md` / `FAQ.md` 称 HTTP 服务「默认监听所有网卡」，实际 `RUNTIME_DEFAULTS.host` 是 `127.0.0.1`（回环），仅当 `PI_HOST` 设为非回环地址时才对外监听，且启动会告警。
 
