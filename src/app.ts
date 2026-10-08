@@ -36,6 +36,8 @@ import {
   registerResourceRoutes,
 } from "./http/routes.js";
 import { AppError, badRequest, busy as busyError } from "./http/errors.js";
+import { registerFileRoutes } from "./http/file-routes.js";
+import type { FileService } from "./files/service.js";
 import { createRateLimiter, DEFAULT_RATE_RULES, type RateLimitRule } from "./http/rate-limit.js";
 import { getLogger } from "./log.js";
 import { Metrics, metrics as defaultMetrics } from "./metrics.js";
@@ -73,6 +75,22 @@ export interface CreateAppOptions {
    * Rate limits for expensive routes. `true` uses DEFAULT_RATE_RULES; pass a rule map to
    * override. Omit (default) to disable — local single-user usage should not be throttled.
    */
+  /**
+   * 注入业务方自己的路由，**必须挂在本函数返回之前**。
+   *
+   * 为什么不能靠「先createApp 拿到 app 再加路由」：错误处理器在内核内部挂载，之后加的
+   * 路由排在它**后面**，永远走不到——实测业务方 `throw new AppError("internal", "密码…")`
+   * 会把密码、绝对路径和源码行号原样返回给客户端。脚手架提供的「internal 默认隐藏」
+   * 保护只对内核自己的路由生效，业务方一接入就失效，这种静默陷阱必须在结构上消除。
+   */
+  configure?: (app: Express) => void;
+  /**
+   * 文件服务。提供后开放 `/files/*`（浏览 / 读 / 写 / 新建 / 重命名 / 复制 / 删除 /
+   * 原始内容含Range / base64 上传），全部限制在 root 内。
+   *
+   * 省略则不注册这些路由——把内核暴露到文件系统是嵌入方的决定，不该默认开启。
+   */
+  files?: FileService;
   rateLimit?: boolean | Record<string, RateLimitRule>;
   /**
    * Proxies whose X-Forwarded-For may be trusted (e.g. ["loopback"] behind a local nginx).
@@ -84,6 +102,21 @@ export interface CreateAppOptions {
 
 export interface CreateAppResult {
   app: Express;
+  /**
+   * 重新在**末尾**挂一个错误处理器。
+   *
+   * 首选是 `configure` 钩子（在错误处理器之前注入）。这个方法是给另一种用法兜底的：
+   * 已经拿到 `app` 并加完路由后再调用 `seal()`，同样能让这些路由的异常被统一翻译。
+   * 不调用就会退回 Express 默认处理器——那会把错误消息与堆栈返回给客户端。
+   */
+  seal(): void;
+  /**
+   * 注册一个在 `dispose()` 时运行的清理函数。
+   *
+   * 脚手架自己管理agent / 数据库 / 会话，但业务方注册的扩展（定时器、长连接、临时文件）
+   * 不在其中。扩展点若没有回收契约，嵌入方每次热重载或优雅停机都会泄漏一份。
+   */
+  addDisposer(fn: () => void): void;
   /** 当前会话正在跑一轮 prompt */
   isBusy(): boolean;
   dispose(): void;
@@ -105,6 +138,7 @@ export function createApp(options: CreateAppOptions): CreateAppResult {
    */
   const currentModel = (): Model<any> => options.agent.model;
   let busy = false;
+  const disposers: Array<() => void> = [];
   const metricsReg = options.metrics ?? defaultMetrics;
 
   const app = express();
@@ -143,6 +177,7 @@ export function createApp(options: CreateAppOptions): CreateAppResult {
   registerResourceRoutes(app, options.agent);
   registerDbRoutes(app, options.agent);
   registerControlRoutes(app, options.agent, { registry, settings });
+  if (options.files) registerFileRoutes(app, { service: options.files });
 
   // Rich capability/inventory snapshot (superset of the old /health body).
   app.get("/info", async (_req, res) => {
@@ -265,13 +300,29 @@ export function createApp(options: CreateAppOptions): CreateAppResult {
     }
   });
 
+  // Embedder routes go in before the error handler, so their thrown AppError is translated
+  // exactly like a built-in one (typed codes exposed, internal detail hidden).
+  options.configure?.(app);
+
   // Must be registered AFTER every route: it is the single place that turns a thrown
   // AppError into a response, and it hides internal detail unless explicitly marked safe.
   registerErrorHandler(app);
 
   return {
     app,
+    seal: () => registerErrorHandler(app),
+    addDisposer: (fn) => disposers.push(fn),
     isBusy: () => busy,
-    dispose: () => options.agent.dispose(),
+    dispose: () => {
+      // Embedder cleanup first: it may still depend on the agent being alive.
+      for (const fn of disposers.splice(0, disposers.length)) {
+        try {
+          fn();
+        } catch (err) {
+          getLogger().warn("扩展清理失败，已跳过", { error: err instanceof Error ? err.message : String(err) });
+        }
+      }
+      options.agent.dispose();
+    },
   };
 }

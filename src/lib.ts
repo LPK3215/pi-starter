@@ -216,8 +216,13 @@ export {
 
 export {
   attachWebSocket,
+  customCommandNames,
+  defineCommand,
   originAllowed,
   serializeShared,
+  type WsCommandContext,
+  type WsCommandRegistry,
+  type WsCommandSpec,
   type WsRuntime,
   type WsServer,
 } from "./transport/ws.js";
@@ -279,6 +284,23 @@ export {
   registerProbeRoutes,
   registerResourceRoutes,
 } from "./http/routes.js";
+
+export {
+  registerFileRoutes,
+  type FileRoutesOptions,
+} from "./http/file-routes.js";
+
+export {
+  FileService,
+  isBinaryExtension,
+  looksBinary,
+  DEFAULT_MAX_ENTRIES,
+  DEFAULT_MAX_PREVIEW_BYTES,
+  DEFAULT_MAX_WRITE_BYTES,
+  type FileEntry,
+  type FileContent,
+  type FileServiceOptions,
+} from "./files/service.js";
 
 export {
   clientIp,

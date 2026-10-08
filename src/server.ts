@@ -25,6 +25,7 @@ import { createSessionHub } from "./session-hub.js";
 import { BUILTIN_TOOL_NAMES, createToolRegistry, defineToolSpec, type ToolRegistry } from "./tools/registry.js";
 import { allTools } from "./tools/index.js";
 import { SettingsService } from "./settings.js";
+import { FileService } from "./files/service.js";
 import { ApprovalRulesStore } from "./approval/rules.js";
 import { ApprovalGate, approvalExtension } from "./approval/gate.js";
 import { attachWebSocket, type WsServer } from "./transport/ws.js";
@@ -156,6 +157,9 @@ const { app, dispose } = createApp({
   connectionCount: () => wsRef?.connectionCount ?? 0,
   sessionStats: () => hub.stats(),
   approvalStats: () => gate.pendingCount,
+  // File service scoped to the process cwd: an Agent needs hands, and every path is
+  // validated (no traversal, no symlink escape) inside FileService itself.
+  files: new FileService({ root: process.cwd() }),
 });
 const server = createServer(app);
 // 显式超时：Node 默认值对长轮次 LLM 请求偏紧，对慢速头部又偏松。

@@ -161,4 +161,12 @@ export const DEFAULT_RATE_RULES: Record<string, RateLimitRule> = {
   "/chat": { windowMs: 60_000, max: 30 },
   "/db/query": { windowMs: 60_000, max: 120 },
   "/model": { windowMs: 60_000, max: 30 },
+  // File writes touch the filesystem: cap them so one client cannot thrash the disk.
+  // Reads stay unthrottled — a file browser is read-heavy and cheap.
+  "/files/write": { windowMs: 60_000, max: 120 },
+  "/files/create": { windowMs: 60_000, max: 60 },
+  "/files/delete": { windowMs: 60_000, max: 60 },
+  "/files/rename": { windowMs: 60_000, max: 60 },
+  "/files/copy": { windowMs: 60_000, max: 60 },
+  "/files/upload": { windowMs: 60_000, max: 30 },
 };

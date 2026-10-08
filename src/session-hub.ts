@@ -81,6 +81,26 @@ function deriveTitle(text: string): string {
   return clean.length > 40 ? `${clean.slice(0, 40)}...` : clean;
 }
 
+/**
+ * Pull displayable text out of a tool's `partialResult`.
+ *
+ * The field is typed `any` by the SDK and its shape varies per tool (plain string, content
+ * blocks, nested arrays), so this stays deliberately defensive: anything unrecognised yields
+ * "" rather than "[object Object]" being streamed to the client.
+ */
+function extractPartialText(partial: unknown): string {
+  if (typeof partial === "string") return partial;
+  if (Array.isArray(partial)) return partial.map(extractPartialText).join("");
+  if (partial && typeof partial === "object") {
+    const obj = partial as Record<string, unknown>;
+    if (typeof obj.text === "string") return obj.text;
+    if (typeof obj.output === "string") return obj.output;
+    if (obj.content !== undefined) return extractPartialText(obj.content);
+    if (Array.isArray(obj.parts)) return extractPartialText(obj.parts);
+  }
+  return "";
+}
+
 export interface ConversationOptions {
   clientId: string;
   session: Session;
@@ -90,6 +110,11 @@ export interface ConversationOptions {
   push: (msg: ServerMessage) => void;
   /** Provider for the cross-conversation list (owned by ClientSession). */
   listConversations: () => UiConversation[];
+  /**
+   * Invoked after every finished turn (`agent_end`). Lets the owning ClientSession refresh
+   * its conversation list (title/order changed) without Conversation knowing about it.
+   */
+  onTurnEnd?: () => void;
   /**
    * Whether this conversation exclusively owns its session.
    * True when the session came from the `createSession` factory (must be disposed with the
@@ -124,6 +149,8 @@ export class Conversation {
   /** Per-message token counts, keyed by the stable projected UiMessage reference. */
   private readonly tokenCache = new WeakMap<UiMessage, number>();
   private readonly toolStartTimes = new Map<string, number>();
+  /** Called after a turn ends, so the owning ClientSession can refresh its conversation list. */
+  private readonly onTurnEnd: (() => void) | undefined;
   private readonly watchdog: ToolWatchdog;
   private readonly session: Session;
   private readonly fallbackModel: Model<any>;
@@ -141,6 +168,7 @@ export class Conversation {
     this.push = opts.push;
     this.ownsSession = opts.ownsSession === true;
     this.listConversations = opts.listConversations;
+    this.onTurnEnd = opts.onTurnEnd;
     this.keepRecent = opts.keepRecent ?? (() => 6);
     this.id = opts.session.sessionId;
     const log = getLogger().child({ component: "conversation", conversationId: this.id });
@@ -222,9 +250,37 @@ export class Conversation {
         });
         break;
       }
+      case "tool_execution_update": {
+        // Streaming partial output. Without this a long-running tool looks frozen until it
+        // finishes, because tool_status only fires at start/end.
+        const delta = extractPartialText(event.partialResult);
+        if (delta) this.emitToolDelta(event.toolCallId, event.toolName, delta);
+        break;
+      }
       case "agent_start": {
         this.streamingText = "";
         this.promptedSinceActive = true;
+        this.push({ type: "run_start", conversationId: this.id });
+        break;
+      }
+      case "agent_end": {
+        // The authoritative end-of-turn signal. The SDK event carries only `messages` and
+        // `willRetry`, so the stop reason has to be derived from the final assistant message.
+        const last = event.messages[event.messages.length - 1];
+        const stopReason =
+          last?.role === "assistant" && typeof last.stopReason === "string"
+            ? last.stopReason
+            : undefined;
+        this.streamingText = "";
+        this.push({
+          type: "run_end",
+          conversationId: this.id,
+          stopReason,
+          willRetry: event.willRetry || undefined,
+          aborted: stopReason === "aborted" || undefined,
+        });
+        // A finished turn changes the conversation list (title, ordering), so refresh it.
+        this.onTurnEnd?.();
         break;
       }
       case "message_end": {
@@ -234,6 +290,11 @@ export class Conversation {
       }
       case "queue_update": {
         // Steering / follow-up queues changed; snapshot carries them.
+        break;
+      }
+      case "entry_appended": {
+        // A new entry landed in the session transcript: it may carry a better title.
+        this.refreshTitleFromSession();
         break;
       }
       case "compaction_start": {
@@ -284,6 +345,20 @@ export class Conversation {
       channel,
       delta,
     });
+    this.snap.noteDelta();
+  }
+
+  /** 工具流式增量。与 message_delta 共用 seq 空间，便于客户端按序排空两类增量。 */
+  private emitToolDelta(toolCallId: string, toolName: string, delta: string): void {
+    this.push({
+      type: "tool_delta",
+      conversationId: this.id,
+      seq: ++this.deltaSeq,
+      toolCallId,
+      toolName,
+      delta,
+    });
+    // Note the delta so the snapshot scheduler knows output is still moving.
     this.snap.noteDelta();
   }
 
@@ -619,6 +694,7 @@ export class ClientSession {
       cfg: this.cfg,
       push: (msg) => this.emit(msg),
       listConversations: () => this.listConversations(),
+      onTurnEnd: () => this.emitConversations(),
       keepRecent: this.keepRecent,
       toolTimeoutMs: this.toolTimeoutMs(),
       ownsSession: Boolean(factory),

@@ -393,6 +393,9 @@ async function startHarness(
         /* already closed */
       }
       socket.terminate();
+      // fetch's pooled keep-alive connections would otherwise keep server.close() pending,
+      // leaving the test process alive after every assertion has passed.
+      server.closeAllConnections();
       await new Promise<void>((r) => server.close(() => r()));
       hub.dispose();
     },
@@ -584,6 +587,101 @@ test("集成：WS 切模型后 /info 与 /health/ready 报告的模型不再过�
   } finally {
     await h.close();
   }
+});
+
+/**
+ * 回归：轮次结束与工具流式输出必须有权威信号。
+ *
+ * 内核曾经判断了 `agent_end` 要立即 flush 快照，却没有对应分支——于是：
+ *   - 客户端拿不到「本轮结束」，只能靠快照里 `isStreaming` 轮询推断；
+ *   - 长工具运行期间只有 start/end 两个点，中间过程完全不可见。
+ * SDK 的 `agent_end` 不带 stopReason，必须从最后一条 assistant 消息推导。
+ */
+test("集成：agent_end 发出 run_end（含 stopReason / aborted），工具 update 发tool_delta", async () => {
+  const agent = makeAgent();
+  const hub = new SessionHub(agent, resolveRuntimeConfig());
+  const sink = collector();
+  const cs = await hub.attach("c1", sink.push);
+  const conv = cs.active!;
+  const session = conv.sdkSession as unknown as FakeSession;
+
+  sink.frames.length = 0;
+  session.emit({ type: "agent_start" });
+  assert.ok(
+    sink.frames.some((f) => f.type === "run_start"),
+    "a turn must announce its start",
+  );
+
+  sink.frames.length = 0;
+  session.emit({
+    type: "tool_execution_update",
+    toolCallId: "t1",
+    toolName: "bash",
+    args: {},
+    partialResult: "partial output",
+  });
+  const delta = sink.frames.find((f) => f.type === "tool_delta") as
+    | { toolCallId: string; toolName: string; delta: string; seq: number }
+    | undefined;
+  assert.ok(delta, "a streaming tool update must surface as tool_delta");
+  assert.equal(delta!.toolName, "bash");
+  assert.equal(delta!.delta, "partial output");
+  assert.ok(Number.isInteger(delta!.seq), "tool_delta must carry an ordered seq");
+
+  // A plain string, and a content-block shape, both have to render as text.
+  sink.frames.length = 0;
+  session.emit({
+    type: "tool_execution_update",
+    toolCallId: "t2",
+    toolName: "read",
+    args: {},
+    partialResult: [{ type: "text", text: "chunk-a" }, { type: "text", text: "chunk-b" }],
+  });
+  const joined = sink.frames.find((f) => f.type === "tool_delta") as { delta: string } | undefined;
+  assert.equal(joined?.delta, "chunk-achunk-b", "content blocks must be concatenated in order");
+
+  sink.frames.length = 0;
+  session.emit({
+    type: "agent_end",
+    willRetry: false,
+    messages: [
+      { role: "user", content: "hi", timestamp: 1 },
+      { role: "assistant", content: "yo", timestamp: 2, stopReason: "stop" },
+    ] as never,
+  });
+  const end = sink.frames.find((f) => f.type === "run_end") as
+    | { stopReason?: string; willRetry?: boolean; aborted?: boolean }
+    | undefined;
+  assert.ok(end, "a turn must emit the authoritative run_end signal");
+  assert.equal(end!.stopReason, "stop", "stopReason must be derived from the last assistant message");
+  assert.ok(!end!.aborted, "a normal finish is not an abort");
+  assert.ok(
+    sink.frames.some((f) => f.type === "conversations"),
+    "finishing a turn refreshes the conversation list",
+  );
+
+  // Aborted and retrying are distinct states and must not be reported as a clean finish.
+  sink.frames.length = 0;
+  session.emit({
+    type: "agent_end",
+    willRetry: true,
+    messages: [{ role: "assistant", content: "x", timestamp: 3, stopReason: "error" }] as never,
+  });
+  const retry = sink.frames.find((f) => f.type === "run_end") as
+    | { willRetry?: boolean }
+    | undefined;
+  assert.equal(retry!.willRetry, true, "an auto-retry must be distinguishable from a clean finish");
+
+  sink.frames.length = 0;
+  session.emit({
+    type: "agent_end",
+    willRetry: false,
+    messages: [{ role: "assistant", content: "x", timestamp: 4, stopReason: "aborted" }] as never,
+  });
+  const aborted = sink.frames.find((f) => f.type === "run_end") as { aborted?: boolean } | undefined;
+  assert.equal(aborted!.aborted, true, "an abort must be flagged");
+
+  hub.dispose();
 });
 
 test("集成：UI 消息投影稳定（增量快照快路径的前提）", async () => {

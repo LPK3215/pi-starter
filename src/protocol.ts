@@ -222,6 +222,34 @@ export type ServerMessage =
       isError?: boolean;
       durationMs?: number;
     }
+  /** 一轮开始（agent_start）。与 run_end 成对，让客户端无需轮询 isStreaming。 */
+  | { type: "run_start"; conversationId: string }
+  /**
+   * 一轮结束（agent_end）——**本轮唯一的权威结束信号**。
+   *
+   * 以往内核不发这个帧，客户端只能靠快照里的 `isStreaming` 轮询推断轮次是否结束，
+   * 既拿不到 stopReason，也无法区分「正常结束」与「SDK 将要自动重试」。
+   * SDK 的 `agent_end` 本身不带 stopReason，由messages 里最后一条 assistant 消息推导。
+   */
+  | {
+      type: "run_end";
+      conversationId: string;
+      /** 最后一条 assistant 消息的停止原因（SDK 未提供时留空）。 */
+      stopReason?: string;
+      /** SDK 将自动重试——此时这一轮并未真正终结，不应显示为「已完成」。 */
+      willRetry?: boolean;
+      /** 中止（用户主动 abort）——与「正常结束」区分开。 */
+      aborted?: boolean;
+    }
+  /** 工具的流式中间输出（tool_execution_update）。长工具运行期间靠它证明「还在动」。 */
+  | {
+      type: "tool_delta";
+      conversationId: string;
+      seq: number;
+      toolCallId: string;
+      toolName: string;
+      delta: string;
+    }
   | { type: "conversations"; items: UiConversation[] }
   | { type: "models"; models: UiModel[]; current: string }
   | { type: "capabilities"; capabilities: UiCapabilities }

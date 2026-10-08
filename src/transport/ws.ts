@@ -19,6 +19,7 @@ import type { Server as HttpServer } from "node:http";
 import { randomUUID } from "node:crypto";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
 import {
+  CLIENT_MESSAGE_TYPES,
   isClientMessage,
   type ClientMessage,
   type ServerMessage,
@@ -53,6 +54,75 @@ export interface WsRuntime {
   serverVersion: string;
   /** 指标注册表，缺省用全局单例。 */
   metrics?: Metrics;
+  /**
+   * 业务方注册的自定义命令（扩展点）。
+   *
+   * 内置命令**不可被覆盖**（覆盖会让协议行为变得不可预测）；只有不在
+   * `CLIENT_MESSAGE_TYPES` 里的 type 才会走这里查表。
+   */
+  commands?: Record<string, WsCommandSpec>;
+  /** Embedder-supplied slash commands appended to the built-in four. */
+  slashCommands?: UiCapabilities["commands"];
+}
+
+/** 业务方命令的处理上下文。 */
+export interface WsCommandContext<TPayload = unknown> {
+  /** 已 attach 的会话；未完成 attach 时为 undefined（命令仍会被调用）。 */
+  session: ClientSession | undefined;
+  /** 本连接的客户 id（未 attach 时为空串）。 */
+  clientId: string;
+  /** 回一帧给发起方。 */
+  send: (msg: ServerMessage) => void;
+  /**
+   * 本帧的完整 payload（含 `type`）。用 `defineCommand<P>()` 声明命令时它就是 `P`，
+   * 否则为 `unknown`，需要业务方自行断言。
+   */
+  payload: TPayload;
+  /** 与内核命令同一份运行期依赖，业务方需要时可取 settings/registry/agent。 */
+  runtime: WsRuntime;
+}
+
+/** 一个业务方自定义命令。 */
+export interface WsCommandSpec<TPayload = unknown> {
+  /** 人类可读描述，出现在能力目录里。 */
+  describe?: string;
+  /** 处理逻辑。抛错会被接住并回 error 帧，不会杀连接。 */
+  handler: (ctx: WsCommandContext<TPayload>) => void | Promise<void>;
+}
+
+/** 自定义命令表。key 必须避开 `CLIENT_MESSAGE_TYPES` 里的全部内置名。 */
+export type WsCommandRegistry = Record<string, WsCommandSpec<any>>;
+
+/**
+ * 声明一个带类型的自定义命令。
+ *
+ * 协议单源是封闭联合，所以业务方命令的类型只能自己声明；这个辅助函数让它**跟着 handler
+ * 走**——写一次 `defineCommand<{a:number}>()`，`payload` 在 handler 里就是有类型的，
+ * 不必每次手动断言。
+ *
+ * ```ts
+ * const commands = {
+ *   biz_sum: defineCommand<{ a: number; b: number }>({
+ *     describe: "求和",
+ *     handler: ({ payload, send }) =>
+ *       send({ type: "notice", level: "info", text: String(payload.a + payload.b) }),
+ *   }),
+ * };
+ * ```
+ */
+export function defineCommand<TPayload>(spec: {
+  describe?: string;
+  handler: (ctx: WsCommandContext<TPayload>) => void | Promise<void>;
+}): WsCommandSpec<TPayload> {
+  return spec;
+}
+
+/** 内置命令判别集合：由协议单源派生，避免第二份手写清单。 */
+const BUILTIN_COMMAND_TYPES: ReadonlySet<string> = new Set<string>(CLIENT_MESSAGE_TYPES);
+
+/** 列出已注册的自定义命令名（用于能力目录与冲突检测）。 */
+export function customCommandNames(commands: WsCommandRegistry | undefined): string[] {
+  return commands ? Object.keys(commands).sort() : [];
 }
 
 export interface WsServer {
@@ -60,11 +130,22 @@ export interface WsServer {
   notifyApproval(request: UiApproval): void;
   /** Number of live connections. */
   readonly connectionCount: number;
+  /**
+   * 注册一个在 `close()` 时运行的清理函数。
+   *
+   * 业务方通过 `commands` 注册的处理器若持有定时器、子进程或缓存，需要跟着传输层一起回收。
+   */
+  addDisposer(fn: () => void): void;
   /** Graceful shutdown: stop heartbeat, close sockets, release the upgrade listener. */
   close(): Promise<void>;
 }
 
-/** Built-in slash commands advertised to the client. */
+/**
+ * Built-in slash commands advertised to the client.
+ *
+ * These are *advertisements*: the client renders the menu and decides how to trigger them.
+ * Embedders can append their own via `WsRuntime.slashCommands`.
+ */
 const DEFAULT_COMMANDS: UiCapabilities["commands"] = [
   { name: "/new", description: "Start a new conversation" },
   { name: "/model", description: "Switch the active model" },
@@ -121,7 +202,7 @@ function buildCapabilities(runtime: WsRuntime): UiCapabilities {
       title: k.title,
       description: k.description,
     })),
-    commands: DEFAULT_COMMANDS,
+    commands: [...DEFAULT_COMMANDS, ...(runtime.slashCommands ?? [])],
   };
 }
 
@@ -204,6 +285,15 @@ class ClientConn {
 
   private async dispatch(msg: ClientMessage): Promise<void> {
     const { runtime } = this;
+
+    // Extension point: business-registered commands. Built-ins are decided by the union in
+    // protocol.ts, so a custom type can never shadow one — that keeps protocol behaviour
+    // predictable no matter what the embedder registers.
+    if (!BUILTIN_COMMAND_TYPES.has(msg.type)) {
+      await this.runCustom(msg.type, msg);
+      return;
+    }
+
     try {
       switch (msg.type) {
         case "hello": {
@@ -382,6 +472,52 @@ class ClientConn {
     }
   }
 
+  /**
+   * 运行一个业务方注册的命令。
+   *
+   * 未注册时**必须**明确报错：旧实现落到`switch` 的default 静默丢弃，前端会一直
+   * 等一个永远不会来的响应，排查成本极高。
+   */
+  private async runCustom(type: string, raw: unknown): Promise<void> {
+    const spec = this.runtime.commands?.[type];
+    if (!spec) {
+      this.metrics.inc("protocolErrorsTotal");
+      getLogger()
+        .child({ component: "ws", clientId: this.clientId || "unattached" })
+        .warn("未注册的命令", { command: type });
+      this.send({
+        type: "error",
+        message: `unknown command: ${type}${this.suggest(type)}`,
+      });
+      return;
+    }
+    try {
+      await spec.handler({
+        session: this.cs,
+        clientId: this.clientId,
+        send: (m) => this.send(m),
+        payload: raw as never,
+        runtime: this.runtime,
+      });
+    } catch (err) {
+      // A failing business command must not take the connection down.
+      this.metrics.inc("dispatchErrorsTotal");
+      const message = err instanceof Error ? err.message : String(err);
+      getLogger()
+        .child({ component: "ws", clientId: this.clientId || "unattached" })
+        .error("自定义命令处理失败", { command: type, error: message });
+      this.send({ type: "error", message });
+    }
+  }
+
+  /** 未注册时给出"你是不是想发X"式的提示，避免最常见的手写错误被当成未知命令。 */
+  private suggest(type: string): string {
+    const names = customCommandNames(this.runtime.commands);
+    if (names.length === 0) return "";
+    const hit = names.find((n) => n.startsWith(type.slice(0, 3)) || type.startsWith(n.slice(0, 3)));
+    return hit ? ` (did you mean "${hit}"?)` : ` (registered: ${names.join(", ")})`;
+  }
+
   private flushPending(): void {
     const queued = this.pending.splice(0, this.pending.length);
     for (const msg of queued) this.handle(msg);
@@ -424,6 +560,7 @@ export function attachWebSocket(server: HttpServer, runtime: WsRuntime): WsServe
     maxPayload: 1024 * 1024,
   });
   const conns = new Set<ClientConn>();
+  const disposers: Array<() => void> = [];
   const metrics = runtime.metrics ?? defaultMetrics;
   metrics.setGauge("wsConnections", conns.size);
 
@@ -488,8 +625,21 @@ export function attachWebSocket(server: HttpServer, runtime: WsRuntime): WsServe
     get connectionCount(): number {
       return conns.size;
     },
+    addDisposer(fn: () => void): void {
+      disposers.push(fn);
+    },
     async close(): Promise<void> {
       clearInterval(heartbeat);
+      // Embedder cleanup runs first — it may still want to push a final frame.
+      for (const fn of disposers.splice(0, disposers.length)) {
+        try {
+          fn();
+        } catch (err) {
+          getLogger().warn("WS 扩展清理失败，已跳过", {
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
       server.off("upgrade", onUpgrade);
       for (const conn of conns) conn.dispose();
       conns.clear();
