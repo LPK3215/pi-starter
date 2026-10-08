@@ -1,0 +1,23 @@
+# 构建产物与依赖（镜像里 npm ci / build 重新生成，别把宿主状态带进去）
+node_modules
+dist
+
+# 密钥绝不进镜像（运行时用挂载的 ~/.pi/agent）
+.env
+.env.*
+!.env.example
+
+# 本地状态与数据库
+*.db
+*.sqlite
+.workbuddy
+.workbuddy-ai
+
+# VCS / 文档 / 噪声（源码 assets 在 src/** 下，不受影响）
+.git
+.gitignore
+.gitattributes
+.github
+docs
+*.md
+!README.md

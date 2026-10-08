@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-09
+
 ### Added
 
 - **RAG 可插拔性再补齐（本地 embedding + 持久化向量库 + 官方隔离示例）**：
