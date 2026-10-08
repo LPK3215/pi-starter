@@ -58,7 +58,7 @@
 - **分层提示词**：`src/prompts/` 下 `persona.md`（人设）+ `rules.md`（规则），改文件即改性格
 - **工具即插即用**：`src/tools/` 下定义，`tools/index.ts` 登记，自动注册进 Agent
 - **技能管理**：`src/skills/<name>/SKILL.md`，走 SDK `DefaultResourceLoader.additionalSkillPaths`，目录由 `formatSkillsForPrompt` 注入，全文用内置 `read` 按 `<location>` 加载
-- **知识库**：`src/knowledge/*.md`，系统提示词只放目录，正文由 `search_knowledge` / `read_knowledge` 按需取（SDK 没有原生知识库）
+- **知识库**：`src/knowledge/*.md`，系统提示词只放目录，正文由 `search_knowledge` / `read_knowledge` 按需取（SDK 没有原生知识库）。检索后端在 `Retriever` 接口下可插拔：默认关键词（零依赖、行为不变），设 `PI_KNOWLEDGE_RETRIEVAL=vector` + OpenAI 兼容/Ollama embeddings 端点即切换为向量 RAG；以后实现 `VectorStore`（Qdrant/pgvector）可无缝插入，工具契约不变。
 - **提示词模板**：`src/prompt-templates/<name>.md` 就是 SDK 的斜杠命令模板——`session.prompt("/name")` 会展开成完整正文再发（支持位置参数 `$1`、`$@`、默认值 `${1:-x}`）；走 `additionalPromptTemplatePaths` 加载，`~/.pi` 扫描关闭
 - **数据库**：Node 内置 `node:sqlite`，默认内存库 + 示例 `notes`；`GET /db` 探活，`db_query` 只读查询
 - **扩展机制**：`src/extensions/` 下用 `pi.on()` 挂钩子。已带 `guard`（执行前拦截）和 `audit`（耗时日志）
@@ -411,7 +411,7 @@ description: 套餐、单价、计费周期
 
 重启即可。模型先 `search_knowledge({ query: "专业版多少钱" })`，再 `read_knowledge({ name: "pricing" })`。当库用：`buildAgent({ extraKnowledgeDirs: ["/path/to/docs"] })`。
 
-这是进程内 Markdown 检索，不是向量库。要接 RAG 自己写工具，登记进 `extraTools`。
+默认是进程内关键词检索（不是向量库）。RAG 是**可选且可插拔**的：设 `PI_KNOWLEDGE_RETRIEVAL=vector` 加一个 embedding 源（`PI_EMBEDDINGS_BASE_URL`/`PI_EMBEDDINGS_MODEL`，如 Ollama 的 `/v1/embeddings` 或任意 OpenAI 兼容端点），`search_knowledge` 就会透明切到 embedding + 内存 cosine。这正好符合官方姿势：SDK 不带 RAG，只让你注册一个可搜索工具（本脚手架已经这么做），检索后端自己选。要用真正的向量库（Qdrant/pgvector），实现 `VectorStore` 接口并经 `buildAgent({ vectorStore })` 传入，工具侧与模型侧完全不变。
 
 ### 加一个提示词模板
 

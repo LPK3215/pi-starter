@@ -25,12 +25,14 @@ export {
   requireConfiguredModel,
   resolveCatalog,
   resolveDefaultModel,
+  resolveRetrievalConfig,
   resolveRuntimeConfig,
   sessionToolPolicy,
   SETUP_HINT,
   type BuiltinToolMode,
   type ConfigOverride,
   type ResolvedConfig,
+  type RetrievalConfig,
   type RuntimeConfig,
   type SessionToolPolicy,
 } from "./config.js";
@@ -59,6 +61,25 @@ export {
   type KnowledgeDoc,
   type KnowledgeHit,
 } from "./knowledge/index.js";
+export {
+  KeywordRetriever,
+  VectorRetriever,
+  InMemoryVectorStore,
+  MAX_CHUNKS_PER_DOC,
+  MAX_CHUNK_CHARS,
+  EMBED_BATCH,
+  type Retriever,
+  type RetrievalHit,
+  type EmbeddingProvider,
+  type VectorStore,
+  type VectorItem,
+} from "./knowledge/retrieval.js";
+export {
+  OpenAICompatEmbeddings,
+  OllamaEmbeddings,
+  type OpenAICompatEmbeddingsOptions,
+  type OllamaEmbeddingsOptions,
+} from "./knowledge/embeddings.js";
 export {
   loadScaffoldSkills,
   loadSkillsFromDirs,

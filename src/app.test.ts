@@ -11,7 +11,7 @@ import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import type { Model } from "@earendil-works/pi-ai";
 import { openDatabase } from "./db/index.js";
 import { AppError } from "./http/errors.js";
-import { loadKnowledgeFromDirs } from "./knowledge/index.js";
+import { loadKnowledgeFromDirs, searchKnowledge } from "./knowledge/index.js";
 import { loadSkillsFromDirs } from "./skills/index.js";
 
 type Listener = (event: AgentSessionEvent) => void;
@@ -50,6 +50,8 @@ function fakeAgent(overrides: {
       if (ref !== "zhipu/glm-4.5-air") throw new Error(`找不到模型 ${ref}`);
       return { provider: "zhipu", id: "glm-4.5-air", name: "GLM" } as Model<any>;
     },
+    knowledgeRetrieval: "keyword",
+    searchKnowledge: async (query, limit) => searchKnowledge(overrides.knowledge ?? [], query, limit ?? 5),
     cycleModel: async () => ({ provider: "zhipu", id: "glm-4.5-air", name: "GLM" } as Model<any>),
     cycleThinkingLevel: () => "high",
     getThinkingLevel: () => "medium",

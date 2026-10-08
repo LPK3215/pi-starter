@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **可插拔知识检索（RAG 入口，按官方姿势）**：官方 SDK 不带 RAG，只规定“你自己 `pi.registerTool` 一个可搜索工具”。把检索后端抽成 `Retriever` 接口：默认 `KeywordRetriever`（进程内关键词、零依赖、行为不变）；`PI_KNOWLEDGE_RETRIEVAL=vector` 启用 `VectorRetriever`（文档切段→embedding→`VectorStore` cosine，按文档聚合）。`EmbeddingProvider` 接口 + `OpenAICompatEmbeddings`（含 Ollama /v1）/`OllamaEmbeddings` 两后端；`VectorStore` 接口默认 `InMemoryVectorStore`，外部 Qdrant/pgvector 实现同接口即可插入。`search_knowledge` 工具与 REST `GET /knowledge/search` 共用同一检索器（单一真源）；`BuiltAgent` 新增 `searchKnowledge()`/`knowledgeRetrieval`。默认关，不影响现有行为。
 - **官方 SDK 能力面补齐（对照 API 清单的真差距 + 可选接入）**，全部走官方 API，默认行为不回退：
   - **模型轮换**：`scopedModels`（官方）由 `PI_SCOPED_MODELS` / `buildAgent({ scopedModels })` 配置，缺省用所有已配 Key 模型派生；`session.cycleModel`/`cycleThinkingLevel` 经 CLI `/cycle`、REST `POST /model/cycle`、WS `cycle_model` 暴露。
   - **provider 鉴权状态**：官方 `ModelRuntime.getProviders()` + `checkAuth()` → `BuiltAgent.providerStatus()`；新增 `GET /providers`，`/info` 也带 `providers`（只回 id/name/authorized/来源标签，不回原始 key）。

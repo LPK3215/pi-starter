@@ -13,7 +13,6 @@
 
 import type { Express, Request, Response } from "express";
 import { readFile } from "node:fs/promises";
-import { searchKnowledge } from "../knowledge/index.js";
 import { scanReadOnlySql } from "../db/index.js";
 import { AppError, badRequest, errorHandler, notFound, validationFailed } from "./errors.js";
 import { getLogger } from "../log.js";
@@ -159,11 +158,12 @@ export function registerResourceRoutes(app: Express, agent: BuiltAgent): void {
     });
   });
 
-  app.get("/knowledge/search", (req, res) => {
+  // 走 agent.searchKnowledge（与 search_knowledge 工具同一检索器），不再各写一份关键词实现。
+  app.get("/knowledge/search", asyncRoute(async (req, res) => {
     const query = typeof req.query.q === "string" ? req.query.q : "";
     if (!query.trim()) throw badRequest("q is required");
-    res.json({ ok: true, query, hits: searchKnowledge(knowledge, query) });
-  });
+    res.json({ ok: true, query, hits: await agent.searchKnowledge(query) });
+  }));
 
   app.get("/knowledge/:name", (req, res) => {
     const doc = knowledge.find((item) => item.name === req.params.name);

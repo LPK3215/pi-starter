@@ -61,7 +61,16 @@ import {
 } from "./prompt-templates/index.js";
 import { badRequest } from "./http/errors.js";
 import { assertSessionFileAllowed } from "./sessions/store.js";
-import { formatKnowledgeCatalog, loadScaffoldKnowledge, type KnowledgeDoc } from "./knowledge/index.js";
+import { formatKnowledgeCatalog, loadScaffoldKnowledge, type KnowledgeDoc, type KnowledgeHit } from "./knowledge/index.js";
+import {
+  KeywordRetriever,
+  VectorRetriever,
+  type EmbeddingProvider,
+  type Retriever,
+  type VectorStore,
+} from "./knowledge/retrieval.js";
+import { OpenAICompatEmbeddings } from "./knowledge/embeddings.js";
+import { resolveRetrievalConfig } from "./config.js";
 import {
   composePrompt,
   defaultPromptTemplate,
@@ -73,6 +82,17 @@ import { createReadKnowledgeTool, createSearchKnowledgeTool } from "./tools/know
 import { createDbQueryTool, createDbStatusTool } from "./tools/database.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+
+/** 按 `PI_EMBEDDINGS_*` 环境构造默认 embedding provider（OpenAI 兼容，Ollama 的 /v1 也兼容）。 */
+function resolveEmbeddingsFromEnv(): EmbeddingProvider {
+  const cfg = resolveRetrievalConfig().embeddings;
+  if (!cfg) {
+    throw new Error(
+      "知识检索=vector 需要配 PI_EMBEDDINGS_BASE_URL + PI_EMBEDDINGS_MODEL（可选 PI_EMBEDDINGS_KEY），或显式传 buildAgent({ embeddings })。",
+    );
+  }
+  return new OpenAICompatEmbeddings(cfg);
+}
 
 function resolvePromptsDir(): string {
   const candidates = [
@@ -206,6 +226,15 @@ export interface BuildAgentOptions {
    * 默认空——不传则行为与以前一致。
    */
   excludeTools?: string[];
+  /**
+   * 知识检索后端（官方 RAG 入口的可插拔实现）。默认 "keyword"（行为不变）；
+   * "vector" 走 EmbeddingProvider + VectorStore（不传则按 `PI_EMBEDDINGS_*` 构造/默认内存）。
+   */
+  knowledgeRetrieval?: "keyword" | "vector";
+  /** 向量检索用的 embedding provider。"vector" 模式且未传且环境也没配时，buildAgent 报错（不静默回退）。 */
+  embeddings?: EmbeddingProvider;
+  /** 向量存储。默认 InMemoryVectorStore（零依赖）；外部向量库实现 VectorStore 后传入即可。 */
+  vectorStore?: VectorStore;
 }
 
 type AgentSession = Awaited<ReturnType<typeof createAgentSession>>["session"];
@@ -245,6 +274,10 @@ export interface BuiltAgent {
   builtinTools: BuiltinToolMode;
   skills: LoadedSkill[];
   knowledge: KnowledgeDoc[];
+  /** 已生效的知识检索后端（默认 keyword；行为与向量库隔离时与从前一致）。 */
+  knowledgeRetrieval: "keyword" | "vector";
+  /** 委托当前检索器的知识库搜索（与 `search_knowledge` 工具同源，供 REST/嵌入方复用）。 */
+  searchKnowledge(query: string, limit?: number): Promise<KnowledgeHit[]>;
   /** 已加载的提示词模板清单（名称/说明/正文），供 /prompt-templates 与 capabilities 展示。 */
   promptTemplates: LoadedPromptTemplate[];
   database: DatabaseStore;
@@ -404,9 +437,21 @@ export async function buildAgent(options: BuildAgentOptions = {}): Promise<Built
     systemPrompt = `${systemPrompt}\n\n${knowledgeCatalog}`;
   }
 
+  // 知识检索：默认关键词（行为与从前一致）；vector 模式走 embedding + 可插拔向量库。
+  // 无文档时无论何模式都用关键词（空索引没意义），不触发 embedding 调用。
+  const retrievalMode = options.knowledgeRetrieval ?? resolveRetrievalConfig().mode;
+  const retriever: Retriever =
+    retrievalMode === "vector" && knowledge.length > 0
+      ? await VectorRetriever.build(
+          knowledge,
+          options.embeddings ?? resolveEmbeddingsFromEnv(),
+          options.vectorStore,
+        )
+      : new KeywordRetriever(knowledge);
+
   const dynamicTools = [
     ...(knowledge.length > 0
-      ? [createSearchKnowledgeTool(knowledge), createReadKnowledgeTool(knowledge)]
+      ? [createSearchKnowledgeTool(retriever), createReadKnowledgeTool(knowledge)]
       : []),
     createDbStatusTool(database),
     createDbQueryTool(database),
@@ -575,6 +620,8 @@ export async function buildAgent(options: BuildAgentOptions = {}): Promise<Built
     builtinTools: cfg.builtinTools,
     skills,
     knowledge,
+    knowledgeRetrieval: retriever.kind,
+    searchKnowledge: (query, limit) => retriever.search(query, limit),
     promptTemplates,
     database,
     listModels: async () => [...(await modelRuntime.getAvailable())],

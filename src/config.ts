@@ -321,6 +321,29 @@ export function resolveDefaultModel(
 export { modelDisplayName };
 
 /**
+ * 知识检索配置（默认 keyword，行为不变）。`PI_KNOWLEDGE_RETRIEVAL=vector` 才开向量检索；
+ * 需同时给 `PI_EMBEDDINGS_BASE_URL` + `PI_EMBEDDINGS_MODEL`（OpenAI 兼容 /v1/embeddings，
+ * Ollama 的 `/v1/embeddings` 也兼容），`PI_EMBEDDINGS_KEY` 可选。provider 实例在 agent 层构造。
+ */
+export interface RetrievalConfig {
+  mode: "keyword" | "vector";
+  embeddings?: { baseUrl: string; model: string; apiKey?: string };
+}
+
+export function resolveRetrievalConfig(
+  env: Record<string, string | undefined> = process.env,
+): RetrievalConfig {
+  const mode = clean(env.PI_KNOWLEDGE_RETRIEVAL)?.toLowerCase() === "vector" ? "vector" : "keyword";
+  if (mode !== "vector") return { mode: "keyword" };
+  const baseUrl = clean(env.PI_EMBEDDINGS_BASE_URL);
+  const model = clean(env.PI_EMBEDDINGS_MODEL);
+  const apiKey = clean(env.PI_EMBEDDINGS_KEY);
+  const cfg: RetrievalConfig = { mode: "vector" };
+  if (baseUrl && model) cfg.embeddings = { baseUrl, model, ...(apiKey ? { apiKey } : {}) };
+  return cfg;
+}
+
+/**
  * 解析 PI_SCOPED_MODELS（模型轮换列表）：逗号分隔，每项 `provider/modelId[:thinkingLevel]`。
  * 例：modelscope/Qwen/Qwen3-Next:high,zhipu/glm-4.5-air:off
  * 返回的是未解析的原始引用；由 agent 层用 resolveScopedModels 对可用模型逐个解析。

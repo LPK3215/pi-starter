@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { createReadKnowledgeTool, createSearchKnowledgeTool } from "./knowledge.js";
+import { KeywordRetriever } from "../knowledge/retrieval.js";
 import { createDbQueryTool, createDbStatusTool } from "./database.js";
 import { loadKnowledgeFromDirs, searchKnowledge } from "../knowledge/index.js";
 import { loadSkillsFromDirs } from "../skills/index.js";
@@ -27,7 +28,7 @@ test("知识库 / 数据库工具登记正确的 name，加载结果可被检索
   const db = openDatabase({ seed: true });
   try {
     assert.equal(skills[0]?.name, "summarize");
-    assert.equal(createSearchKnowledgeTool(docs).name, "search_knowledge");
+    assert.equal(createSearchKnowledgeTool(new KeywordRetriever(docs)).name, "search_knowledge");
     assert.equal(createReadKnowledgeTool(docs).name, "read_knowledge");
     assert.equal(createDbStatusTool(db).name, "db_status");
     assert.equal(createDbQueryTool(db).name, "db_query");

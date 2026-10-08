@@ -5,6 +5,7 @@ import {
   parseBuiltinToolMode,
   parseScopedModelRefs,
   requireConfiguredModel,
+  resolveRetrievalConfig,
   sessionToolPolicy,
 } from "./config.js";
 
@@ -83,4 +84,20 @@ test("parseCliFlags：--mode 仅在传了时出现，缺省不改变旧形状", 
     port: undefined,
   });
   assert.equal("mode" in parseCliFlags([]), false);
+});
+
+test("resolveRetrievalConfig：默认 keyword；vector 需配 base+model 才给 embeddings", () => {
+  assert.deepEqual(resolveRetrievalConfig({}), { mode: "keyword" });
+  assert.deepEqual(resolveRetrievalConfig({ PI_KNOWLEDGE_RETRIEVAL: "keyword" }), { mode: "keyword" });
+  // vector 但缺 base/model → mode=vector、无 embeddings（agent 会据此报错）
+  assert.deepEqual(resolveRetrievalConfig({ PI_KNOWLEDGE_RETRIEVAL: "vector" }), { mode: "vector" });
+  assert.deepEqual(
+    resolveRetrievalConfig({
+      PI_KNOWLEDGE_RETRIEVAL: "VECTOR",
+      PI_EMBEDDINGS_BASE_URL: "https://x/v1",
+      PI_EMBEDDINGS_MODEL: "m",
+      PI_EMBEDDINGS_KEY: "k",
+    }),
+    { mode: "vector", embeddings: { baseUrl: "https://x/v1", model: "m", apiKey: "k" } },
+  );
 });

@@ -58,7 +58,7 @@ Truth source for the table above: [`package.json`](package.json). When versions 
 - **Layered prompts**: `src/prompts/` holds `persona.md` (who the agent is) + `rules.md` (working constraints) — edit the files to change the personality
 - **Pluggable tools**: define them under `src/tools/`, register in `tools/index.ts`, and they are auto-registered into the agent
 - **Skill management**: `src/skills/<name>/SKILL.md`, loaded via the SDK's `DefaultResourceLoader.additionalSkillPaths`; the catalog is injected by `formatSkillsForPrompt` and full text is read by the built-in `read` tool through `<location>`
-- **Knowledge base**: `src/knowledge/*.md` — the system prompt carries only the catalog; bodies are fetched on demand via `search_knowledge` / `read_knowledge` (the SDK has no native knowledge base)
+- **Knowledge base**: `src/knowledge/*.md` — the system prompt carries only the catalog; bodies are fetched on demand via `search_knowledge` / `read_knowledge` (the SDK has no native knowledge base). Retrieval is pluggable behind the `Retriever` interface: keyword by default (zero-dep, current behavior), or vector RAG via `PI_KNOWLEDGE_RETRIEVAL=vector` + an OpenAI-compatible / Ollama embeddings endpoint — swap in a `VectorStore` (Qdrant/pgvector) later without touching the tool.
 - **Prompt templates**: `src/prompt-templates/<name>.md` are the SDK's slash-command templates — `session.prompt("/name")` expands them (positional `$1`, `$@`, defaults `${1:-x}`); loaded via `additionalPromptTemplatePaths`, with `~/.pi` scanning off
 - **Database**: Node's built-in `node:sqlite`, in-memory by default with sample `notes`; `GET /db` for liveness, `db_query` for read-only queries
 - **Extensions**: hooks via `pi.on()` under `src/extensions/`. Ships with `guard` (pre-execution interception) and `audit` (timing logs)
@@ -438,7 +438,7 @@ Basic 99/month, Pro 299/month.
 
 Restart and it is live. The model calls `search_knowledge({ query: "how much is Pro" })` first, then `read_knowledge({ name: "pricing" })`. As a library: `buildAgent({ extraKnowledgeDirs: ["/path/to/docs"] })`.
 
-This is in-process Markdown search, not a vector store. For RAG, write your own tool and register it in `extraTools`.
+This is in-process Markdown search by default (keyword). RAG is **opt-in and pluggable**: set `PI_KNOWLEDGE_RETRIEVAL=vector` plus an embeddings source (`PI_EMBEDDINGS_BASE_URL`/`PI_EMBEDDINGS_MODEL`, e.g. Ollama's `/v1/embeddings` or any OpenAI-compatible endpoint), and `search_knowledge` transparently switches to embedding + cosine over an in-memory vector index. This follows the SDK's prescribed pattern — the SDK ships no RAG itself; you register a searchable tool (which we already do) and choose the retrieval backend. To use a real vector DB (Qdrant/pgvector), implement the `VectorStore` interface and pass it via `buildAgent({ vectorStore })`; the tool contract and model side stay unchanged.
 
 ### Add a prompt template
 

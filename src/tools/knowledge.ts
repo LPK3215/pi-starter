@@ -6,24 +6,29 @@
 
 import { Type } from "typebox";
 import { defineTool } from "@earendil-works/pi-coding-agent";
-import { searchKnowledge, type KnowledgeDoc } from "../knowledge/index.js";
+import type { KnowledgeDoc } from "../knowledge/index.js";
+import type { Retriever } from "../knowledge/retrieval.js";
 
-export function createSearchKnowledgeTool(docs: readonly KnowledgeDoc[]) {
+/**
+ * 检索工具——官方规定的 RAG 入口（`pi.registerTool` 一个可搜索工具）。
+ * 只依赖 `Retriever`：背后是关键词还是向量库对模型透明；检索是 async。
+ */
+export function createSearchKnowledgeTool(retriever: Retriever) {
   return defineTool({
     name: "search_knowledge",
     label: "检索知识库",
     description:
-      "在知识库里按关键词检索。需要产品、业务或项目事实时先用这个，再 read_knowledge 读命中文档。",
+      "在知识库里检索。需要产品、业务或项目事实时先用这个，再 read_knowledge 读命中文档。",
     parameters: Type.Object({
-      query: Type.String({ description: "关键词或短语" }),
+      query: Type.String({ description: "关键词或自然语言描述" }),
       limit: Type.Optional(Type.Number({ description: "最多返回几条，默认 5" })),
     }),
     async execute(_id, params: { query: string; limit?: number }) {
-      const hits = searchKnowledge(docs, params.query, params.limit ?? 5);
+      const hits = await retriever.search(params.query, params.limit ?? 5);
       if (hits.length === 0) {
         return {
           content: [{ type: "text", text: `知识库没有匹配「${params.query}」的文档。` }],
-          details: { hits: [] },
+          details: { hits: [], retriever: retriever.kind },
         };
       }
       const text = hits
@@ -32,7 +37,7 @@ export function createSearchKnowledgeTool(docs: readonly KnowledgeDoc[]) {
             `${i + 1}. ${hit.name}（${hit.title}） score=${hit.score}\n   ${hit.snippet}`,
         )
         .join("\n");
-      return { content: [{ type: "text", text }], details: { hits } };
+      return { content: [{ type: "text", text }], details: { hits, retriever: retriever.kind } };
     },
   });
 }

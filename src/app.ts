@@ -155,7 +155,7 @@ export interface CreateAppResult {
 }
 
 export function createApp(options: CreateAppOptions): CreateAppResult {
-  const { session, builtinTools, switchModel, listModels, skills, knowledge, promptTemplates, database, cycleModel, providerStatus } =
+  const { session, builtinTools, switchModel, listModels, skills, knowledge, promptTemplates, database, cycleModel, providerStatus, knowledgeRetrieval } =
     options.agent;
   const registry = options.registry;
   const settings = options.settings;
@@ -247,6 +247,7 @@ export function createApp(options: CreateAppOptions): CreateAppResult {
         current: item.provider === active.provider && item.id === active.id,
       })),
       builtinTools,
+      knowledgeRetrieval,
       busy,
       skills: skills.map((item) => ({
         name: item.name,
