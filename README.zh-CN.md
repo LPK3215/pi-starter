@@ -47,7 +47,7 @@
 | HTTP | [Express](https://expressjs.com/) | `^5.2.1` | 单进程；Web 端每连接多对话并发 |
 | Schema | [TypeBox](https://www.npmjs.com/package/typebox) | `^1.1.39` | 工具 `parameters` 定义 |
 | WebSocket | [ws](https://www.npmjs.com/package/ws) | `^8.18.0` | 快照驱动的双向传输（`transport/ws.ts`） |
-| 测试 | Node 内置 test runner，走 `tsx --test` | `^4.22.4` | 34 个测试文件 · 292 用例，不调模型 |
+| 测试 | Node 内置 test runner，走 `tsx --test` | `^4.22.4` | 37 个测试文件 · 308 用例，不调模型 |
 | 构建 | `tsc -p tsconfig.build.json` + `scripts/dist-assets.cjs` | `^5.6.0` | 把 `prompts/`、`skills/`、`prompt-templates/`、`knowledge/` 拷到 `dist/` |
 
 上面这张表的单一真源是 [`package.json`](package.json)。版本变更时，代码与本表同步；架构 SVG 自动刷新（`node scripts/visualization/generate_architecture.mjs`）。
@@ -250,7 +250,8 @@ pi-starter/
 │   ├── agent.ts          # ★ 组装层：模型 + 人设 + 工具 + 扩展 → session
 │   ├── config.ts         # 配置层：命令行 / .env / 内置工具档位
 │   ├── cli-args.ts       # 命令行 flag 解析（CLI / Web 共用）
-│   ├── sse.ts            # Agent 事件 → SSE 协议
+│   ├── sse.ts            # Agent 事件 → SSE 协议 / 原始 NDJSON（jsonl）
+│   ├── rpc.ts            # 官方 RPC 入口（`npm run dev -- --mode rpc`）
 │   ├── prompts/          # 分层提示词（改这里 = 改 Agent 性格）
 │   │   ├── persona.md    #   人设：你是谁、你怎么回答
 │   │   └── rules.md      #   规则：工作约束
@@ -262,8 +263,12 @@ pi-starter/
 │   ├── skills/           # 技能：<name>/SKILL.md，SDK additionalSkillPaths
 │   │   ├── index.ts
 │   │   └── summarize/SKILL.md
-│   ├── knowledge/        # 知识库：*.md，扫描加载
+│   ├── knowledge/        # 知识库：*.md + 可插拔检索（关键词 | 向量）
 │   │   ├── index.ts
+│   │   ├── retrieval.ts  # Retriever / EmbeddingProvider / VectorStore 接口
+│   │   ├── embeddings.ts # OpenAI 兼容 + Ollama embedding provider
+│   │   ├── embeddings-transformers.ts # 进程内 embedding（@huggingface/transformers）
+│   │   ├── vector-store-sqlite.ts # 持久化 VectorStore（node:sqlite）
 │   │   └── about.md
 │   ├── prompt-templates/ # 斜杠命令模板：<name>.md → /<name>，SDK additionalPromptTemplatePaths
 │   │   ├── index.ts
@@ -273,10 +278,15 @@ pi-starter/
 │   └── extensions/       # 扩展层：在 Agent 干活环节挂钩子
 │       ├── index.ts      #   ★ 登记入口
 │       ├── guard.ts      #   示例：tool_call 拦截（危险 bash / 路径越界）
-│       └── audit.ts      #   示例：工具调用审计日志
+│       ├── audit.ts      #   示例：工具调用审计日志
+│       ├── custom-provider.example.ts # 示例：pi.registerProvider（api-key）
+│       ├── example-command.ts         # 示例：pi.registerCommand / sendUserMessage
+│       └── sandbox.example.ts         # 示例：工具路由覆盖（隔离接缝）
 ├── scripts/
 │   ├── dist-assets.cjs   # clean / copy 将 prompts+skills+prompt-templates+knowledge 拷到 dist/
+│   ├── smoke-ws.mjs      # 真实 WebSocket 冒烟（npm run smoke）
 │   ├── verify-embed.mjs  # 嵌入路径自检（已并入 npm run verify）
+│   ├── rag-smoke.mjs     # 本地 RAG 实机可选自检（npm run rag:smoke）
 │   └── visualization/    # README 图产出脚本（见下）
 │       ├── generate_architecture.mjs
 │       ├── generate_request_flow.mjs
@@ -284,14 +294,17 @@ pi-starter/
 ├── docs/                 # 架构图（自动生成）+ 指南，两份 README 都引用同一份
 │   ├── architecture.svg
 │   ├── sse-protocol.svg
+│   ├── 能力与边界.md    #   与 SDK 对齐的能力矩阵与边界
+│   ├── 项目分析报告.md  #   工程体检报告
 │   └── 嵌入指南.md      #   把 Agent 装进已有 Express 服务
 ├── .github/workflows/
 │   └── ci.yml            # typecheck + test + build，矩阵跨 ubuntu / windows / macos
 ├── public/
 │   └── index.html        # 示例对话页（试接口用，不是产品前端）
+├── Dockerfile            # 开箱即用的沙箱镜像（见 SECURITY.md / README 高级模式）
 ├── LICENSE  README.md  README.zh-CN.md  CONTRIBUTING.md  SECURITY.md
 ├── CHANGELOG.md  FAQ.md  AUTHORS  .gitignore  .gitattributes
-└── package.json  tsconfig.json  tsconfig.build.json  .env.example
+└── package.json  tsconfig.json  tsconfig.build.json  .env.example  .dockerignore
 ```
 
 契约类冒烟测试（不调模型、不写真实 `~/.pi/agent`）：

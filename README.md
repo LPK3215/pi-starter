@@ -47,7 +47,7 @@ Every `POST /chat` follows the same lifecycle: HTTP body → busy guard → `ses
 | HTTP | [Express](https://expressjs.com/) | `^5.2.1` | single process; REST shares one session, WS runs several conversations per client (cap + LRU) |
 | Schema | [TypeBox](https://www.npmjs.com/package/typebox) | `^1.1.39` | tool `parameters` definitions |
 | WebSocket | [ws](https://www.npmjs.com/package/ws) | `^8.18.0` | snapshot-driven bidirectional transport (`transport/ws.ts`) |
-| Test runner | Node built-in test runner via `tsx --test` | `^4.22.4` | 34 test files · 292 cases, no model calls |
+| Test runner | Node built-in test runner via `tsx --test` | `^4.22.4` | 37 test files · 308 cases, no model calls |
 | Build | `tsc -p tsconfig.build.json` + `scripts/dist-assets.cjs` | `^5.6.0` | copies `prompts/ skills/ prompt-templates/ knowledge/` into `dist/` |
 
 Truth source for the table above: [`package.json`](package.json). When versions change, update the code and this table together (the Architecture SVG refreshes automatically via `node scripts/visualization/generate_architecture.mjs`).
@@ -270,7 +270,8 @@ pi-starter/
 │   ├── agent.ts          # ★ assembly: model + persona + tools + extensions → session
 │   ├── config.ts         # config layer: CLI / .env / built-in-tools tier
 │   ├── cli-args.ts       # CLI flag parsing (shared by CLI and Web)
-│   ├── sse.ts            # agent events → SSE protocol
+│   ├── sse.ts            # agent events → SSE protocol / raw NDJSON (jsonl)
+│   ├── rpc.ts            # official RPC entry (`npm run dev -- --mode rpc`)
 │   ├── prompts/          # layered prompts (edit here = change the persona)
 │   │   ├── persona.md    #   who the agent is, how it answers
 │   │   └── rules.md      #   working constraints
@@ -282,8 +283,12 @@ pi-starter/
 │   ├── skills/           # skills: <name>/SKILL.md, SDK additionalSkillPaths
 │   │   ├── index.ts
 │   │   └── summarize/SKILL.md
-│   ├── knowledge/        # knowledge base: *.md, scanned at startup
+│   ├── knowledge/        # knowledge base: *.md + pluggable retrieval (keyword | vector)
 │   │   ├── index.ts
+│   │   ├── retrieval.ts  # Retriever / EmbeddingProvider / VectorStore interfaces
+│   │   ├── embeddings.ts # OpenAI-compatible + Ollama embedding providers
+│   │   ├── embeddings-transformers.ts # in-process embedding (@huggingface/transformers)
+│   │   ├── vector-store-sqlite.ts # persisted VectorStore (node:sqlite)
 │   │   └── about.md
 │   ├── prompt-templates/ # slash-command templates: <name>.md → /<name>, SDK additionalPromptTemplatePaths
 │   │   ├── index.ts
@@ -293,10 +298,15 @@ pi-starter/
 │   └── extensions/       # extension layer: hooks on agent lifecycle
 │       ├── index.ts      #   ★ registry
 │       ├── guard.ts      #   example: tool_call interception (dangerous bash / path escape)
-│       └── audit.ts      #   example: tool-call audit log
+│       ├── audit.ts      #   example: tool-call audit log
+│       ├── custom-provider.example.ts # example: pi.registerProvider (api-key)
+│       ├── example-command.ts         # example: pi.registerCommand / sendUserMessage
+│       └── sandbox.example.ts         # example: tool-routing override (isolation seam)
 ├── scripts/
-│   ├── dist-assets.cjs   # clean / copy prompt+skill+knowledge assets into dist/
+│   ├── dist-assets.cjs   # clean / copy prompt+skill+knowledge+prompt-templates assets into dist/
+│   ├── smoke-ws.mjs      # real WebSocket smoke (part of `npm run smoke`)
 │   ├── verify-embed.mjs  # embedding self-check (part of `npm run verify`)
+│   ├── rag-smoke.mjs     # optional live local-RAG check (`npm run rag:smoke`)
 │   └── visualization/    # README diagram generators (see below)
 │       ├── generate_architecture.mjs
 │       ├── generate_request_flow.mjs
@@ -304,25 +314,30 @@ pi-starter/
 ├── docs/                 # generated SVGs + guides, referenced from the READMEs
 │   ├── architecture.svg
 │   ├── sse-protocol.svg
+│   ├── 能力与边界.md    #   capability matrix & boundaries vs the SDK
+│   ├── 项目分析报告.md  #   engineering review
 │   └── 嵌入指南.md      #   embedding into an existing Express service
 ├── .github/workflows/
 │   └── ci.yml            # typecheck + unused + test + smoke + audit + build (ubuntu/win/mac)
 ├── public/
 │   └── index.html        # sample chat page (for trying endpoints, not a frontend)
+├── Dockerfile            # ready-to-run sandbox image (see SECURITY.md / README advanced)
 ├── LICENSE  README.md  README.zh-CN.md  CONTRIBUTING.md  SECURITY.md
 ├── CHANGELOG.md  FAQ.md  AUTHORS  .gitignore  .gitattributes
-└── package.json  tsconfig.json  tsconfig.build.json  .env.example
+└── package.json  tsconfig.json  tsconfig.build.json  .env.example  .dockerignore
 ```
 
 Contract smoke tests (no model calls, never touch the real `~/.pi/agent`):
 
 ```bash
-npm test            # 292 unit + integration tests
+npm test            # 308 unit + integration tests
 npm run smoke       # 17 real WebSocket end-to-end checks
 npm run typecheck   # types + protocol completeness
 npm run lint:unused # dead code gate (the "declared but never wired" class of bug)
 npm run build
 npm run verify      # all of the above, in order — same gates as CI
+npm run e2e         # real process: restart/resume/settings round-trip (no API key)
+npm run rag:smoke   # optional: live check of local in-process vector RAG (SKIPs if offline)
 ```
 
 The integration suite drives the real orchestration stack (`SessionHub → ClientSession →

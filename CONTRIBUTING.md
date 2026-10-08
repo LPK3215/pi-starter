@@ -55,9 +55,11 @@ See the [Project Structure](README.md#project-structure) section of the README f
 
 4. **Update docs.** If you add a tool, endpoint, config key, or event, update `README.md` **and** `README.zh-CN.md` side by side so the two stay aligned.
 
-5. **Self-check** before opening a PR:
+5. **Self-check** before opening a PR (same gates as CI):
 
    ```bash
+   npm run verify   # typecheck + test + smoke + lint:unused + build + verify:embed
+   # or run them individually:
    npm run typecheck
    npm test
    npm run build

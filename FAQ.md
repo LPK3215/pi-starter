@@ -56,11 +56,20 @@ Extensions can `pi.registerTool(...)`, but the built-in-tool allowlist only know
 
 ### Does `guard` sandbox bash?
 
-No. `guard` is regex-based pre-execution interception (see `src/extensions/guard.ts`); it stops `rm -rf`, `mkfs`, `dd of=`, fork bombs, shutdown/reboot, Windows destructive commands, and paths escaping cwd — but it is bypassable by command substitution, encoded payloads, symlinks, and other indirect tricks. For real isolation, run the whole thing in a container.
+No. `guard` is regex-based pre-execution interception (see `src/extensions/guard.ts`); it stops `rm -rf`, `mkfs`, `dd of=`, fork bombs, shutdown/reboot, Windows destructive commands, and paths escaping cwd — but it is bypassable by command substitution, encoded payloads, symlinks, and other indirect tricks. For real isolation, run the whole thing in a container — a ready `Dockerfile` is in the repo root; publish its port to loopback only (`-p 127.0.0.1:3000:3000`).
 
 ### `~/.pi/agent/skills` on my machine is being ignored. Is that a bug?
 
 It's intentional. The scaffold sets `noSkills: true` and `noExtensions: true` so unrelated user-level skills and extensions cannot leak into a vertical agent. Only repo-bundled skills (`src/skills/`) and any paths you pass via `buildAgent({ extraSkillPaths })` / `{ extraExtensions }` are loaded.
+
+### How do I enable local / vector RAG over the knowledge base?
+
+Retrieval is pluggable behind the `Retriever` interface. Default is in-process keyword search (zero-dependency, unchanged behavior). Set `PI_KNOWLEDGE_RETRIEVAL=vector` and pick an embedding source via `PI_EMBEDDINGS_PROVIDER`:
+
+- `transformers` — **in-process** via `@huggingface/transformers` (an `optionalDependency`); first use auto-downloads ONNX weights to `PI_EMBEDDINGS_CACHE_DIR`; no external server. Set `PI_EMBEDDINGS_HF_ENDPOINT=hf-mirror.com` if huggingface.co is unreachable.
+- `openai` / `ollama` — point `PI_EMBEDDINGS_BASE_URL` + `PI_EMBEDDINGS_MODEL` at any OpenAI-compatible `/v1/embeddings` (Ollama's `/v1` works too).
+
+Store vectors in memory (default) or persist with `PI_KNOWLEDGE_VECTOR_STORE=sqlite` + `PI_KNOWLEDGE_VECTOR_DB_PATH` (content-hashed chunk ids so restarts skip re-embedding). Verify with `npm run rag:smoke` (prints `SKIP` when offline). For a real vector DB (Qdrant/pgvector), implement `VectorStore` and pass `buildAgent({ vectorStore })` — the `search_knowledge` tool and model side stay unchanged.
 
 ## Model switching
 
