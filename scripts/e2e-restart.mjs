@@ -15,7 +15,7 @@
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { mkdtempSync, writeFileSync, rmSync, readdirSync } from "node:fs";
+import { mkdtempSync, writeFileSync, rmSync, readdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -265,10 +265,11 @@ console.log("── 第一段：起进程 → 真实对话 ──");
 
 /* ── 6. 第二段进程：全新进程，从磁盘恢复 ── */
 console.log("── 第二段：重启进程 → 从磁盘恢复会话 ──");
+let run2;
 {
-  // 确认端口已释放（上一进程已退出）
-  const { log } = startServer("run2");
-  await waitReady("run2", log);
+  const started = startServer("run2");
+  run2 = started.child;
+  await waitReady("run2", started.log);
 
   const { frames, socket } = connect();
   await once(socket, "open");
@@ -310,6 +311,59 @@ console.log("── 第二段：重启进程 → 从磁盘恢复会话 ──");
 
   socket.terminate();
   await sleep(300);
+
+  // 必须真杀掉：下一段要起run3，而三个进程共用同一个端口。
+  const exited = new Promise((r) => run2.once("exit", () => r(true)));
+  run2.kill("SIGKILL");
+  await Promise.race([exited, sleep(15_000)]);
+}
+
+/* ── 7. 设置：改完落盘 → 再起一个进程 → 真的生效 ──
+ * 内置示例内容（about.md / summarize）在**组装期**写进系统提示词，无法热切换。
+ * 单测能证明「patch 成功且落盘」，但证明不了「下次组装时真的读走了」——那一步
+ * 只发生在真实启动里。这一段把它补上。
+ *
+ * 起点是「关着」（上面写的 settings 把两个开关都设成 false），所以反转成 true之后
+ * 才看得出是否真的被读走。 */
+console.log("\n── 设置：改 → 落盘 → 重启后生效 ──");
+{
+  // 7a. 起一个进程，在里面改设置
+  const first = startServer("run3");
+  await waitReady("run3", first.log);
+  check("设置: 改之前示例内容确实是关的",
+    /"knowledge":\[[^\]]*\]/.test(first.log.join("")) && !/"knowledge":\[[^\]]*"about"/.test(first.log.join("")),
+    first.log.join("").match(/"knowledge":\[[^\]]*\]/)?.[0] ?? "未匹配");
+
+  const res = await fetch(`http://127.0.0.1:${PORT}/settings`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ builtinKnowledge: true, builtinSkills: true }),
+  });
+  const body = await res.json();
+  check("设置: PATCH /settings 返回改后的值", body?.settings?.builtinKnowledge === true,
+    `status=${res.status} builtinKnowledge=${body?.settings?.builtinKnowledge}`);
+
+  const onDisk = JSON.parse(readFileSync(join(agentDir, "pi-starter-settings.json"), "utf8"));
+  check("设置: 值已落盘", onDisk.builtinKnowledge === true && onDisk.builtinSkills === true,
+    `落盘 builtinKnowledge=${onDisk.builtinKnowledge} builtinSkills=${onDisk.builtinSkills}`);
+
+  // 同一进程内不该热切换——内核必须如实说「要重启」，而不是假装已生效
+  const stillOff = !/"knowledge":\[[^\]]*"about"/.test(first.log.join(""));
+  check("设置: 同进程内不热切换（系统提示词里仍无示例）", stillOff,
+    "示例内容在组装期写进提示词，热切换会前后不一致");
+
+  await new Promise((r) => { first.child.once("exit", () => r(true)); first.child.kill("SIGKILL"); });
+
+  // 7b. 再起一个进程：这次必须真的把示例内容加载回来
+  const second = startServer("run4");
+  await waitReady("run4", second.log);
+  const text = second.log.join("");
+  check("设置: 重启后示例知识真的被加载（knowledge 里有 about）",
+    /"knowledge":\[[^\]]*"about"/.test(text), text.match(/"knowledge":\[[^\]]*\]/)?.[0] ?? "未匹配");
+  check("设置: 重启后示例技能真的被加载（skills 里有 summarize）",
+    /"skills":\[[^\]]*"summarize"/.test(text), text.match(/"skills":\[[^\]]*\]/)?.[0] ?? "未匹配");
+
+  await new Promise((r) => { second.child.once("exit", () => r(true)); second.child.kill("SIGKILL"); });
 }
 
 const failed = results.filter((r) => !r.ok);

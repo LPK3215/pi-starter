@@ -319,6 +319,24 @@ export class SettingsService {
   private readonly schema: SettingsSchema;
   private readonly defaults: Settings;
 
+  /**
+   * 跑一个字段的校验器，把**字段名**补进报错。
+   *
+   * 校验器只知道「我期望 boolean」，不知道「我在校验 builtinKnowledge」。缺了字段名
+   * 之后，一次改多个字段时用户只能看到「Expected boolean, got string」，无从定位。
+   */
+  private runValidator(
+    key: string,
+    validator: FieldValidator<unknown>,
+    value: unknown,
+  ): unknown {
+    try {
+      return validator(value);
+    } catch (err) {
+      throw new Error(`${key}: ${err instanceof Error ? err.message : String(err)}`, { cause: err });
+    }
+  }
+
   /** 用 schema 校验并填充默认值。非法字段直接抛错（不静默丢弃）。 */
   private normalize(raw: Record<string, unknown> | undefined): Settings {
     const result: Record<string, unknown> = { ...this.defaults };
@@ -326,7 +344,7 @@ export class SettingsService {
       for (const [key, value] of Object.entries(raw)) {
         const validator = this.schema[key];
         if (!validator) throw new Error(`Unknown settings field: ${key}`);
-        result[key] = validator(value);
+        result[key] = this.runValidator(key, validator, value);
       }
     }
     return result as Settings;
@@ -385,7 +403,7 @@ export class SettingsService {
     for (const [key, value] of Object.entries(partial)) {
       const validator = this.schema[key];
       if (!validator) throw new Error(`Unknown settings field: ${key}`);
-      next[key] = validator(value);
+      next[key] = this.runValidator(key, validator, value);
     }
     this.current = next as Settings;
     this.port.save(this.get());
