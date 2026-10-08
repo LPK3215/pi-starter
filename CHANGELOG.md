@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **官方 SDK 能力面补齐（对照 API 清单的真差距 + 可选接入）**，全部走官方 API，默认行为不回退：
+  - **模型轮换**：`scopedModels`（官方）由 `PI_SCOPED_MODELS` / `buildAgent({ scopedModels })` 配置，缺省用所有已配 Key 模型派生；`session.cycleModel`/`cycleThinkingLevel` 经 CLI `/cycle`、REST `POST /model/cycle`、WS `cycle_model` 暴露。
+  - **provider 鉴权状态**：官方 `ModelRuntime.getProviders()` + `checkAuth()` → `BuiltAgent.providerStatus()`；新增 `GET /providers`，`/info` 也带 `providers`（只回 id/name/authorized/来源标签，不回原始 key）。
+  - **EventBus**：官方 `createEventBus()` 接入 `DefaultResourceLoader`，`BuiltAgent.eventBus` 暴露给嵌入方。
+  - **会话标签**：官方 `SessionManager.appendLabelChange`/`getLabel` 经 WS `set_label` 与快照 `labels` 暴露（UI 书签，与回退的 custom 标记语义不同）。
+  - **代码型命令通道**：`src/extensions/example-command.ts` 演示官方 `pi.registerCommand` + `pi.sendUserMessage`（与 `.md` prompt template 并列的官方第二条路；默认不接线）。`sendUserMessage` 是扩展能力、`AgentSession` 不暴露，故不硬造内核命令。
+  - **AGENTS.md opt-in**：`buildAgent({ includeAgentsFiles })` 为 true 时取消 `noContextFiles`，让 SDK 以 `<project_context>` 追加项目上下文。默认 false。
+  - **自定义 provider 一等参数**：`buildAgent({ providers })` 内部转成 inline 扩展逐顶 `pi.registerProvider`。
+  - **官方 RPC 模式**：`src/rpc.ts` + `npm run dev -- --mode rpc`，经 `createAgentSessionRuntime` + `runRpcMode` 把 pi-starter 作为 stdio JSONL agent 后端驱动；与 `buildAgent` 共享同一装配核心（抽出的 `resourceLoaderOptions`），RPC 与 REST/WS 不在隔离/人设/工具上分叉。RPC 为单会话入口，不携 MCP 桥 / HTTP 审批闸门。
+  - `.env.example` 新增 `PI_SCOPED_MODELS`；`lib.ts` 导出 `startRpcMode`/`resolveScopedModels`/`parseScopedModelRefs` 等。
+  - **更多低成本官方项一等化**：`buildAgent({ commands })` 直接走官方 `pi.registerCommand`（代码型斜杠命令，handler ctx 带 `sendUserMessage`/`waitForIdle`）；`buildAgent({ excludeTools })` 接官方 `excludeTools` 黑名单；`BuiltAgent.waitForIdle()`/`getThinkingLevel()` 对应 `session.agent.waitForIdle`/`session.thinkingLevel`；`cycleModel(direction)` 支持官方反向。
 - **对齐官方 Pi SDK：手写实现切回官方机制**（优先用官方/核心实现）。
   - **技能目录去重**：`buildSystemPrompt` 在 `systemPromptOverride` 路径下、只要工具集含 `read`，就会自动追加 SDK 原生 `<available_skills>`（`formatSkillsForPrompt`）；而 `agent.ts` 又用自定义 `formatSkillCatalog` 往 `{{skills}}` 层塞了第二份——系统提示词里实际有两份技能清单。现在删掉自定义目录，只依赖 SDK 那一份。`{{skills}}` 从默认拼接顺序移除，但仍是**已知** token（渲染为空），旧模板写它不会报错也不会漏字面量。
   - **提示词模板清单走官方 `loader.getPrompts()`**：不再自行解析 frontmatter（`loadPromptTemplates` 不在包主入口导出），改用 `DefaultResourceLoader.getPrompts()` 从一个只加载模板的最小装载器拿回 `PromptTemplate[]`。`/skills` 与 `/prompt-templates` 的清单都源自装载器，与系统提示词/斜杠展开不可能漂移。

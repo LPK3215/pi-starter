@@ -5,6 +5,7 @@ import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createApp } from "./app.js";
+import { createEventBus } from "@earendil-works/pi-coding-agent";
 import type { BuiltAgent } from "./agent.js";
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import type { Model } from "@earendil-works/pi-ai";
@@ -49,6 +50,15 @@ function fakeAgent(overrides: {
       if (ref !== "zhipu/glm-4.5-air") throw new Error(`找不到模型 ${ref}`);
       return { provider: "zhipu", id: "glm-4.5-air", name: "GLM" } as Model<any>;
     },
+    cycleModel: async () => ({ provider: "zhipu", id: "glm-4.5-air", name: "GLM" } as Model<any>),
+    cycleThinkingLevel: () => "high",
+    getThinkingLevel: () => "medium",
+    waitForIdle: async () => {},
+    providerStatus: async () => [
+      { id: "modelscope", name: "ModelScope", authorized: true, type: "api_key", source: "PI_API_KEY" },
+      { id: "anthropic", name: "Anthropic", authorized: false },
+    ],
+    eventBus: createEventBus(),
     dispose: () => database.close(),
   };
 }
@@ -302,6 +312,30 @@ test("POST /model 缺字段 400，未知模型 400，成功返回新引用", asy
     });
     assert.equal(ok.status, 200);
     assert.deepEqual(ok.body, { ok: true, model: "zhipu/glm-4.5-air" });
+  } finally {
+    await close();
+    dispose();
+  }
+});
+
+test("POST /model/cycle 走官方轮换；GET /providers 只回状态标签不回密钥", async () => {
+  const { app, dispose } = createApp({ agent: fakeAgent(), staticDir: false });
+  const { url, close } = await listen(app);
+  try {
+    const cycle = await json(`${url}/model/cycle`, { method: "POST" });
+    assert.equal(cycle.status, 200);
+    assert.deepEqual(cycle.body, { ok: true, model: "zhipu/glm-4.5-air" });
+
+    const providers = await json(`${url}/providers`);
+    assert.equal(providers.status, 200);
+    const list = (providers.body as { providers: { id: string; authorized: boolean }[] }).providers;
+    assert.equal(list.find((p) => p.id === "modelscope")?.authorized, true);
+    assert.equal(list.find((p) => p.id === "anthropic")?.authorized, false);
+    // /providers 只回授权布尔与标签，不得含原始 key
+    assert.ok(!JSON.stringify(providers.body).includes("sk-"));
+
+    const info = await json(`${url}/info`);
+    assert.ok(Array.isArray((info.body as { providers: unknown[] }).providers), "/info 带 providers");
   } finally {
     await close();
     dispose();

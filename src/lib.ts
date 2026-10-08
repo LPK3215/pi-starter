@@ -19,6 +19,7 @@ export {
   loadEnvFile,
   parseBuiltinToolMode,
   parseModelCatalog,
+  parseScopedModelRefs,
   READONLY_BUILTIN_TOOLS,
   RUNTIME_DEFAULTS,
   requireConfiguredModel,
@@ -48,6 +49,7 @@ export {
   type SqlScanResult,
 } from "./db/index.js";
 export { allExtensions, type ExtensionFactory } from "./extensions/index.js";
+export { startRpcMode } from "./rpc.js";
 export {
   formatKnowledgeCatalog,
   loadKnowledgeFromDirs,
@@ -75,12 +77,15 @@ export {
   formatModelChoices,
   modelDisplayName,
   resolveModelRef,
+  resolveScopedModels,
   unknownModelError,
   type ModelCatalog,
   type ModelCatalogEntry,
   type ModelRef,
   type ProviderCatalogEntry,
   type ResolvedModelRef,
+  type ResolvedScopedModel,
+  type ScopedModelRef,
 } from "./models.js";
 export {
   DEFAULT_API,

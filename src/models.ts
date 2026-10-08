@@ -117,6 +117,44 @@ function matchAvailable(
   return undefined;
 }
 
+/** 一条轮换列表项的原始写法（provider/modelId + 可选思考档）。 */
+export interface ScopedModelRef {
+  ref: string;
+  thinkingLevel?: string;
+}
+
+/** 解析后的 SDK ScopedModel（thinkingLevel 先以字符串承载，交给 createAgentSession 时再收窄）。 */
+export interface ResolvedScopedModel {
+  model: Model<any>;
+  thinkingLevel?: string;
+}
+
+/**
+ * 把轮换列表（`[{ ref, thinkingLevel? }]`）解析成官方 `createAgentSession({ scopedModels })`
+ * 需要的 `[{ model, thinkingLevel? }]`。复用 `resolveModelRef`，因此带斜杠 id、
+ * provider/model、裸唯一 id 的写法与单模型一致；只保留已配 Key（在 available 里）的条目。
+ * 解析不出来的条目跳过（不因一条写错就废掉整个轮换列表）。
+ */
+export function resolveScopedModels(
+  refs: readonly ScopedModelRef[],
+  available: readonly Model<any>[],
+): ResolvedScopedModel[] {
+  const out: ResolvedScopedModel[] = [];
+  const seen = new Set<string>();
+  for (const item of refs) {
+    const resolved = resolveModelRef({ model: item.ref }, available);
+    if (!resolved?.model) continue;
+    const key = `${resolved.provider}/${resolved.modelId}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({
+      model: resolved.model,
+      ...(item.thinkingLevel ? { thinkingLevel: item.thinkingLevel } : {}),
+    });
+  }
+  return out;
+}
+
 /** 解析失败时的报错：列出当前真正能用的模型，而不是让人去猜 */
 export function formatModelChoices(available: readonly Model<any>[]): string {
   if (available.length === 0) return "（当前没有已配置 Key 的模型）";

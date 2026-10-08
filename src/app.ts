@@ -81,6 +81,7 @@ export interface CreateAppOptions {
    */
   hub?: {
     setModel(ref: string): Promise<Model<any>>;
+    cycleModel?(direction?: "forward" | "backward"): Promise<Model<any> | undefined>;
     compactAcrossClients(instructions?: string): Promise<CompactionOutcome & { compacted: number }>;
   };
   /**
@@ -154,7 +155,7 @@ export interface CreateAppResult {
 }
 
 export function createApp(options: CreateAppOptions): CreateAppResult {
-  const { session, builtinTools, switchModel, listModels, skills, knowledge, promptTemplates, database } =
+  const { session, builtinTools, switchModel, listModels, skills, knowledge, promptTemplates, database, cycleModel, providerStatus } =
     options.agent;
   const registry = options.registry;
   const settings = options.settings;
@@ -227,6 +228,13 @@ export function createApp(options: CreateAppOptions): CreateAppResult {
     } catch (err: unknown) {
       db = { ok: false, error: err instanceof Error ? err.message : String(err) };
     }
+    // provider 鉴权状态走官方 getProviders/checkAuth；探测异常不拖垮 /info。
+    let providers: Awaited<ReturnType<typeof providerStatus>> = [];
+    try {
+      providers = await providerStatus();
+    } catch {
+      /* 降级为空列表 */
+    }
     res.json({
       ok: true,
       model: `${active.provider}/${active.id}`,
@@ -256,7 +264,17 @@ export function createApp(options: CreateAppOptions): CreateAppResult {
         ...(item.argumentHint ? { argumentHint: item.argumentHint } : {}),
       })),
       db,
+      providers,
     });
+  });
+
+  // 各 provider 的鉴权状态（官方 ModelRuntime.getProviders + checkAuth）：只回 id/name/是否授权/来源标签。
+  app.get("/providers", async (_req, res) => {
+    try {
+      res.json({ ok: true, providers: await providerStatus() });
+    } catch (err: unknown) {
+      throw new AppError("internal", "无法获取 provider 状态", { cause: err });
+    }
   });
 
   app.post("/model", async (req, res) => {
@@ -278,6 +296,18 @@ export function createApp(options: CreateAppOptions): CreateAppResult {
         cause: err,
       });
     }
+  });
+
+  // 沿官方 scopedModels 轮换到下一个模型。有 hub 时走 hub（所有会话一致），否则只轮换共享 session。
+  // body 可选 { direction: "forward" | "backward" }（官方 cycleModel 支持反向）。
+  app.post("/model/cycle", async (req, res) => {
+    if (busy) throw busyError();
+    const dir = req.body?.direction === "backward" ? "backward" : undefined;
+    const next = options.hub?.cycleModel
+      ? await options.hub.cycleModel(dir)
+      : await cycleModel(dir);
+    if (!next) throw badRequest("没有可用的模型轮换列表（需配 scopedModels / PI_SCOPED_MODELS）");
+    res.json({ ok: true, model: `${next.provider}/${next.id}` });
   });
 
   app.post("/chat", async (req, res) => {

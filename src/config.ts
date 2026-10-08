@@ -20,6 +20,7 @@ import {
   type ModelCatalogEntry,
   type ModelRef,
   type ProviderCatalogEntry,
+  type ScopedModelRef,
 } from "./models.js";
 
 /** 内置工具三档：只开自定义 / 只读 / 完整编码 */
@@ -318,6 +319,27 @@ export function resolveDefaultModel(
 }
 
 export { modelDisplayName };
+
+/**
+ * 解析 PI_SCOPED_MODELS（模型轮换列表）：逗号分隔，每项 `provider/modelId[:thinkingLevel]`。
+ * 例：modelscope/Qwen/Qwen3-Next:high,zhipu/glm-4.5-air:off
+ * 返回的是未解析的原始引用；由 agent 层用 resolveScopedModels 对可用模型逐个解析。
+ */
+export function parseScopedModelRefs(raw: string | undefined): ScopedModelRef[] {
+  const text = clean(raw);
+  if (!text) return [];
+  const refs: ScopedModelRef[] = [];
+  for (const item of text.split(",")) {
+    const piece = item.trim();
+    if (!piece) continue;
+    const colon = piece.lastIndexOf(":");
+    // 只有当冒号在末尾一段且前面有内容时才当思考档（模型 id 里的斜杠不受影响）
+    const ref = colon > 0 ? piece.slice(0, colon).trim() : piece;
+    const thinkingLevel = colon > 0 ? piece.slice(colon + 1).trim() : undefined;
+    if (ref) refs.push(thinkingLevel ? { ref, thinkingLevel } : { ref });
+  }
+  return refs;
+}
 
 /** 解析 off | readonly | coding；非法值直接抛，避免静默落到 SDK 默认 */
 export function parseBuiltinToolMode(raw: string | undefined): BuiltinToolMode | undefined {

@@ -412,6 +412,7 @@ class ClientConn {
         case "rename_conversation":
         case "rollback_conversation":
         case "edit_message":
+        case "set_label":
         case "fork_conversation": {
           if (!this.cs || !this.clientId) {
             this.send({ type: "error", message: "not attached" });
@@ -444,6 +445,12 @@ class ClientConn {
                 break;
               }
               runtime.hub.editConversation(this.clientId, msg.conversationId, msg.entryId);
+            } else if (msg.type === "set_label") {
+              if (!msg.entryId?.trim()) {
+                this.send({ type: "error", message: "entryId is required" });
+                break;
+              }
+              runtime.hub.setLabel(this.clientId, msg.conversationId, msg.entryId, msg.label);
             } else {
               await runtime.hub.forkConversation(this.clientId, msg.conversationId, msg.entryId);
             }
@@ -492,6 +499,31 @@ class ClientConn {
           this.cs?.setThinking(msg.level);
           runtime.settings.patch({ thinkingLevel: msg.level });
           break;
+        case "cycle_model": {
+          try {
+            const next = await runtime.hub.cycleModel();
+            if (!next) {
+              this.send({ type: "error", message: "没有可用的模型轮换列表（需配 scopedModels / PI_SCOPED_MODELS）" });
+              break;
+            }
+            const models = await runtime.agent.listModels();
+            this.send({
+              type: "models",
+              models: models.map((m) => ({ provider: m.provider, id: m.id, name: m.name ?? m.id })),
+              current: `${next.provider}/${next.id}`,
+            });
+          } catch (err) {
+            this.send({ type: "error", message: err instanceof Error ? err.message : String(err) });
+          }
+          break;
+        }
+        case "cycle_thinking": {
+          const level = this.cs?.cycleThinking();
+          if (typeof level === "string" && isThinkingLevel(level)) {
+            runtime.settings.patch({ thinkingLevel: level });
+          }
+          break;
+        }
         case "get_capabilities":
           this.send({ type: "capabilities", capabilities: buildCapabilities(runtime) });
           break;

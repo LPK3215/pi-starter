@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { parseModelCatalog, resolveCatalog, resolveDefaultModel } from "./config.js";
-import { modelDisplayName, resolveModelRef } from "./models.js";
+import { modelDisplayName, resolveModelRef, resolveScopedModels } from "./models.js";
 import type { Model } from "@earendil-works/pi-ai";
 
 function model(provider: string, id: string): Model<any> {
@@ -90,4 +90,21 @@ test("默认模型：命令行整段引用优先于 .env 的 provider + model", 
     { provider: "modelscope", model: "Qwen/Qwen3-Next-80B-A3B-Instruct" },
   );
   assert.deepEqual(selected, { provider: "zhipu", modelId: "glm-4.5-air" });
+});
+
+test("resolveScopedModels：解析轮换列表，带斜杠 id / 思考档 / 去重 / 跳过未配 Key", () => {
+  const resolved = resolveScopedModels(
+    [
+      { ref: "modelscope/Qwen/Qwen3-Next-80B-A3B-Instruct", thinkingLevel: "high" },
+      { ref: "zhipu/glm-4.5-air" },
+      { ref: "zhipu/glm-4.5-air" }, // 重复 → 去重
+      { ref: "openai/gpt-5" }, // 不在 available（未配 Key）→ 跳过
+    ],
+    available,
+  );
+  assert.equal(resolved.length, 2, "去重 + 跳过未知项后剩两条");
+  assert.equal(resolved[0]?.model.id, "Qwen/Qwen3-Next-80B-A3B-Instruct");
+  assert.equal(resolved[0]?.thinkingLevel, "high");
+  assert.equal(resolved[1]?.model.provider, "zhipu");
+  assert.equal(resolved[1]?.thinkingLevel, undefined, "无思考档时不带该字段");
 });

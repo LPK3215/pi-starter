@@ -44,17 +44,17 @@ Every `POST /chat` follows the same lifecycle: HTTP body → busy guard → `ses
 | Agent SDK | [`@earendil-works/pi-agent-core`](https://github.com/earendil-works/pi) | `0.83.0` | pinned |
 | AI adapter | [`@earendil-works/pi-ai`](https://github.com/earendil-works/pi) | `0.83.0` | pinned |
 | Coding agent | [`@earendil-works/pi-coding-agent`](https://github.com/earendil-works/pi) | `0.83.0` | tools / extensions contract |
-| HTTP | [Express](https://expressjs.com/) | `^5.2.1` | single-process, single-session |
+| HTTP | [Express](https://expressjs.com/) | `^5.2.1` | single process; REST shares one session, WS runs several conversations per client (cap + LRU) |
 | Schema | [TypeBox](https://www.npmjs.com/package/typebox) | `^1.1.39` | tool `parameters` definitions |
-| WebSocket | [ws](https://www.npmjs.com/package/ws) | `^8.18.0` | reserved for future transport |
-| Test runner | Node built-in test runner via `tsx --test` | `^4.22.4` | 10 files · 39 smoke cases, no model calls |
-| Build | `tsc -p tsconfig.build.json` + `scripts/dist-assets.cjs` | `^5.6.0` | copies `prompts/ skills/ knowledge/` into `dist/` |
+| WebSocket | [ws](https://www.npmjs.com/package/ws) | `^8.18.0` | snapshot-driven bidirectional transport (`transport/ws.ts`) |
+| Test runner | Node built-in test runner via `tsx --test` | `^4.22.4` | 34 test files · 292 cases, no model calls |
+| Build | `tsc -p tsconfig.build.json` + `scripts/dist-assets.cjs` | `^5.6.0` | copies `prompts/ skills/ prompt-templates/ knowledge/` into `dist/` |
 
 Truth source for the table above: [`package.json`](package.json). When versions change, update the code and this table together (the Architecture SVG refreshes automatically via `node scripts/visualization/generate_architecture.mjs`).
 
 ## Features
 
-- **Dual entry points**: CLI (`npm run dev`) + HTTP SSE (`npm run web`). The backend API is the product; `public/index.html` is only a local page for trying out the endpoints
+- **Three entry points**: CLI (`npm run dev`) + HTTP SSE (`npm run web`) + official RPC stdio JSONL (`npm run dev -- --mode rpc`, for cross-language / subprocess integration). The backend API is the product; `public/index.html` is only a local page for trying out the endpoints
 - **Layered prompts**: `src/prompts/` holds `persona.md` (who the agent is) + `rules.md` (working constraints) — edit the files to change the personality
 - **Pluggable tools**: define them under `src/tools/`, register in `tools/index.ts`, and they are auto-registered into the agent
 - **Skill management**: `src/skills/<name>/SKILL.md`, loaded via the SDK's `DefaultResourceLoader.additionalSkillPaths`; the catalog is injected by `formatSkillsForPrompt` and full text is read by the built-in `read` tool through `<location>`
@@ -63,7 +63,7 @@ Truth source for the table above: [`package.json`](package.json). When versions 
 - **Database**: Node's built-in `node:sqlite`, in-memory by default with sample `notes`; `GET /db` for liveness, `db_query` for read-only queries
 - **Extensions**: hooks via `pi.on()` under `src/extensions/`. Ships with `guard` (pre-execution interception) and `audit` (timing logs)
 - **One-command write into Pi native config**: `npm run setup` merges into `~/.pi/agent/models.json` + `auth.json`; no compatibility layer at runtime
-- **Configurable, switchable model catalog**: `PI_MODELS` in `.env` declares multiple providers and models, `PI_MODEL` picks the default; switch mid-session with `/model` in the CLI or `POST /model` over HTTP — no session rebuild
+- **Configurable, switchable model catalog**: `PI_MODELS` in `.env` declares multiple providers and models, `PI_MODEL` picks the default; switch mid-session with `/model` in the CLI or `POST /model` over HTTP — no session rebuild. An official `scopedModels` cycle list backs `/cycle` (CLI), `POST /model/cycle` (REST) and `cycle_model` (WS); `GET /providers` reports per-provider auth via `ModelRuntime.getProviders`/`checkAuth`.
 - **Built-in coding tools off by default**: `off` enables only custom tools + `read` (skills need it); bash/edit/write must be turned on explicitly
 - **Hardened by default**: binds loopback only, strips the framework fingerprint, ships security headers, caps JSON bodies at 1 MB, sets explicit server timeouts, and refuses read-only SQL that hides writes inside a CTE
 - **Observable**: structured logs with automatic secret redaction (`log.ts`), 14 runtime metrics in JSON or Prometheus format (`/metrics`), and separate liveness / readiness probes
@@ -197,6 +197,10 @@ npm run dev -- --model zhipu/glm-4.5-air
 # switch inside a session (not sent to the model):
 #   /models
 #   /model modelscope/Qwen/Qwen2.5-72B-Instruct
+#   /cycle   # next model in the scopedModels cycle list
+
+# official RPC mode (stdio JSONL) for cross-language / subprocess integration:
+npm run dev -- --mode rpc
 ```
 
 ### 3. HTTP API (backend)
@@ -313,7 +317,7 @@ pi-starter/
 Contract smoke tests (no model calls, never touch the real `~/.pi/agent`):
 
 ```bash
-npm test            # 121 unit + integration tests
+npm test            # 292 unit + integration tests
 npm run smoke       # 17 real WebSocket end-to-end checks
 npm run typecheck   # types + protocol completeness
 npm run lint:unused # dead code gate (the "declared but never wired" class of bug)
@@ -497,7 +501,8 @@ Backend endpoints are listed below. Build your own page later; do not edit the s
 | GET | `/health` | liveness probe (no dependency calls) |
 | GET | `/health/ready` | readiness probe — model + DB + knowledge, `503` on failure |
 | GET | `/metrics` | runtime metrics; `?format=prometheus` for text format |
-| GET | `/info` | full inventory: current model, available list, catalogs, DB liveness, busy flag |
+| GET | `/info` | full inventory: current model, available list, catalogs, provider auth status, DB liveness, busy flag |
+| GET | `/providers` | per-provider auth status (official `ModelRuntime.getProviders`/`checkAuth`; id/name/authorized/source, never the raw key) |
 | GET | `/skills` | skill catalog (no model call) |
 | GET | `/skills/:name` | full SKILL.md |
 | GET | `/knowledge` | knowledge catalog |
@@ -509,6 +514,7 @@ Backend endpoints are listed below. Build your own page later; do not edit the s
 | GET | `/db/notes` | sample table |
 | POST | `/db/query` | `{ "sql": "SELECT …" }`, read-only, row-capped (200) |
 | POST | `/model` | `{ "model": "provider/modelId" }`, switch in current session |
+| POST | `/model/cycle` | cycle to the next model in `scopedModels` (no body); 400 when no cycle list |
 | POST | `/chat` | `{ "message": "..."}`, response is an SSE stream. Add `?format=jsonl` for the raw official JSON event stream (one event per line, `json.md` vocabulary) |
 
 `/db/query` accepts a **single** read-only statement. Validation strips comments and string literals first, then scans the whole statement for write/DDL keywords — so `WITH x AS (DELETE …) SELECT …` is rejected even though it starts with `WITH`. Rejections state the specific reason (e.g. `检测到非只读关键字：DELETE`) so a model can self-correct. Results are capped at 200 rows and report `truncated` / `totalRows`.
@@ -552,8 +558,13 @@ Why local extensions and skills are not loaded: pi extensions/skills on your mac
 - **Login**: local desktop / CLI usage can live without it. When attaching to an existing backend, mount auth on the **parent** app (see `server.use("/agent", auth, agentApp)` above) — adding middleware after `createApp()`, or in `configure`, does not cover the kernel routes.
 - **Multi-user**: one `buildAgent()` + independent session per user; do not reuse the current single `busy` flag.
 - **Enable coding tools**: `PI_BUILTIN_TOOLS=coding` or `--builtin-tools coding`. That also turns on `exec` / `exec_jobs` / `exec_stop`. Even then, `guard` still blocks dangerous bash / exec and paths escaping cwd. It is not an interactive PTY.
-- **Model switching**: at startup `--model provider/modelId`; in CLI `/model`; over HTTP `POST /model`. Only models with configured keys are accepted, via `session.setModel`, no session rebuild.
-- **Custom providers**: `setup.ts` writes `~/.pi/agent/models.json` (the official custom-models path, enough for OpenAI/Anthropic-compatible vendors). For a proxy gateway, private endpoint, or custom auth resolution, register a provider through the SDK's `pi.registerProvider(name, config)` — see `src/extensions/custom-provider.example.ts` (not wired by default; pass it via `buildAgent({ extraExtensions })`). Interactive OAuth (`/login`, device code) is TUI-only and deliberately **not** implemented in this headless backend.
+- **Model switching**: at startup `--model provider/modelId`; in CLI `/model`; over HTTP `POST /model`. Only models with configured keys are accepted, via `session.setModel`, no session rebuild. The list / switch / key-swap all run on the SDK's official `ModelRuntime` (`getAvailable()` / `setModel()` / `setRuntimeApiKey()`); the only custom layer is a friendlier reference parser (`resolveModelRef`) that keeps model ids containing slashes, accepts `provider` + `model` split, bare-unique ids, and authed-only matching — semantics the SDK's CLI-only `resolveCliModel` does not cover, so this piece is deliberately kept.
+- **Custom providers**: `setup.ts` writes `~/.pi/agent/models.json` (the official custom-models path, enough for OpenAI/Anthropic-compatible vendors). For a proxy gateway, private endpoint, or custom auth resolution, register a provider through the SDK's `pi.registerProvider(name, config)` — either first-class via `buildAgent({ providers })`, or via a hand-written extension like `src/extensions/custom-provider.example.ts` passed through `extraExtensions`. Interactive OAuth (`/login`, device code) is TUI-only and deliberately **not** implemented in this headless backend.
+- **Model cycling**: `PI_SCOPED_MODELS` (or `buildAgent({ scopedModels })`) feeds the official `session.cycleModel`/`cycleThinkingLevel`; triggered by CLI `/cycle`, `POST /model/cycle`, or WS `cycle_model`. Default derives the list from every authed model, so cycling works out of the box without changing the initial model.
+- **AGENTS.md / project context (opt-in)**: `buildAgent({ includeAgentsFiles: true })` stops the `noContextFiles` isolation and lets the SDK append discovered `AGENTS.md` files as `<project_context>`. Default `false` keeps the system prompt fully self-authored.
+- **Code-defined commands**: `buildAgent({ commands: { deploy: { description, handler } } })` registers slash commands through the official `pi.registerCommand` (the code-side twin of `.md` prompt templates); a handler's `ctx` can `sendUserMessage` / `waitForIdle`. See `src/extensions/example-command.ts` for a stand-alone extension form. Default empty.
+- **Tool exclusions & session helpers**: `buildAgent({ excludeTools })` applies the official `excludeTools` denylist after the allowlist; `agent.waitForIdle()` / `agent.getThinkingLevel()` expose `session.agent.waitForIdle` and `session.thinkingLevel`, and `cycleModel("backward")` uses the official direction argument.
+- **Entry labels**: `SessionManager.appendLabelChange`/`getLabel` are surfaced via WS `set_label` and the snapshot's `labels` — user bookmarks on transcript entries. This is separate from the `pi-starter.tree` rollback marker (which prevents leaf drift across restart); labels are for navigation only.
 - **Consuming pi packages**: the backend keeps `noExtensions` / `noSkills` / `noPromptTemplates` isolation and does not run `pi install` / `pi update` (those belong to the `pi` CLI). To use a package's resources, point its `skills/`, `prompts/`, `extensions/` directories at the existing inject params — `extraSkillPaths` / `extraPromptTemplatePaths` / `extraExtensions` — which is the headless equivalent of the loader's `extendResources`.
 - **JSON event stream**: `POST /chat?format=jsonl` emits the raw SDK events as NDJSON (first line `{"type":"session",...}`, then one event per line) instead of the translated SSE frames — a language-agnostic exit for custom UIs, off by default so the existing SSE contract is unchanged.
 - **Skills / knowledge / database**: skills into `src/skills/`; knowledge into `src/knowledge/`; the DB is in-memory by default, or set `PI_DATABASE_PATH` / pass `buildAgent({ database })`. For vector stores or remote SQL, write a tool and pass it through `extraTools`.

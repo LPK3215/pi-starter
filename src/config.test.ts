@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { parseCliFlags } from "./cli-args.js";
 import {
   parseBuiltinToolMode,
+  parseScopedModelRefs,
   requireConfiguredModel,
   sessionToolPolicy,
 } from "./config.js";
@@ -59,4 +60,27 @@ test("未指定 provider 或 model 直接抛，不落到 SDK 默认模型", () =
       modelId: "Qwen/Qwen3-Next-80B-A3B-Instruct",
     });
   });
+});
+
+test("parseScopedModelRefs：逗号分隔的 provider/model[:thinkingLevel]，斜杠不受影响", () => {
+  const refs = parseScopedModelRefs(
+    "modelscope/Qwen/Qwen3-Next-80B-A3B-Instruct:high,zhipu/glm-4.5-air",
+  );
+  assert.deepEqual(refs, [
+    { ref: "modelscope/Qwen/Qwen3-Next-80B-A3B-Instruct", thinkingLevel: "high" },
+    { ref: "zhipu/glm-4.5-air" },
+  ]);
+  assert.deepEqual(parseScopedModelRefs(undefined), []);
+  assert.deepEqual(parseScopedModelRefs("  "), []);
+});
+
+test("parseCliFlags：--mode 仅在传了时出现，缺省不改变旧形状", () => {
+  assert.deepEqual(parseCliFlags(["--mode", "rpc"]), {
+    provider: undefined,
+    model: undefined,
+    builtinTools: undefined,
+    mode: "rpc",
+    port: undefined,
+  });
+  assert.equal("mode" in parseCliFlags([]), false);
 });

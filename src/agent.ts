@@ -22,18 +22,32 @@ import {
   loadConfig,
   requireConfiguredModel,
   sessionToolPolicy,
+  parseScopedModelRefs,
   SETUP_HINT,
   type BuiltinToolMode,
 } from "./config.js";
-import { formatModelChoices, resolveModelRef, unknownModelError } from "./models.js";
+import {
+  formatModelChoices,
+  resolveModelRef,
+  resolveScopedModels,
+  unknownModelError,
+  type ResolvedScopedModel,
+} from "./models.js";
+import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import {
   createAgentSession,
+  createAgentSessionFromServices,
+  createAgentSessionServices,
+  createEventBus,
   DefaultResourceLoader,
   getAgentDir,
   ModelRuntime,
   SessionManager,
+  type CreateAgentSessionRuntimeFactory,
+  type EventBus,
 } from "@earendil-works/pi-coding-agent";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ProviderConfig, RegisteredCommand } from "@earendil-works/pi-coding-agent";
 import type { Model } from "@earendil-works/pi-ai";
 import { ExecEnvironment } from "./exec/runner.js";
 import { allTools } from "./tools/index.js";
@@ -165,6 +179,33 @@ export interface BuildAgentOptions {
   database?: DatabaseStore;
   /** 内置编码工具档位。不传则走 .env / 默认 off */
   builtinTools?: BuiltinToolMode | string;
+  /**
+   * 模型轮换列表（官方 `scopedModels` + `session.cycleModel`）。不传则读 `PI_SCOPED_MODELS`；
+   * 两者都缺时，默认用当前已配 Key 的可用模型派生一份（不改变初始选模，只是把轮换打开）。
+   */
+  scopedModels?: Array<{ ref: string; thinkingLevel?: string }>;
+  /**
+   * 是否让 SDK 发现并注入 `AGENTS.md` 等上下文文件（官方 project context）。默认 **false**：
+   * 保持“系统提示词完全自持”的隔离。为 true 时不再 `noContextFiles`，SDK 会把 cwd/全局
+   * 的 AGENTS.md 以 `<project_context>` 追加入系统提示词。
+   */
+  includeAgentsFiles?: boolean;
+  /**
+   * 注册自定义 provider（官方 `pi.registerProvider`）：name → ProviderConfig。
+   * 默认空。用于代理网关 / 私有端点 / 自定义鉴权解析（api-key 型；交互式 OAuth 属 TUI）。
+   */
+  providers?: Record<string, ProviderConfig>;
+  /**
+   * 代码型斜杠命令（官方 `pi.registerCommand`）：name → 去掉了 name/sourceInfo 的命令定义。
+   * 与数据型 prompt templates(.md) 并列的官方第二条路；handler 的 ctx 可 `sendUserMessage`/`waitForIdle`。
+   * 默认空。
+   */
+  commands?: Record<string, Omit<RegisteredCommand, "name" | "sourceInfo">>;
+  /**
+   * 排除的工具名（官方 `createAgentSession({ excludeTools })`），在 `tools` 白名单之后生效。
+   * 默认空——不传则行为与以前一致。
+   */
+  excludeTools?: string[];
 }
 
 type AgentSession = Awaited<ReturnType<typeof createAgentSession>>["session"];
@@ -231,6 +272,33 @@ export interface BuiltAgent {
    * 不需要重建 ModelRuntime。原始 key 只在这里出现一次，调用方不要往日志里打。
    */
   applyApiKey?(provider: string, apiKey: string): Promise<void>;
+  /**
+   * 沿官方 `scopedModels` 轮换到下一个模型（官方 `session.cycleModel`）。
+   * 只影响共享 `session`；多对话服务端应走 `SessionHub.cycleModel()`。
+   * 没有轮换列表时返回 undefined。
+   */
+  cycleModel(direction?: "forward" | "backward"): Promise<Model<any> | undefined>;
+  /** 轮换思考档（官方 `session.cycleThinkingLevel`）。 */
+  cycleThinkingLevel(): ThinkingLevel | undefined;
+  /** 当前思考档（官方 `session.thinkingLevel`）。 */
+  getThinkingLevel(): ThinkingLevel | undefined;
+  /** 等代理跑完当前轮（官方 `session.agent.waitForIdle`）。 */
+  waitForIdle(): Promise<void>;
+  /**
+   * 各 provider 的鉴权状态（官方 `ModelRuntime.getProviders()` + `checkAuth()`）。
+   * `authorized` 为真表示该 provider 已配好凭据；`source` 是人类可读标签（如 "ANTHROPIC_API_KEY"），
+   * **不是**原始密钥；`checkAuth` 探测失败时降级为 unauthorized。
+   */
+  providerStatus(): Promise<
+    Array<{ id: string; name: string; authorized: boolean; type?: string; source?: string }>
+  >;
+  /** 扩展与宿主通信的事件总线（官方 `createEventBus`，传给 DefaultResourceLoader）。 */
+  eventBus: EventBus;
+  /**
+   * 官方 `runRpcMode` 用的运行时工厂（`src/rpc.ts`）。可选：只有 `buildAgent` 提供；
+   * 测试替身/旧嵌入方可不实现。
+   */
+  createRuntimeFactory?(): CreateAgentSessionRuntimeFactory;
   dispose(): void;
 }
 
@@ -262,6 +330,20 @@ export async function buildAgent(options: BuildAgentOptions = {}): Promise<Built
     );
   }
   const model = picked.model;
+
+  // Shared event bus for extension ↔ host communication (official createEventBus).
+  const eventBus = createEventBus();
+  // Official model cycling: explicit list > PI_SCOPED_MODELS > derive from all authed models.
+  // Deriving never changes the active model (we still pass `model` below), it only arms cycle.
+  const scopedRefs = options.scopedModels ?? parseScopedModelRefs(process.env.PI_SCOPED_MODELS);
+  const scopedModels = (
+    scopedRefs.length > 0
+      ? resolveScopedModels(scopedRefs, available)
+      : available.map<ResolvedScopedModel>((m) => ({ model: m }))
+  ).map((s) => ({
+    model: s.model,
+    ...(s.thinkingLevel ? { thinkingLevel: s.thinkingLevel as ThinkingLevel } : {}),
+  }));
 
   // Same filter for both the SDK's paths and our own inventory, so `/skills` can never
   // disagree with what the system prompt actually carries. Surfaces what was dropped —
@@ -348,30 +430,90 @@ export async function buildAgent(options: BuildAgentOptions = {}): Promise<Built
     return [...allTools, ...dynamicTools, ...execTools, ...live, ...(options.extraTools ?? [])];
   };
 
+  /**
+   * Build the isolation resource-loader options (WITHOUT cwd/agentDir/settingsManager).
+   * Shared by `buildLoader` (the direct `createAgentSession` path) and the RPC runtime
+   * factory below — one source of truth so the two paths can never drift on
+   * persona / tool registration / skills / prompt templates / provider registration.
+   */
+  const resourceLoaderOptions = (toolList: readonly ToolDefinition[]) => ({
+    noExtensions: true,
+    noSkills: true,
+    noContextFiles: !options.includeAgentsFiles,
+    noPromptTemplates: true,
+    additionalSkillPaths: skillPaths,
+    additionalPromptTemplatePaths: promptTemplatePaths,
+    eventBus,
+    systemPromptOverride: () => systemPrompt,
+    appendSystemPromptOverride: () => [],
+    extensionFactories: [
+      ...(options.providers && Object.keys(options.providers).length > 0
+        ? [
+            (pi: Parameters<ExtensionFactory>[0]) => {
+              for (const [name, cfg] of Object.entries(options.providers ?? {})) {
+                pi.registerProvider(name, cfg);
+              }
+            },
+          ]
+        : []),
+      ...(options.commands && Object.keys(options.commands).length > 0
+        ? [
+            (pi: ExtensionAPI) => {
+              for (const [name, def] of Object.entries(options.commands ?? {})) {
+                pi.registerCommand(name, def);
+              }
+            },
+          ]
+        : []),
+      (pi: ExtensionAPI) => {
+        for (const tool of toolList) pi.registerTool(tool);
+      },
+      ...allExtensions,
+      ...(options.extraExtensions ?? []),
+    ],
+  });
+
   /** Build a fresh resource loader (one per session, so conversations stay isolated). */
   const buildLoader = async (toolList: readonly ToolDefinition[]): Promise<DefaultResourceLoader> => {
     const loader = new DefaultResourceLoader({
       cwd: process.cwd(),
       agentDir: getAgentDir(),
-      noExtensions: true,
-      noSkills: true,
-      noContextFiles: true,
-      noPromptTemplates: true,
-      additionalSkillPaths: skillPaths,
-      additionalPromptTemplatePaths: promptTemplatePaths,
-      systemPromptOverride: () => systemPrompt,
-      appendSystemPromptOverride: () => [],
-      extensionFactories: [
-        (pi) => {
-          for (const tool of toolList) pi.registerTool(tool);
-        },
-        ...allExtensions,
-        ...(options.extraExtensions ?? []),
-      ],
+      ...resourceLoaderOptions(toolList),
     });
     await loader.reload();
     return loader;
   };
+
+  /**
+   * 官方 runRpcMode 用的运行时工厂（`src/rpc.ts` 消费）：为每次 cwd 重建会话时，复用与
+   * `buildLoader` 完全相同的 `resourceLoaderOptions` + 工具白名单 + 模型/scopedModels——单一装配核心，
+   * RPC 与 REST/WS 不会在隔离/人设/工具上分叉。
+   * 注：RPC 是单会话 stdio 入口，不携 MCP 桥 / HTTP 审批闸门（那些属于 server 层）。
+   */
+  const createRuntimeFactory = (): CreateAgentSessionRuntimeFactory =>
+    async ({ cwd, sessionManager, sessionStartEvent }) => {
+      const toolList = resolveToolList();
+      const toolPolicy = sessionToolPolicy(
+        cfg.builtinTools,
+        toolList.map((tool) => tool.name),
+      );
+      const services = await createAgentSessionServices({
+        cwd,
+        agentDir: getAgentDir(),
+        modelRuntime,
+        resourceLoaderOptions: resourceLoaderOptions(toolList),
+      });
+      const created = await createAgentSessionFromServices({
+        services,
+        sessionManager,
+        sessionStartEvent,
+        model,
+        ...(scopedModels.length > 0 ? { scopedModels } : {}),
+        ...toolPolicy,
+        ...(options.excludeTools?.length ? { excludeTools: options.excludeTools } : {}),
+      });
+      return { ...created, services, diagnostics: services.diagnostics };
+    };
 
   /**
    * 造一个会话工厂。
@@ -400,7 +542,9 @@ export async function buildAgent(options: BuildAgentOptions = {}): Promise<Built
       modelRuntime,
       resourceLoader: loader,
       sessionManager,
+      scopedModels,
       ...toolPolicy,
+      ...(options.excludeTools?.length ? { excludeTools: options.excludeTools } : {}),
     });
     return session;
   };
@@ -445,6 +589,34 @@ export async function buildAgent(options: BuildAgentOptions = {}): Promise<Built
     applyApiKey: async (provider, apiKey) => {
       await modelRuntime.setRuntimeApiKey(provider, apiKey);
     },
+    cycleModel: async (direction) => {
+      const result = await session.cycleModel(direction);
+      return result?.model;
+    },
+    cycleThinkingLevel: () => session.cycleThinkingLevel(),
+    getThinkingLevel: () => session.thinkingLevel,
+    waitForIdle: () => session.agent.waitForIdle(),
+    providerStatus: async () => {
+      const out: Array<{ id: string; name: string; authorized: boolean; type?: string; source?: string }> = [];
+      for (const provider of modelRuntime.getProviders()) {
+        let check: Awaited<ReturnType<typeof modelRuntime.checkAuth>>;
+        try {
+          check = await modelRuntime.checkAuth(provider.id);
+        } catch {
+          check = undefined; // 探测失败（可能触网）当未授权，不外泄内部错误
+        }
+        out.push({
+          id: provider.id,
+          name: provider.name,
+          authorized: check !== undefined,
+          ...(check?.type ? { type: check.type } : {}),
+          ...(check?.source ? { source: check.source } : {}),
+        });
+      }
+      return out;
+    },
+    eventBus,
+    createRuntimeFactory,
     dispose: () => {
       session.dispose();
       execEnv?.dispose();

@@ -9,6 +9,8 @@ export interface CliFlags {
   model?: string;
   builtinTools?: string;
   port?: number;
+  /** 运行模式：缺省为交互式 CLI；`rpc` 走官方 stdio JSONL 模式。 */
+  mode?: string;
 }
 
 function flagValue(argv: string[], name: string): string | undefined {
@@ -22,10 +24,13 @@ function flagValue(argv: string[], name: string): string | undefined {
 export function parseCliFlags(argv: string[]): CliFlags {
   const portRaw = flagValue(argv, "--port");
   const port = portRaw === undefined ? undefined : Number(portRaw);
+  const mode = flagValue(argv, "--mode");
   return {
     provider: flagValue(argv, "--provider"),
     model: flagValue(argv, "--model"),
     builtinTools: flagValue(argv, "--builtin-tools"),
+    // 仅在传了 --mode 时才带这个键，保持返回形状与旧调用方/断言一致。
+    ...(mode !== undefined ? { mode } : {}),
     port: port !== undefined && Number.isFinite(port) ? port : undefined,
   };
 }

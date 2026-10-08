@@ -151,6 +151,11 @@ export interface UiState {
   planMode: boolean;
   /** 运行中对话列表（含自身）。 */
   conversations: UiConversation[];
+  /**
+   * 会话条目上的官方标签（`SessionManager.appendLabelChange`/`getLabel`）。
+   * 与回退用的 `pi-starter.tree` 标记不同：标签是 UI 书签，不防止重启叶子漂移。
+   */
+  labels: { entryId: string; label: string }[];
 }
 
 /** Light state used by `snapshot_delta` (messages are carried separately). */
@@ -200,10 +205,14 @@ export type ClientMessage =
     }
   | { type: "edit_message"; conversationId: string; entryId: string }
   | { type: "fork_conversation"; conversationId: string; entryId?: string }
+  /** 给会话条目打/清官方标签（label 为空串或未传即清除）。 */
+  | { type: "set_label"; conversationId: string; entryId: string; label?: string }
   // 模型与思考
   | { type: "list_models" }
   | { type: "set_model"; modelId: string }
   | { type: "set_thinking"; level: string }
+  | { type: "cycle_model" }
+  | { type: "cycle_thinking" }
   // 能力目录
   | { type: "get_capabilities" }
   | { type: "set_tool_enabled"; name: string; enabled: boolean }
@@ -384,9 +393,12 @@ export const CLIENT_MESSAGE_TYPES = [
   "rollback_conversation",
   "edit_message",
   "fork_conversation",
+  "set_label",
   "list_models",
   "set_model",
   "set_thinking",
+  "cycle_model",
+  "cycle_thinking",
   "get_capabilities",
   "set_tool_enabled",
   "search_knowledge",

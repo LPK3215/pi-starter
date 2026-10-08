@@ -614,6 +614,7 @@ export class Conversation {
       pendingApproval: this.pendingApproval,
       planMode: this.isPlanMode(),
       conversations: this.listConversations(),
+      labels: this.labels(),
     };
   }
 
@@ -727,6 +728,28 @@ export class Conversation {
   }
 
   /**
+   * 沿官方 `scopedModels` 轮换到下一个模型（官方 `session.cycleModel`）。
+   * 装配无轮换列表 / SDK 不提供该方法时返回 undefined。
+   */
+  async cycleModel(): Promise<Model<any> | undefined> {
+    const fn = (this.session as { cycleModel?: () => Promise<{ model?: Model<any> } | undefined> })
+      .cycleModel;
+    if (typeof fn !== "function") return undefined;
+    const result = await fn.call(this.session);
+    this.getState();
+    return result?.model;
+  }
+
+  /** 轮换思考档（官方 `session.cycleThinkingLevel`）。 */
+  cycleThinking(): string | undefined {
+    const fn = (this.session as { cycleThinkingLevel?: () => string | undefined }).cycleThinkingLevel;
+    if (typeof fn !== "function") return undefined;
+    const level = fn.call(this.session);
+    this.getState();
+    return level;
+  }
+
+  /**
    * Apply the enabled tool set to the live session (ActiveSet).
    * The SDK filters unknown names and rebuilds the system prompt, so this is safe to call
    * with the registry's full enabled list.
@@ -738,6 +761,32 @@ export class Conversation {
 
   getState(): void {
     this.snap.flushSnapshot(true);
+  }
+
+  /**
+   * 当前路径上被官方打了标签的条目（官方 `SessionManager.getLabel`）。
+   * 没有会话树（无 manager）时返回空。只遍历当前路径的条目，不背整个文件。
+   */
+  labels(): { entryId: string; label: string }[] {
+    const manager = this.sessionManager();
+    if (!manager) return [];
+    const out: { entryId: string; label: string }[] = [];
+    for (const entry of manager.buildContextEntries()) {
+      const label = manager.getLabel(entry.id);
+      if (label) out.push({ entryId: entry.id, label });
+    }
+    return out;
+  }
+
+  /**
+   * 给一条会话条目打（或清）官方标签（`SessionManager.appendLabelChange`）。
+   * 标签与回退的 custom 标记是两回事：标签不会把叶子挑回去，也不影响模型看到的上下文。
+   */
+  setLabel(entryId: string, label: string | undefined): void {
+    const manager = this.requireManager();
+    const trimmed = label?.trim();
+    manager.appendLabelChange(entryId.trim(), trimmed ? trimmed : undefined);
+    this.getState();
   }
 
   /* ─────────────── 主动压缩 ─────────────── */
@@ -1287,6 +1336,22 @@ export class ClientSession {
     return model;
   }
 
+  /** 把一个新模型实例应用到本连接的所有对话（轮换时用，避免重复推进共享 session 的指针）。 */
+  async applyModel(model: Model<any>): Promise<void> {
+    for (const conv of this.convs.values()) {
+      try {
+        await conv.setModel(model);
+      } catch {
+        /* 单个对话切换失败不影响其余 */
+      }
+    }
+  }
+
+  /** 轮换当前对话的思考档（仅作于当前活动对话）。 */
+  cycleThinking(): string | undefined {
+    return this.active?.cycleThinking();
+  }
+
   setThinking(level: string): void {
     this.active?.setThinking(level);
   }
@@ -1486,6 +1551,19 @@ export class SessionHub {
   }
 
   /**
+   * 沿官方 `scopedModels` 轮换模型：先推进共享 session（单一真源），再把新模型
+   * 扇出到每个客户端的所有对话。无轮换列表 / SDK 不提供时返回 undefined。
+   */
+  async cycleModel(direction?: "forward" | "backward"): Promise<Model<any> | undefined> {
+    const next = await this.agent.cycleModel(direction);
+    if (!next) return undefined;
+    for (const session of this.sessions.values()) {
+      await session.applyModel(next);
+    }
+    return next;
+  }
+
+  /**
    * REST侧主动压缩：作用到**所有**连接的当前对话。
    *
    * REST 没有「哪个连接」的上下文，所以语义只能是全局的。逐个会话串行压缩而不是
@@ -1569,6 +1647,12 @@ export class SessionHub {
     const edited = conv.editMessage(entryId);
     this.remember(conv);
     return edited;
+  }
+
+  /** 给已打开对话的某条条目打/清官方标签。 */
+  setLabel(clientId: string, conversationId: string, entryId: string, label?: string): void {
+    const conv = this.requireLoaded(clientId, conversationId);
+    conv.setLabel(entryId, label);
   }
 
   /**

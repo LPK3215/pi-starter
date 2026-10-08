@@ -20,6 +20,18 @@ import { toolResultPreview } from "./sse.js";
 
 const flags = parseCliFlags(process.argv.slice(2));
 
+// 官方 RPC 模式：不进入交互 CLI，直接走 stdio JSONL（runRpcMode）。
+if (flags.mode === "rpc") {
+  const { startRpcMode } = await import("./rpc.js");
+  await startRpcMode({
+    provider: flags.provider,
+    modelId: flags.model,
+    builtinTools: flags.builtinTools,
+    inMemory: false,
+  });
+  process.exit(0);
+}
+
 console.log("🔧 正在组装 Agent...");
 const {
   session,
@@ -27,6 +39,7 @@ const {
   builtinTools: toolMode,
   switchModel,
   listModels,
+  cycleModel,
   skills,
   knowledge,
   database,
@@ -43,7 +56,7 @@ console.log(`   内置工具：${toolMode}（${describeBuiltinToolMode(toolMode)
 console.log(`   技能：${skills.map((s) => s.name).join("、") || "无"}`);
 console.log(`   知识库：${knowledge.map((d) => d.name).join("、") || "无"}`);
 console.log(`   数据库：${database.driver} ${database.path}`);
-console.log("   /models 查看可切换模型，/model <provider>/<modelId> 切换\n");
+console.log("   /models 查看可切换模型，/model <provider>/<modelId> 切换，/cycle 轮换下一个\n");
 
 session.subscribe((event: AgentSessionEvent) => {
   if (event.type === "message_update" && event.assistantMessageEvent?.type === "text_delta") {
@@ -90,6 +103,21 @@ try {
       try {
         currentModel = await switchModel(ref);
         console.log(`✅ 已切换到 ${currentModel.provider}/${currentModel.id}\n`);
+      } catch (err: unknown) {
+        console.error(`❌ ${err instanceof Error ? err.message : String(err)}\n`);
+      }
+      continue;
+    }
+
+    if (text === "/cycle") {
+      try {
+        const next = await cycleModel();
+        if (!next) {
+          console.log("（没有可用的模型轮换列表，可设 PI_SCOPED_MODELS）\n");
+        } else {
+          currentModel = next;
+          console.log(`✅ 已轮换到 ${currentModel.provider}/${currentModel.id}\n`);
+        }
       } catch (err: unknown) {
         console.error(`❌ ${err instanceof Error ? err.message : String(err)}\n`);
       }

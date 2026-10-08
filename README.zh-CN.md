@@ -46,15 +46,15 @@
 | Coding Agent | [`@earendil-works/pi-coding-agent`](https://github.com/earendil-works/pi) | `0.83.0` | 工具 / 扩展契约 |
 | HTTP | [Express](https://expressjs.com/) | `^5.2.1` | 单进程；Web 端每连接多对话并发 |
 | Schema | [TypeBox](https://www.npmjs.com/package/typebox) | `^1.1.39` | 工具 `parameters` 定义 |
-| WebSocket | [ws](https://www.npmjs.com/package/ws) | `^8.18.0` | 预留传输层扩展 |
-| 测试 | Node 内置 test runner，走 `tsx --test` | `^4.22.4` | 10 个文件 · 39 个冒烟用例，不调模型 |
+| WebSocket | [ws](https://www.npmjs.com/package/ws) | `^8.18.0` | 快照驱动的双向传输（`transport/ws.ts`） |
+| 测试 | Node 内置 test runner，走 `tsx --test` | `^4.22.4` | 34 个测试文件 · 292 用例，不调模型 |
 | 构建 | `tsc -p tsconfig.build.json` + `scripts/dist-assets.cjs` | `^5.6.0` | 把 `prompts/`、`skills/`、`prompt-templates/`、`knowledge/` 拷到 `dist/` |
 
 上面这张表的单一真源是 [`package.json`](package.json)。版本变更时，代码与本表同步；架构 SVG 自动刷新（`node scripts/visualization/generate_architecture.mjs`）。
 
 ## 特性
 
-- **双入口**：CLI（`npm run dev`）+ HTTP SSE（`npm run web`）。后端接口是产品；`public/index.html` 只是本地试接口的示例页
+- **三入口**：CLI（`npm run dev`）+ HTTP SSE（`npm run web`）+ 官方 RPC stdio JSONL（`npm run dev -- --mode rpc`，跨语言 / 子进程集成）。后端接口是产品；`public/index.html` 只是本地试接口的示例页
 - **分层提示词**：`src/prompts/` 下 `persona.md`（人设）+ `rules.md`（规则），改文件即改性格
 - **工具即插即用**：`src/tools/` 下定义，`tools/index.ts` 登记，自动注册进 Agent
 - **技能管理**：`src/skills/<name>/SKILL.md`，走 SDK `DefaultResourceLoader.additionalSkillPaths`，目录由 `formatSkillsForPrompt` 注入，全文用内置 `read` 按 `<location>` 加载
@@ -191,6 +191,10 @@ npm run dev -- --model zhipu/glm-4.5-air
 # 会话中切换（不发给模型）：
 #   /models
 #   /model modelscope/Qwen/Qwen2.5-72B-Instruct
+#   /cycle   # 沿 scopedModels 轮换下一个
+
+# 官方 RPC 模式（stdio JSONL），跨语言 / 子进程集成：
+npm run dev -- --mode rpc
 ```
 
 ### 3. HTTP 接口（后端）
@@ -479,6 +483,8 @@ curl -X POST http://localhost:3000/db/query \
 | GET | `/db/notes` | 示例表 |
 | POST | `/db/query` | `{ "sql": "SELECT …" }`，只读 |
 | POST | `/model` | `{ "model": "provider/modelId" }`，当前会话切换 |
+| POST | `/model/cycle` | 沿 `scopedModels` 轮换到下一个模型（无 body）；没有轮换列表时 400 |
+| GET | `/providers` | 各 provider 的鉴权状态（官方 `ModelRuntime.getProviders`/`checkAuth`；只回 id/name/authorized/来源标签，不回原始 key） |
 | POST | `/chat` | `{ "message": "..." }`，响应是 SSE 流；加 `?format=jsonl` 走官方原始 JSON 事件流（一行一个事件，`json.md` 词表） |
 
 嵌进已有 Express 时用 `createApp({ agent, staticDir: false })`，不要再开一个端口。完整装配、鉴权挂法与实测结论见 **[`docs/嵌入指南.md`](docs/嵌入指南.md)**。
@@ -520,8 +526,13 @@ server.listen(3000);
 - **登录**：本地桌面 / 本机 CLI 可以没有。接到已有后台时**在父应用上挂**鉴权（见上面「接进现有模块」的 `server.use("/agent", auth, agentApp)`）——不要用 `createApp()` 之后加中间件或 `configure`，那两种都挡不住内核路由。
 - **多用户**：每个用户一个 `buildAgent()` + 独立 session；不要共用现在这个 `busy` 标志。
 - **打开编码工具**：`PI_BUILTIN_TOOLS=coding` 或 `--builtin-tools coding`。这一档同时打开 `exec` / `exec_jobs` / `exec_stop`。打开后 `guard` 仍会拦截危险 bash / exec 和越出 cwd 的路径。不是交互式 PTY。
-- **模型切换**：启动时 `--model provider/modelId`；CLI `/model`；HTTP `POST /model`。只接受已配好 Key 的模型，走 `session.setModel`，不重建会话。
-- **自定义 provider**：`setup.ts` 把 provider 写进 `~/.pi/agent/models.json`（官方 custom-models 路径，OpenAI/Anthropic 兼容厂商够用）。要接代理网关、私有端点或自定义鉴权解析，走 SDK 的 `pi.registerProvider(name, config)`——见 `src/extensions/custom-provider.example.ts`（默认不接线，用 `buildAgent({ extraExtensions })` 传进去）。交互式 OAuth（`/login`、设备码）属 TUI，无头后端**不实现**。
+- **模型切换**：启动时 `--model provider/modelId`；CLI `/model`；HTTP `POST /model`。只接受已配 Key 的模型，走 `session.setModel`，不重建会话。列列表/切换/换 Key 都走官方 `ModelRuntime`（`getAvailable()` / `setModel()` / `setRuntimeApiKey()`）；自定义的只是一层更宽松的名称解析（`resolveModelRef`），支持带斜杠的模型 id、provider+model 拆开传、裸唯一 id、只认已配 Key 的模型——这些是官方 `resolveCliModel`（CLI 单体解析）盖不到的语义，所以这一段有意保留。
+- **自定义 provider**：`setup.ts` 把 provider 写进 `~/.pi/agent/models.json`（官方 custom-models 路径，OpenAI/Anthropic 兼容厂商够用）。要接代理网关、私有端点或自定义鉴权解析，走 SDK 的 `pi.registerProvider(name, config)`——一等参数 `buildAgent({ providers })`，或参照 `src/extensions/custom-provider.example.ts` 经 `extraExtensions` 传入。交互式 OAuth（`/login`、设备码）属 TUI，无头后端**不实现**。
+- **模型轮换**：`PI_SCOPED_MODELS`（或 `buildAgent({ scopedModels })`）喂官方 `session.cycleModel`/`cycleThinkingLevel`；由 CLI `/cycle`、`POST /model/cycle`、WS `cycle_model` 触发。缺省用所有已配 Key 的模型派生，不改初始选模。
+- **AGENTS.md / 项目上下文（opt-in）**：`buildAgent({ includeAgentsFiles: true })` 取消 `noContextFiles` 隔离，让 SDK 把发现的 AGENTS.md 以 `<project_context>` 追加。默认 false，提示词仍完全自持。
+- **代码型命令**：`buildAgent({ commands: { deploy: { description, handler } } })` 走官方 `pi.registerCommand`（与 `.md` prompt templates 并列的代码侧路径）；handler 的 ctx 可 `sendUserMessage`/`waitForIdle`。参见 `src/extensions/example-command.ts`（独立扩展形式）。默认空。
+- **工具排除与会话小工具**：`buildAgent({ excludeTools })` 应用官方 `excludeTools` 黑名单（在白名单之后）；`agent.waitForIdle()` / `agent.getThinkingLevel()` 对应 `session.agent.waitForIdle` 与 `session.thinkingLevel`；`cycleModel("backward")` 用官方方向参数。
+- **条目标签**：官方 `SessionManager.appendLabelChange`/`getLabel` 经 WS `set_label` 与快照 `labels` 暴露——给转录条目做书签。与回退用的 `pi-starter.tree` 标记不同：标签只用于导航，不防重启叶子漂移。
 - **消费 pi packages**：后端保持 `noExtensions` / `noSkills` / `noPromptTemplates` 隔离，不跑 `pi install` / `pi update`（那是 `pi` CLI 的事）。要用某个包的资源，把它的 `skills/`、`prompts/`、`extensions/` 目录经现有注入参数传进来——`extraSkillPaths` / `extraPromptTemplatePaths` / `extraExtensions`，等价于装载器的 `extendResources`。
 - **JSON 事件流**：`POST /chat?format=jsonl` 把原始 SDK 事件按 NDJSON 逐行输出（首行 `{"type":"session",...}`，之后一行一个事件），而不是翻译后的 SSE 帧——给自定义 UI / 跨语言的出口，默认关，不动现有 SSE 契约。
 - **技能 / 知识库 / 数据库**：技能丢进 `src/skills/`；知识库丢进 `src/knowledge/`；数据库默认内存，或 `PI_DATABASE_PATH` / `buildAgent({ database })`。要接向量库或远程 SQL，写成工具从 `extraTools` 进来。

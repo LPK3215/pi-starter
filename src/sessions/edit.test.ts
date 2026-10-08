@@ -317,6 +317,24 @@ test("回退不带 summarize 时走 branch + 标记路径（不碰 navigateTree�
   assert.deepEqual(texts(manager), ["第一句", "第一答"]);
 });
 
+test("官方标签：setLabel 写入会话文件、labels() 读回、空串即清除", () => {
+  const cwd = mkdtempSync(join(tmpdir(), "pi-edit-"));
+  const dir = join(cwd, "sessions");
+  mkdirSync(dir);
+  const { manager, ids } = transcript(dir, cwd);
+  const { conv } = conversation(manager);
+
+  conv.setLabel(ids.a1, "checkpoint");
+  assert.deepEqual(conv.labels(), [{ entryId: ids.a1, label: "checkpoint" }]);
+  // 标签落在会话文件里，重启后仍在。
+  const file = manager.getSessionFile();
+  assert.ok(file);
+  assert.equal(SessionManager.open(file).getLabel(ids.a1), "checkpoint");
+
+  conv.setLabel(ids.a1, ""); // 空串 = 清除
+  assert.deepEqual(conv.labels(), []);
+});
+
 test("改名写进会话文件，占位标题不会在下一条消息时被盖掉", () => {
   const cwd = mkdtempSync(join(tmpdir(), "pi-edit-"));
   const dir = join(cwd, "sessions");
