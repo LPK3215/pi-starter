@@ -12,6 +12,7 @@
  */
 
 import { join } from "node:path";
+import { PROTOCOL_VERSION } from "./protocol.js";
 import {
   modelDisplayName,
   resolveModelRef,
@@ -39,6 +40,84 @@ export const CODING_BUILTIN_TOOLS = [
   "ls",
 ] as const;
 
+/**
+ * Transport / snapshot runtime knobs (WebSocket bidirectional channel).
+ * All values are environment-overridable and carry safe loopback defaults.
+ */
+export interface RuntimeConfig {
+  /** Bind host for the HTTP + WS server. Defaults to loopback for safety. */
+  host: string;
+  /** WebSocket endpoint path. */
+  wsPath: string;
+  /** Wire protocol version advertised in `ready` and negotiated from `hello`. */
+  protocolVersion: number;
+  /** Throttle window for full/incremental snapshots (ms). */
+  snapshotIntervalMs: number;
+  /** Checkpoint window while message deltas are active (ms). */
+  streamingSnapshotIntervalMs: number;
+  /** WebSocket heartbeat ping interval (ms). */
+  heartbeatIntervalMs: number;
+  /** Coalesced retry delay after a dropped snapshot (ms). */
+  snapshotRetryMs: number;
+  /** Buffered-bytes threshold above which snapshots may be dropped (deltas bypass). */
+  backpressureBytes: number;
+  /**
+   * Consecutive snapshot drops before the connection is terminated.
+   *
+   * Dropping alone never frees memory: a client too slow to drain keeps its receive buffer
+   * alive while the server keeps rebuilding snapshots for it. After this many consecutive
+   * drops we give up on it. Set high (or high enough) to be conservative; 0 disables.
+   */
+  maxConsecutiveSnapshotDrops: number;
+}
+
+/** Defaults for RuntimeConfig. Overridable via .env / process.env. */
+export const RUNTIME_DEFAULTS: RuntimeConfig = {
+  host: "127.0.0.1",
+  wsPath: "/ws",
+  // Derived from the protocol single source of truth so the advertised version can never
+  // drift from PROTOCOL_VERSION. Overridable only to run a deliberately mismatched build.
+  protocolVersion: PROTOCOL_VERSION,
+  snapshotIntervalMs: 60,
+  streamingSnapshotIntervalMs: 2000,
+  heartbeatIntervalMs: 30000,
+  snapshotRetryMs: 500,
+  backpressureBytes: 262144,
+  // ~3 retries at 500ms apart. Generous enough that a brief stall is forgiven.
+  maxConsecutiveSnapshotDrops: 8,
+};
+
+function intFromEnv(raw: string | undefined, fallback: number): number {
+  const value = clean(raw);
+  if (!value) return fallback;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : fallback;
+}
+
+/** Resolve the runtime config from an env-like source, falling back to defaults. */
+export function resolveRuntimeConfig(
+  env: Record<string, string | undefined> = process.env,
+): RuntimeConfig {
+  const host = clean(env.PI_HOST) ?? RUNTIME_DEFAULTS.host;
+  const wsPathRaw = clean(env.PI_WS_PATH) ?? RUNTIME_DEFAULTS.wsPath;
+  const wsPath = wsPathRaw.startsWith("/") ? wsPathRaw : `/${wsPathRaw}`;
+  return {
+    host,
+    wsPath,
+    protocolVersion: intFromEnv(env.PI_PROTOCOL_VERSION, RUNTIME_DEFAULTS.protocolVersion),
+    snapshotIntervalMs: intFromEnv(env.PI_SNAPSHOT_INTERVAL_MS, RUNTIME_DEFAULTS.snapshotIntervalMs),
+    streamingSnapshotIntervalMs:
+      intFromEnv(env.PI_STREAMING_SNAPSHOT_INTERVAL_MS, RUNTIME_DEFAULTS.streamingSnapshotIntervalMs),
+    heartbeatIntervalMs: intFromEnv(env.PI_WS_HEARTBEAT_MS, RUNTIME_DEFAULTS.heartbeatIntervalMs),
+    snapshotRetryMs: intFromEnv(env.PI_SNAPSHOT_RETRY_MS, RUNTIME_DEFAULTS.snapshotRetryMs),
+    backpressureBytes: intFromEnv(env.PI_WS_BACKPRESSURE_BYTES, RUNTIME_DEFAULTS.backpressureBytes),
+    maxConsecutiveSnapshotDrops: intFromEnv(
+      env.PI_WS_MAX_CONSECUTIVE_DROPS,
+      RUNTIME_DEFAULTS.maxConsecutiveSnapshotDrops,
+    ),
+  };
+}
+
 /** .env / 命令行合并后的配置 */
 export interface ResolvedConfig {
   provider?: string;
@@ -50,6 +129,8 @@ export interface ResolvedConfig {
    * 来自 PI_MODELS，缺省时退回 PI_PROVIDER + PI_MODEL + PI_BASE_URL 这一条。
    */
   catalog: ModelCatalog;
+  /** Transport / snapshot runtime knobs (WebSocket bidirectional channel). */
+  runtime: RuntimeConfig;
 }
 
 export interface ConfigOverride {
@@ -330,5 +411,6 @@ export function loadConfig(
       },
       fallback,
     ),
+    runtime: resolveRuntimeConfig(),
   };
 }

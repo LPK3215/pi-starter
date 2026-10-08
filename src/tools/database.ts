@@ -6,12 +6,16 @@
 
 import { Type } from "typebox";
 import { defineTool } from "@earendil-works/pi-coding-agent";
-import { isReadOnlySql, type DatabaseStore } from "../db/index.js";
+import { scanReadOnlySql, type DatabaseStore } from "../db/index.js";
 
 type DbQueryDetails = {
   ok: boolean;
   columns: string[];
   rowCount: number;
+  /** 因行数上限被截断时为 true。 */
+  truncated?: boolean;
+  /** 截断前的总行数。 */
+  totalRows?: number;
 };
 
 export function createDbStatusTool(database: DatabaseStore) {
@@ -40,21 +44,30 @@ export function createDbQueryTool(database: DatabaseStore) {
       sql: Type.String({ description: "单条 SELECT 或 WITH … SELECT" }),
     }),
     async execute(_id, params: { sql: string }) {
-      const fail = (text: string): { content: { type: "text"; text: string }[]; details: DbQueryDetails } => ({
+      const fail = (
+        text: string,
+      ): { content: { type: "text"; text: string }[]; details: DbQueryDetails } => ({
         content: [{ type: "text", text }],
         details: { ok: false, columns: [], rowCount: 0 },
       });
-      if (!isReadOnlySql(params.sql)) {
-        return fail("只允许单条 SELECT / WITH…SELECT。");
-      }
+      // Reject with the specific reason so the model can self-correct rather than retry blindly.
+      const scan = scanReadOnlySql(params.sql ?? "");
+      if (!scan.ok) return fail(scan.reason ?? "只允许单条 SELECT / WITH…SELECT。");
       try {
         const result = database.query(params.sql);
+        // Tell the model explicitly that the result was clipped, otherwise it will
+        // silently conclude the table only has `rows.length` entries.
+        const note = result.truncated
+          ? `\n\n[注意] 结果超过单次返回上限，仅返回前 ${result.rows.length} 行（实际共 ${result.totalRows} 行）。请加 LIMIT 或更精确的 WHERE 条件重查。`
+          : "";
         return {
-          content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+          content: [{ type: "text", text: JSON.stringify(result.rows, null, 2) + note }],
           details: {
             ok: true,
             columns: result.columns,
             rowCount: result.rows.length,
+            truncated: result.truncated,
+            totalRows: result.totalRows,
           },
         };
       } catch (err: unknown) {

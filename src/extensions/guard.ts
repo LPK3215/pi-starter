@@ -8,6 +8,7 @@
  */
 
 import { basename, isAbsolute, relative, resolve } from "node:path";
+import { getLogger } from "../log.js";
 import {
   isToolCallEventType,
   type ExtensionAPI,
@@ -80,8 +81,10 @@ export function isPathInsideCwd(targetPath: string, cwd: string): boolean {
   return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
 }
 
-function block(reason: string): ToolCallEventResult {
-  console.log(`🛡️ [拦截] ${reason}`);
+function block(reason: string, extra?: Record<string, unknown>): ToolCallEventResult {
+  // Security blocks are warn-level: they must be visible in normal operation, not buried
+  // in debug noise, because each one is a potential attack or model mistake.
+  getLogger().child({ component: "guard" }).warn("拦截工具调用", { reason, ...extra });
   return { block: true, reason };
 }
 
@@ -100,7 +103,7 @@ export function guardExtension(pi: ExtensionAPI) {
     if (isToolCallEventType("bash", event)) {
       const hit = findDangerousBash(event.input.command);
       if (hit) {
-        return block(`bash：${hit.description}`);
+        return block(`bash：${hit.description}`, { ruleId: hit.id });
       }
       return undefined;
     }
@@ -112,7 +115,12 @@ export function guardExtension(pi: ExtensionAPI) {
       if (event.toolName === "read" && basename(targetPath) === "SKILL.md") {
         return undefined;
       }
-      return block(`${event.toolName}：路径越出工作目录（${targetPath}）`);
+      // Log the path so operators can spot probing patterns; the model already knows the path.
+      return block(`${event.toolName}：路径越出工作目录（${targetPath}）`, {
+        toolName: event.toolName,
+        targetPath,
+        cwd: ctx.cwd,
+      });
     }
 
     return undefined;

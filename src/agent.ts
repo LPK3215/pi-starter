@@ -9,6 +9,9 @@
  *                                   noSkills 只关掉 ~/.pi，不关 extra 路径
  *   4. 知识库 / 数据库            → 进程内 Markdown + node:sqlite（SDK 没有这两项）
  *   5. createAgentSession()       → 默认档位带 read，好让 SDK 把技能目录写进系统提示词
+ *
+ * 多对话支持：`createSession()` 每次新建一套独立的 loader + session（每个对话一个 runtime），
+ * 供 Web 端「多对话并发」使用；CLI / 库调用方只用首个 session，无需感知。
  */
 
 import { existsSync } from "node:fs";
@@ -36,7 +39,13 @@ import { allTools } from "./tools/index.js";
 import { allExtensions, type ExtensionFactory } from "./extensions/index.js";
 import { loadScaffoldSkills, resolveSkillPaths, type LoadedSkill } from "./skills/index.js";
 import { formatKnowledgeCatalog, loadScaffoldKnowledge, type KnowledgeDoc } from "./knowledge/index.js";
+import {
+  composePrompt,
+  defaultPromptTemplate,
+  type PromptLayers,
+} from "./prompts/composer.js";
 import { openScaffoldDatabase, type DatabaseStore } from "./db/index.js";
+import { getLogger } from "./log.js";
 import { createReadKnowledgeTool, createSearchKnowledgeTool } from "./tools/knowledge.js";
 import { createDbQueryTool, createDbStatusTool } from "./tools/database.js";
 
@@ -50,9 +59,25 @@ function resolvePromptsDir(): string {
   ];
   const found = candidates.find((dir) => existsSync(join(dir, "persona.md")));
   if (!found) {
-    throw new Error(`找不到 prompts/persona.md（试过 ${candidates.join("、")}）`);
+    throw new Error(`prompts/persona.md not found (tried ${candidates.join(", ")})`);
   }
   return found;
+}
+
+/**
+ * Render the system prompt from an optional template.
+ * Empty template → the default `{{persona}}\n\n{{rules}}\n\n…` order.
+ */
+function renderSystemPrompt(template: string | undefined, layers: PromptLayers): string {
+  const trimmed = template?.trim();
+  return composePrompt(trimmed ? trimmed : defaultPromptTemplate(), layers);
+}
+
+/** One-line-per-skill catalog for the `{{skills}}` prompt layer (empty when no skills). */
+function formatSkillCatalog(skills: readonly LoadedSkill[]): string | undefined {
+  if (skills.length === 0) return undefined;
+  const lines = skills.map((skill) => `- ${skill.name}: ${skill.description}`);
+  return `Available skills (load with /<name>):\n${lines.join("\n")}`;
 }
 
 /** 组装 Agent 的配置选项 */
@@ -63,6 +88,13 @@ export interface BuildAgentOptions {
   modelId?: string;
   /** 系统提示词：默认读取 prompts/ 目录下的 persona + rules */
   systemPrompt?: string;
+  /**
+   * 提示词模板（`{{persona}}` / `{{rules}}` / `{{knowledge}}` / `{{skills}}` / `{{cwd}}` 等）。
+   * 留空走默认顺序。接入 settings 时传 `settings.promptTemplate` 即可让该设置真正生效。
+   */
+  promptTemplate?: string;
+  /** 追加到系统提示词的业务段（对应模板的 `{{append}}`），垂直 Agent 注入领域规则用。 */
+  promptAppend?: string;
   /** 是否使用内存会话（Web 场景推荐；CLI 可落盘） */
   inMemory?: boolean;
   /** 注入额外工具（叠在 src/tools 登记的工具之上） */
@@ -81,10 +113,19 @@ export interface BuildAgentOptions {
   builtinTools?: BuiltinToolMode | string;
 }
 
+type AgentSession = Awaited<ReturnType<typeof createAgentSession>>["session"];
+
 /** 组装完成后的结果 */
 export interface BuiltAgent {
-  session: Awaited<ReturnType<typeof createAgentSession>>["session"];
-  model: Model<any>;
+  session: AgentSession;
+  /**
+   * The live active model.
+   *
+   * A getter, not a snapshot: `switchModel()` mutates the underlying session, and a frozen
+   * copy would keep reporting the pre-switch model to `/info`, `/health` and any library
+   * consumer that reads `agent.model`.
+   */
+  readonly model: Model<any>;
   builtinTools: BuiltinToolMode;
   skills: LoadedSkill[];
   knowledge: KnowledgeDoc[];
@@ -94,8 +135,17 @@ export interface BuiltAgent {
   /**
    * 运行中切换模型，不重建会话。
    * ref 支持 provider/modelId，也支持唯一的裸 modelId。
+   *
+   * Only affects the shared `session`. Multi-conversation servers should route switches
+   * through `SessionHub.setModel()` instead so every conversation stays consistent.
    */
   switchModel(ref: string): Promise<Model<any>>;
+  /**
+   * 新建一套独立的 session（每个对话一个 runtime），供多对话并发使用。
+   * 每次调用都会重建 loader，保证对话之间不共享可变状态。
+   * 可选：缺席时 Web 端自动降级为单对话模式（复用 `session`）。
+   */
+  createSession?(): Promise<AgentSession>;
   dispose(): void;
 }
 
@@ -117,25 +167,43 @@ export async function buildAgent(options: BuildAgentOptions = {}): Promise<Built
   const modelRuntime = await ModelRuntime.create();
   const available = await modelRuntime.getAvailable();
   if (available.length === 0) {
-    throw new Error(`没有可用模型。${SETUP_HINT}`);
+    throw new Error(`No available model. ${SETUP_HINT}`);
   }
 
   const picked = resolveModelRef({ provider: cfg.provider, model: cfg.modelId }, available);
   if (!picked?.model) {
     throw new Error(
-      `找不到模型 ${cfg.provider}/${cfg.modelId}。可用的是：\n${formatModelChoices(available)}\n  ${SETUP_HINT}`,
+      `Model ${cfg.provider}/${cfg.modelId} not found. Available:\n${formatModelChoices(available)}\n  ${SETUP_HINT}`,
     );
   }
   const model = picked.model;
 
-  const skillPaths = resolveSkillPaths(options.extraSkillPaths);
-  const skills = loadScaffoldSkills(options.extraSkillPaths);
+  // Same filter for both the SDK's paths and our own inventory, so `/skills` can never
+  // disagree with what the system prompt actually carries. Surfaces what was dropped —
+  // a silently missing skill is far harder to debug than a noisy log line.
+  const skillOptions = {
+    onSkip: (skillDir: string, reason: string) => {
+      getLogger().warn("技能已跳过", { skillDir, reason });
+    },
+  };
+  const skillPaths = resolveSkillPaths(options.extraSkillPaths, skillOptions);
+  const skills = loadScaffoldSkills(options.extraSkillPaths, skillOptions);
   const knowledge = loadScaffoldKnowledge(options.extraKnowledgeDirs);
   const database =
     options.database ??
     openScaffoldDatabase({
       path: options.databasePath?.trim() || process.env.PI_DATABASE_PATH?.trim() || undefined,
     });
+
+  const knowledgeCatalog = formatKnowledgeCatalog(knowledge);
+  const layers: PromptLayers = {
+    persona: "",
+    rules: "",
+    knowledge: knowledgeCatalog || undefined,
+    cwd: process.cwd(),
+    skills: formatSkillCatalog(skills),
+    append: options.promptAppend,
+  };
 
   let systemPrompt = options.systemPrompt;
   if (!systemPrompt) {
@@ -144,10 +212,16 @@ export async function buildAgent(options: BuildAgentOptions = {}): Promise<Built
       readFile(join(promptsDir, "persona.md"), "utf-8"),
       readFile(join(promptsDir, "rules.md"), "utf-8"),
     ]);
-    systemPrompt = `${persona}\n\n${rules}`;
+    layers.persona = persona;
+    layers.rules = rules;
+    // Route the default path through the composer so `settings.promptTemplate` is honoured.
+    // With no template this renders exactly `persona + rules + knowledge` (empty layers are
+    // dropped), i.e. the previous hardcoded concatenation — no behaviour change by default.
+    systemPrompt = renderSystemPrompt(options.promptTemplate, layers);
+  } else if (knowledgeCatalog) {
+    // Caller-supplied prompts stay verbatim; only append the knowledge catalog as before.
+    systemPrompt = `${systemPrompt}\n\n${knowledgeCatalog}`;
   }
-  const knowledgeCatalog = formatKnowledgeCatalog(knowledge);
-  if (knowledgeCatalog) systemPrompt = `${systemPrompt}\n\n${knowledgeCatalog}`;
 
   const dynamicTools = [
     ...(knowledge.length > 0
@@ -157,43 +231,70 @@ export async function buildAgent(options: BuildAgentOptions = {}): Promise<Built
     createDbQueryTool(database),
   ];
   const allToolList = [...allTools, ...dynamicTools, ...(options.extraTools ?? [])];
+  const toolPolicy = sessionToolPolicy(
+    cfg.builtinTools,
+    allToolList.map((tool) => tool.name),
+  );
 
-  const loader = new DefaultResourceLoader({
-    cwd: process.cwd(),
-    agentDir: getAgentDir(),
-    noExtensions: true,
-    noSkills: true,
-    noContextFiles: true,
-    additionalSkillPaths: skillPaths,
-    systemPromptOverride: () => systemPrompt,
-    appendSystemPromptOverride: () => [],
-    extensionFactories: [
-      (pi) => {
-        for (const tool of allToolList) pi.registerTool(tool);
-      },
-      ...allExtensions,
-      ...(options.extraExtensions ?? []),
-    ],
-  });
-  await loader.reload();
+  /** Build a fresh resource loader (one per session, so conversations stay isolated). */
+  const buildLoader = async (): Promise<DefaultResourceLoader> => {
+    const loader = new DefaultResourceLoader({
+      cwd: process.cwd(),
+      agentDir: getAgentDir(),
+      noExtensions: true,
+      noSkills: true,
+      noContextFiles: true,
+      additionalSkillPaths: skillPaths,
+      systemPromptOverride: () => systemPrompt,
+      appendSystemPromptOverride: () => [],
+      extensionFactories: [
+        (pi) => {
+          for (const tool of allToolList) pi.registerTool(tool);
+        },
+        ...allExtensions,
+        ...(options.extraExtensions ?? []),
+      ],
+    });
+    await loader.reload();
+    return loader;
+  };
 
-  const { session } = await createAgentSession({
-    cwd: process.cwd(),
-    model,
-    modelRuntime,
-    resourceLoader: loader,
-    sessionManager: options.inMemory
-      ? SessionManager.inMemory()
-      : SessionManager.create(process.cwd()),
-    ...sessionToolPolicy(
-      cfg.builtinTools,
-      allToolList.map((tool) => tool.name),
-    ),
-  });
+  const createSession = async (): Promise<AgentSession> => {
+    const loader = await buildLoader();
+    const { session } = await createAgentSession({
+      cwd: process.cwd(),
+      model,
+      modelRuntime,
+      resourceLoader: loader,
+      sessionManager: options.inMemory
+        ? SessionManager.inMemory()
+        : SessionManager.create(process.cwd()),
+      ...toolPolicy,
+    });
+    return session;
+  };
+
+  const session = await createSession();
+
+  /**
+   * Single source of truth for "which model is active".
+   *
+   * This used to be a frozen `model` field captured at build time, so after any
+   * `switchModel()` the exported object still reported the ORIGINAL model — `/info` and
+   * `/health` would advertise a model the agent was no longer using. Making it a getter
+   * removes the class of bug entirely: there is no longer a value that can go stale.
+   */
+  const currentModel = (): Model<any> => session.model ?? model;
 
   return {
     session,
-    model,
+    /**
+     * The live model. Prefer this over any cached copy; it reflects `switchModel()`
+     * immediately.
+     */
+    get model() {
+      return currentModel();
+    },
     builtinTools: cfg.builtinTools,
     skills,
     knowledge,
@@ -206,6 +307,7 @@ export async function buildAgent(options: BuildAgentOptions = {}): Promise<Built
       await session.setModel(next.model);
       return next.model;
     },
+    createSession,
     dispose: () => {
       session.dispose();
       database.close();

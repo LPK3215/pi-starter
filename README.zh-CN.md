@@ -2,7 +2,55 @@
 
 **中文** | [English](README.md)
 
+<p>
+  <a href="https://github.com/LPK3215/pi-starter/releases"><img alt="release" src="https://img.shields.io/github/package-json/v/LPK3215/pi-starter?label=release&color=blue"/></a>
+  <a href="LICENSE"><img alt="license" src="https://img.shields.io/github/license/LPK3215/pi-starter?color=green"/></a>
+  <a href="https://nodejs.org/"><img alt="node" src="https://img.shields.io/badge/node-%3E%3D22.19-brightgreen"/></a>
+  <a href="https://github.com/LPK3215/pi-starter/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/LPK3215/pi-starter/ci.yml?branch=main&label=CI"/></a>
+  <a href="https://github.com/LPK3215/pi-starter/issues"><img alt="issues" src="https://img.shields.io/github/issues/LPK3215/pi-starter"/></a>
+  <a href="https://github.com/LPK3215/pi-starter/commits/main"><img alt="last commit" src="https://img.shields.io/github/last-commit/LPK3215/pi-starter"/></a>
+  <a href="CONTRIBUTING.md"><img alt="PRs welcome" src="https://img.shields.io/badge/PRs-welcome-brightgreen"/></a>
+</p>
+
+**仓库地址**：<https://github.com/LPK3215/pi-starter> · **上游 SDK**：[earendil-works/pi](https://github.com/earendil-works/pi)
+
 基于 [pi-agent](https://github.com/earendil-works/pi) SDK 的 **Agent 脚手架**：拿到就能跑，往上加工具、加扩展、改人设，就变成一个垂直 Agent。
+
+## 架构总览
+
+<p align="center">
+  <img alt="pi-starter 架构分层图" src="./docs/architecture.svg" width="920"/>
+</p>
+
+*脚手架分层视图。从上到下：入口（CLI / HTTP + SSE / 库）→ `src/agent.ts` 组装层 → 业务资源（工具 / 技能 / 知识库 / 扩展）→ HTTP 契约与 SSE 翻译 → 运行时依赖与配置面。图中所有计数、模块名、版本与事件名都由 [`scripts/visualization/generate_architecture.mjs`](scripts/visualization/generate_architecture.mjs) 在生成时从源码里读。*
+
+每次 `POST /chat` 都走同一条链路：HTTP 体→忙碌闸门→`session.prompt`→`tool_call` 钩子（扩展链，例如 `guard`）→工具执行→`tool_result` 钩子（例如 `audit`）→SDK 事件→`translateEvent()`→SSE 帧回到客户端。
+
+<p align="center">
+  <img alt="POST /chat SSE 生命周期" src="./docs/sse-protocol.svg" width="920"/>
+</p>
+
+*时序图由 [`scripts/visualization/generate_request_flow.mjs`](scripts/visualization/generate_request_flow.mjs) 生成。事件词表（`text`、`thinking`、`tool_start`、`tool_end`、`done`、`error`）与工具结果预览上限都从 [`src/sse.ts`](src/sse.ts) 和 [`src/app.ts`](src/app.ts) 里读，不写死。*
+
+<!-- TODO: 截图待补充 — CLI 会话示例与 public/index.html 浏览器截图 -->
+
+## 技术栈
+
+| 层级 | 库 / 运行时 | 版本 | 说明 |
+|---|---|---|---|
+| 语言 | TypeScript | `^5.6.0` | `strict: true`、`module: NodeNext`、`target: ES2022` |
+| 运行时 | Node.js | `>=22.19` | 需要内置 `node:sqlite` |
+| 模块体系 | ESM | `"type": "module"` | 构建产物在 `dist/`，对外 `import "pi-starter"` |
+| Agent SDK | [`@earendil-works/pi-agent-core`](https://github.com/earendil-works/pi) | `0.83.0` | 钉版本 |
+| AI 适配 | [`@earendil-works/pi-ai`](https://github.com/earendil-works/pi) | `0.83.0` | 钉版本 |
+| Coding Agent | [`@earendil-works/pi-coding-agent`](https://github.com/earendil-works/pi) | `0.83.0` | 工具 / 扩展契约 |
+| HTTP | [Express](https://expressjs.com/) | `^5.2.1` | 单进程、单会话 |
+| Schema | [TypeBox](https://www.npmjs.com/package/typebox) | `^1.1.39` | 工具 `parameters` 定义 |
+| WebSocket | [ws](https://www.npmjs.com/package/ws) | `^8.18.0` | 预留传输层扩展 |
+| 测试 | Node 内置 test runner，走 `tsx --test` | `^4.22.4` | 10 个文件 · 39 个冒烟用例，不调模型 |
+| 构建 | `tsc -p tsconfig.build.json` + `scripts/dist-assets.cjs` | `^5.6.0` | 把 `prompts/`、`skills/`、`knowledge/` 拷到 `dist/` |
+
+上面这张表的单一真源是 [`package.json`](package.json)。版本变更时，代码与本表同步；架构 SVG 自动刷新（`node scripts/visualization/generate_architecture.mjs`）。
 
 ## 特性
 
@@ -211,8 +259,22 @@ pi-starter/
 │       ├── index.ts      #   ★ 登记入口
 │       ├── guard.ts      #   示例：tool_call 拦截（危险 bash / 路径越界）
 │       └── audit.ts      #   示例：工具调用审计日志
-└── public/
-    └── index.html        # 示例对话页（试接口用，不是产品前端）
+├── scripts/
+│   ├── dist-assets.cjs   # clean / copy 将 prompts+skills+knowledge 拷到 dist/
+│   └── visualization/    # README 图产出脚本（见下）
+│       ├── generate_architecture.mjs
+│       ├── generate_request_flow.mjs
+│       └── README.md
+├── docs/                 # 自动生成的 SVG，两份 README 都引用同一份
+│   ├── architecture.svg
+│   └── sse-protocol.svg
+├── .github/workflows/
+│   └── ci.yml            # typecheck + test + build，矩阵跨 ubuntu / windows / macos
+├── public/
+│   └── index.html        # 示例对话页（试接口用，不是产品前端）
+├── LICENSE  README.md  README.zh-CN.md  CONTRIBUTING.md  SECURITY.md
+├── CHANGELOG.md  FAQ.md  AUTHORS  .gitignore  .gitattributes
+└── package.json  tsconfig.json  tsconfig.build.json  .env.example
 ```
 
 契约类冒烟测试（不调模型、不写真实 `~/.pi/agent`）：
@@ -415,6 +477,43 @@ curl -X POST http://localhost:3000/db/query \
 - **打开编码工具**：`PI_BUILTIN_TOOLS=coding` 或 `--builtin-tools coding`。打开后 `guard` 仍会拦截危险 bash 和越出 cwd 的路径。
 - **模型切换**：启动时 `--model provider/modelId`；CLI `/model`；HTTP `POST /model`。只接受已配好 Key 的模型，走 `session.setModel`，不重建会话。
 - **技能 / 知识库 / 数据库**：技能丢进 `src/skills/`；知识库丢进 `src/knowledge/`；数据库默认内存，或 `PI_DATABASE_PATH` / `buildAgent({ database })`。要接向量库或远程 SQL，写成工具从 `extraTools` 进来。
+
+## 文档导航
+
+| 文件 | 内容 |
+|---|---|
+| [`README.md`](README.md) | 英文主版（同章节 1∶1 对齐） |
+| [`CHANGELOG.md`](CHANGELOG.md) | 版本历史（Keep a Changelog + SemVer） |
+| [`CONTRIBUTING.md`](CONTRIBUTING.md) | 开发环境、项目地图、自检命令、提交约定 |
+| [`SECURITY.md`](SECURITY.md) | 漏洞报告与内建安全边界 |
+| [`FAQ.md`](FAQ.md) | 安装 / 运行时 / 模型切换 / 部署 / 开发 常见问题 |
+| [`AUTHORS`](AUTHORS) | 维护者 |
+| [`scripts/visualization/README.md`](scripts/visualization/README.md) | 上面两张图的重新生成方式 |
+
+## 贡献
+
+欢迎 PR，开题分支即可。完整流程与自检命令见 [`CONTRIBUTING.md`](CONTRIBUTING.md)。计数、工具、endpoint 或 SSE 事件变化后，记得跑图产出脚本：
+
+```bash
+node scripts/visualization/generate_architecture.mjs
+node scripts/visualization/generate_request_flow.mjs
+```
+
+## 安全
+
+pi-starter 定位 **本地优先** 脚手架。HTTP 服务默认监听所有网卡且无鉴权；`guard` 基于正则拦截，不是沙箱。部署到 `localhost` 以外环境前请先读 [`SECURITY.md`](SECURITY.md)。
+
+## 作者
+
+- **LPK3215** · GitHub [@LPK3215](https://github.com/LPK3215) · ✉️ <17538703215@163.com>
+
+完整名单参见 [`AUTHORS`](AUTHORS) 与 [contributors graph](https://github.com/LPK3215/pi-starter/graphs/contributors)。
+
+## 致谢
+
+- [pi-agent SDK](https://github.com/earendil-works/pi)（`@earendil-works/pi-agent-core`、`pi-ai`、`pi-coding-agent`）——本脚手架封装的 Agent 运行时
+- [Agent Skills 规范](https://agentskills.io/specification) —— `SKILL.md` 格式
+- Node.js 团队——内置 `node:sqlite`（>=22.5），不再需要原生驱动
 
 ## 许可
 

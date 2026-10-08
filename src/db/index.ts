@@ -25,6 +25,10 @@ export interface DbPing {
 export interface QueryResult {
   columns: string[];
   rows: Record<string, SQLOutputValue>[];
+  /** 是否因超过 maxRows 而被截断。 */
+  truncated: boolean;
+  /** 截断前的总行数（用于告知调用方「还有多少没拿到」）。 */
+  totalRows: number;
 }
 
 export interface DatabaseStore {
@@ -44,7 +48,12 @@ export interface OpenDatabaseOptions {
   path?: string;
   /** 空表时写入示例行。默认 true。测试要空库就传 false。 */
   seed?: boolean;
+  /** query() 单次返回的最大行数，默认 200。 */
+  maxRows?: number;
 }
+
+/** query() 默认行数上限。200 行足够业务查询，又不至于撑爆上下文。 */
+export const DEFAULT_MAX_ROWS = 200;
 
 const DEFAULT_SEED: ReadonlyArray<{ title: string; body: string }> = [
   {
@@ -57,21 +66,182 @@ const DEFAULT_SEED: ReadonlyArray<{ title: string; body: string }> = [
   },
 ];
 
-/** 只允许单条 SELECT / WITH…SELECT。拒绝写库、多语句、附加 pragma。 */
-export function isReadOnlySql(sql: string): boolean {
-  const stripped = sql
-    .replace(/\/\*[\s\S]*?\*\//g, " ")
-    .replace(/--[^\n\r]*/g, " ")
-    .trim();
-  if (!stripped) return false;
-  const parts = stripped
+/**
+ * 只读 SQL 校验（白名单 token 扫描，非正则匹配）。
+ *
+ * ## 为什么不用正则
+ * 改造前用 `/^(with|select)/i` 开头匹配 + 少量禁用前缀，结果被证明**可绕过**：
+ *   `WITH x AS (DELETE FROM notes RETURNING *) SELECT * FROM x`
+ * 因为语句以 `WITH` 开头就直接放行，CTE 内部的写操作完全没被检查。
+ * （实测当前 node:sqlite 会自行报错拒绝该语法，因此未造成实际数据损坏，
+ *   但这是「依赖 SQLite 兜底」而非「自己拦住」，一旦换驱动/换引擎即刻失守。）
+ *
+ * ## 本实现的做法
+ * 1. 先剥离注释与字符串字面量（避免注释/引号里藏关键字绕过）；
+ *    剥离失败（未闭合注释/引号）→ 判定非法，而不是放行。
+ * 2. 对剥离后的 SQL 做**分词**，得到关键字序列。
+ * 3. 全文扫描：出现任何写/危险关键字即拒绝（不看位置），
+ *    因此 CTE 内的 DELETE/UPDATE/INSERT/PRAGMA 同样会被拦下。
+ *
+ * 只读语句允许的关键字：WITH / SELECT / VALUES 及常见只读修饰。
+ */
+
+/** 出现在 SQL 任何位置都判定为「非只读」的关键字。 */
+const FORBIDDEN_KEYWORDS = new Set([
+  // 写入
+  "insert", "update", "delete", "replace", "upsert", "merge",
+  // DDL
+  "create", "alter", "drop", "truncate", "rename",
+  // 事务与连接级副作用
+  "begin", "commit", "rollback", "savepoint", "release",
+  "attach", "detach", "vacuum", "reindex", "analyze",
+  "pragma",
+  // 触发器 / 视图等可写入对象
+  "trigger", "view",
+]);
+
+/** 单条 SQL 允许的最大长度（字符）。超长既无意义也是攻击面。 */
+export const MAX_SQL_LENGTH = 20_000;
+
+export interface SqlScanResult {
+  ok: boolean;
+  /** 失败原因（ok=true 时为 null），直接可用于报错文案。 */
+  reason: string | null;
+  /** 命中的禁用关键字（便于审计定位）。 */
+  keyword?: string;
+}
+
+/**
+ * 剥离注释与字符串字面量，替换为空格。
+ * 返回 null 表示**语法不完整**（未闭合注释 / 引号）——必须拒绝。
+ */
+function stripCommentsAndLiterals(sql: string): string | null {
+  let out = "";
+  let i = 0;
+  const n = sql.length;
+  while (i < n) {
+    const ch = sql[i];
+    const next = sql[i + 1];
+
+    // 行注释 -- …（到行尾）
+    if (ch === "-" && next === "-") {
+      while (i < n && sql[i] !== "\n") i += 1;
+      continue;
+    }
+    // 块注释 /* … */（必须闭合，否则判非法）
+    if (ch === "/" && next === "*") {
+      const end = sql.indexOf("*/", i + 2);
+      if (end === -1) return null;
+      i = end + 2;
+      out += " ";
+      continue;
+    }
+    // 字符串字面量 '…' （含 '' 转义）
+    if (ch === "'" || ch === '"') {
+      const quote = ch;
+      let j = i + 1;
+      let closed = false;
+      while (j < n) {
+        if (sql[j] === quote) {
+          if (sql[j + 1] === quote) { j += 2; continue; } // '' 转义
+          closed = true;
+          break;
+        }
+        j += 1;
+      }
+      if (!closed) return null;
+      out += " ";
+      i = j + 1;
+      continue;
+    }
+    // 反引号标识符 `x` 与方括号 [x]
+    if (ch === "`") {
+      const end = sql.indexOf("`", i + 1);
+      if (end === -1) return null;
+      out += " ";
+      i = end + 1;
+      continue;
+    }
+    if (ch === "[") {
+      const end = sql.indexOf("]", i + 1);
+      if (end === -1) return null;
+      out += " ";
+      i = end + 1;
+      continue;
+    }
+    out += ch;
+    i += 1;
+  }
+  return out;
+}
+
+/** 提取标识符/关键字序列（连续字母、数字、下划线）。 */
+function tokenize(sql: string): string[] {
+  const tokens: string[] = [];
+  const re = /[A-Za-z_][A-Za-z0-9_]*/g;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(sql)) !== null) {
+    tokens.push(match[0].toLowerCase());
+  }
+  return tokens;
+}
+
+/**
+ * 扫描 SQL 是否严格只读。
+ * 导出以便测试断言具体原因，而不是只拿布尔值。
+ */
+export function scanReadOnlySql(sql: string): SqlScanResult {
+  if (typeof sql !== "string") return { ok: false, reason: "sql 必须是字符串" };
+  const trimmed = sql.trim();
+  if (!trimmed) return { ok: false, reason: "sql 为空" };
+  if (trimmed.length > MAX_SQL_LENGTH) {
+    return { ok: false, reason: `sql 超过 ${MAX_SQL_LENGTH} 字符上限` };
+  }
+
+  const stripped = stripCommentsAndLiterals(trimmed);
+  if (stripped === null) {
+    // 注释/引号未闭合：可能是构造绕过，也可能是单纯写错，一律拒绝。
+    return { ok: false, reason: "sql 含有未闭合的注释或字符串字面量" };
+  }
+
+  // 分号分割后必须**恰好一条**语句（尾随空段允许）。
+  const statements = stripped
     .split(";")
     .map((part) => part.trim())
     .filter(Boolean);
-  if (parts.length !== 1) return false;
-  const statement = parts[0] ?? "";
-  if (/^\s*(pragma|attach|detach|vacuum|reindex)\b/i.test(statement)) return false;
-  return /^(with\b[\s\S]+select\b|select\b)/i.test(statement);
+  if (statements.length === 0) return { ok: false, reason: "sql 为空" };
+  if (statements.length > 1) {
+    return { ok: false, reason: "只允许单条语句（检测到多条，以分号分隔）" };
+  }
+
+  const statement = statements[0] ?? "";
+
+  // 必须以 SELECT 或 WITH 开头（WITH 的内部仍会经过下面的全文关键字扫描）。
+  if (!/^\s*(with|select)\b/i.test(statement)) {
+    return { ok: false, reason: "只允许以 SELECT 或 WITH 开头的只读语句" };
+  }
+
+  // 全文扫描禁用关键字 —— 这是拦住 CTE 内写入的关键一步。
+  for (const token of tokenize(statement)) {
+    if (FORBIDDEN_KEYWORDS.has(token)) {
+      return { ok: false, reason: `检测到非只读关键字：${token.toUpperCase()}`, keyword: token };
+    }
+  }
+
+  // 首关键字之后必须出现 SELECT（WITH ... SELECT / WITH ... VALUES 都满足）。
+  if (!/\bselect\b/i.test(statement) && !/\bvalues\b/i.test(statement)) {
+    return { ok: false, reason: "WITH 子句必须以 SELECT 或 VALUES 收尾" };
+  }
+
+  return { ok: true, reason: null };
+}
+
+/**
+ * 判断是否为只读 SQL。
+ * 保持原有导出签名（布尔），内部委托给 scanReadOnlySql。
+ */
+export function isReadOnlySql(sql: string): boolean {
+  return scanReadOnlySql(sql).ok;
 }
 
 function asNote(row: Record<string, SQLOutputValue> | undefined): NoteRow | undefined {
@@ -88,6 +258,10 @@ function asNote(row: Record<string, SQLOutputValue> | undefined): NoteRow | unde
 export function openDatabase(options: OpenDatabaseOptions = {}): DatabaseStore {
   const path = options.path?.trim() || ":memory:";
   const seed = options.seed !== false;
+  const maxRows =
+    typeof options.maxRows === "number" && Number.isInteger(options.maxRows) && options.maxRows > 0
+      ? options.maxRows
+      : DEFAULT_MAX_ROWS;
   const db = new DatabaseSync(path);
   db.exec(`
     CREATE TABLE IF NOT EXISTS notes (
@@ -144,19 +318,24 @@ export function openDatabase(options: OpenDatabaseOptions = {}): DatabaseStore {
       return row;
     },
     query(sql, params = []) {
-      if (!isReadOnlySql(sql)) {
-        throw new Error("只允许单条 SELECT / WITH…SELECT");
+      const scan = scanReadOnlySql(sql);
+      if (!scan.ok) {
+        // Surface the specific reason so the model can correct itself instead of guessing.
+        throw new Error(scan.reason ?? "只允许单条 SELECT / WITH…SELECT");
       }
+      // Hard cap on returned rows. `SELECT * FROM huge_table` would otherwise pull the whole
+      // table into memory and then into the LLM context in one tool result.
       const stmt = db.prepare(sql);
       const raw = stmt.all(...params) as Record<string, SQLOutputValue>[];
-      const rows = raw.map((row) => ({ ...row }));
+      const truncated = raw.length > maxRows;
+      const rows = (truncated ? raw.slice(0, maxRows) : raw).map((row) => ({ ...row }));
       const columns =
         rows[0] !== undefined
           ? Object.keys(rows[0])
           : typeof stmt.columns === "function"
             ? stmt.columns().map((col) => col.name)
             : [];
-      return { columns, rows };
+      return { columns, rows, truncated, totalRows: raw.length };
     },
     close() {
       if (db.isOpen) db.close();

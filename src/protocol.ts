@@ -1,0 +1,288 @@
+/**
+ * pi-starter · 协议单源（★ single source of truth）
+ *
+ * 定义 client ↔ server 的**全部**消息类型与快照结构。新增字段只改这里，
+ * 前后端各自 `import type`，杜绝协议散落在翻译表里（pi-web-ui 的 protocol.ts 同思路，
+ * 但按「垂直 Agent 脚手架」裁剪：去掉编码助手专属的终端 / SCM / 插件市场 / DSH 双引擎命令）。
+ *
+ * 三类消息闭环：
+ *   A. ClientMessage  客户端 → 服务端命令（dispatch）
+ *   B. ServerMessage  服务端 → 客户端推送（快照 + delta + 应答）
+ *   C. UiState        服务端唯一事实源（客户端只按它渲染）
+ *
+ * 版本协商：客户端 `hello.protocolVersion` ↔ 服务端 `ready.protocolVersion`，
+ * 不一致时服务端在 ready 里回带自身版本，客户端自行决定降级或断开。
+ */
+
+/** 当前线协议版本。改动不兼容字段时 +1。 */
+export const PROTOCOL_VERSION = 1;
+
+/* ────────────────────────── 快照结构（C 类） ────────────────────────── */
+
+/** Light projection of a conversation message for UI rendering. */
+export interface UiMessage {
+  role: "user" | "assistant";
+  text: string;
+  timestamp?: number;
+}
+
+/** Model descriptor carried in the snapshot. */
+export interface UiModel {
+  provider: string;
+  id: string;
+  name: string;
+}
+
+/**
+ * Context-budget state derived from the same estimator the trim planner uses.
+ * Lets the client show "context 82% full, compaction recommended" without duplicating the maths.
+ */
+export interface UiContext {
+  /** Estimated tokens currently held by the conversation. */
+  tokens: number;
+  /** Soft cap (context window − reserve). 0 when the model window is unknown. */
+  softCap: number;
+  /** tokens / softCap clamped to [0,1]; 0 when softCap is unknown. */
+  usage: number;
+  /** Whether a trim/compaction is warranted right now. */
+  overBudget: boolean;
+}
+
+/** Token / cost statistics carried in the snapshot. */
+export interface UiStats {
+  input: number;
+  output: number;
+  total: number;
+  cost: number;
+  /** 上下文软上限（模型窗口 - reserve），0 表示未知。 */
+  softCap: number;
+  /** 估算的当前上下文占用 token，用于 UI 进度条。 */
+  contextTokens: number;
+  /** 上下文预算状态（含进度比例与是否超限），与裁剪器同源。 */
+  context: UiContext;
+}
+
+/** Pending message queues surfaced to the client. */
+export interface UiQueue {
+  steering: string[];
+  followUp: string[];
+}
+
+/** A tool surfaced to the client (metadata only, schema 不进快照). */
+export interface UiTool {
+  name: string;
+  description: string;
+  /** 来源：builtin（SDK）/ custom（脚手架登记）/ dynamic（运行时装配）。 */
+  source: "builtin" | "custom" | "dynamic";
+  /** 能力标签，供 UI 分组与策略匹配（如 fs.write / net / shell）。 */
+  capabilities: string[];
+  /** 是否当前激活。 */
+  enabled: boolean;
+}
+
+/** Approval request awaiting a human decision. */
+export interface UiApproval {
+  requestId: string;
+  toolName: string;
+  /** 命中的规则 id（内置为 `builtin:<id>`）。 */
+  ruleId: string;
+  reason: string;
+  /** 触发审批的字段摘录（command / path / params）。 */
+  preview: string;
+}
+
+/** Conversation summary for the cross-conversation list. */
+export interface UiConversation {
+  id: string;
+  title: string;
+  active: boolean;
+  streaming: boolean;
+  messageCount: number;
+  updatedAt: number;
+}
+
+/**
+ * Server-authored authoritative state snapshot.
+ * The client renders from this; on reconnect it requests a fresh full snapshot.
+ */
+export interface UiState {
+  clientId: string;
+  cwd: string;
+  sessionId: string;
+  conversationId: string;
+  /** Monotonic revision counter for the snapshot chain. */
+  rev: number;
+  messages: UiMessage[];
+  /**
+   * True when `messages` was capped to the most recent MAX_SNAPSHOT_MESSAGES entries.
+   * Lets the UI show "load older" instead of silently pretending the history ends here.
+   * The server always retains the full history.
+   */
+  messagesTruncated?: boolean;
+  /** Total chat message count on the server, even when `messages` is capped. */
+  totalMessages?: number;
+  /** Partial assistant message currently streaming, or null when idle. */
+  streamingMessage: UiMessage | null;
+  isStreaming: boolean;
+  model: UiModel;
+  thinkingLevel: string;
+  /** 当前激活的工具名（供旧客户端兼容；新客户端读 capabilities.tools）。 */
+  tools: string[];
+  queue: UiQueue;
+  stats: UiStats;
+  /** 待人类决策的审批请求，null 表示无。 */
+  pendingApproval: UiApproval | null;
+  /** 运行中对话列表（含自身）。 */
+  conversations: UiConversation[];
+}
+
+/** Light state used by `snapshot_delta` (messages are carried separately). */
+export type UiStateLight = Omit<UiState, "messages" | "streamingMessage">;
+
+/* ────────────────────────── A 类：客户端命令 ────────────────────────── */
+
+/** 审批决策三态。 */
+export type ApprovalDecision = "allow" | "deny" | "modify";
+
+/** 审批放行范围：once 仅本次 / category 同档位 / all 本对话全部。 */
+export type ApprovalScope = "once" | "category" | "all";
+
+/** Client → server commands. */
+export type ClientMessage =
+  // 连接与状态
+  | { type: "hello"; clientId?: string; protocolVersion?: number; locale?: string }
+  | { type: "get_state" }
+  | { type: "ping" }
+  // 对话运行
+  | { type: "prompt"; text: string }
+  | { type: "abort" }
+  | { type: "draft_update"; text: string }
+  // 会话编排
+  | { type: "new_conversation" }
+  | { type: "switch_conversation"; conversationId: string }
+  | { type: "close_conversation"; conversationId: string }
+  | { type: "list_conversations" }
+  // 模型与思考
+  | { type: "list_models" }
+  | { type: "set_model"; modelId: string }
+  | { type: "set_thinking"; level: string }
+  // 能力目录
+  | { type: "get_capabilities" }
+  | { type: "set_tool_enabled"; name: string; enabled: boolean }
+  | { type: "search_knowledge"; query: string }
+  // 审批
+  | {
+      type: "approval_response";
+      requestId: string;
+      decision: ApprovalDecision;
+      scope?: ApprovalScope;
+      /** decision = modify 时改写后的工具入参（JSON）。 */
+      modifiedArgs?: Record<string, unknown>;
+    }
+  // 设置
+  | { type: "get_settings" }
+  | { type: "set_settings"; settings: Record<string, unknown> };
+
+/* ────────────────────────── B 类：服务端推送 ────────────────────────── */
+
+/** Server → client messages. */
+export type ServerMessage =
+  | {
+      type: "ready";
+      clientId: string;
+      protocolVersion: number;
+      serverVersion: string;
+      /** 客户端 hello 携带的版本，便于前端提示「需刷新」。 */
+      clientProtocolVersion?: number;
+      engine: string;
+      capabilities: UiCapabilities;
+    }
+  | { type: "snapshot"; state: UiState }
+  | {
+      type: "snapshot_delta";
+      conversationId: string;
+      rev: number;
+      baseRev: number;
+      appended: UiMessage[];
+      state: UiStateLight;
+    }
+  | {
+      type: "message_delta";
+      conversationId: string;
+      seq: number;
+      channel: "text" | "thinking";
+      delta: string;
+    }
+  | {
+      type: "tool_status";
+      conversationId: string;
+      toolCallId: string;
+      toolName: string;
+      phase: "start" | "end";
+      isError?: boolean;
+      durationMs?: number;
+    }
+  | { type: "conversations"; items: UiConversation[] }
+  | { type: "models"; models: UiModel[]; current: string }
+  | { type: "capabilities"; capabilities: UiCapabilities }
+  | { type: "settings_state"; settings: Record<string, unknown> }
+  | { type: "knowledge_hits"; query: string; hits: UiKnowledgeHit[] }
+  | { type: "approval_request"; request: UiApproval }
+  | { type: "notice"; level: "info" | "warn" | "error"; text: string }
+  | { type: "pong" }
+  | { type: "error"; message: string };
+
+/** 能力目录：工具 / 技能 / 知识库 / 斜杠命令。 */
+export interface UiCapabilities {
+  builtinTools: string;
+  tools: UiTool[];
+  skills: { name: string; description: string }[];
+  knowledge: { name: string; title: string; description: string }[];
+  commands: { name: string; description: string }[];
+}
+
+export interface UiKnowledgeHit {
+  name: string;
+  title: string;
+  score: number;
+  snippet: string;
+}
+
+/* ────────────────────────── 类型守卫 ────────────────────────── */
+
+/** Narrow an unknown payload to a ClientMessage (only checks the discriminant). */
+export function isClientMessage(value: unknown): value is ClientMessage {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as { type?: unknown }).type === "string"
+  );
+}
+
+/** All known client command discriminants (for dispatch exhaustiveness checks). */
+export const CLIENT_MESSAGE_TYPES = [
+  "hello",
+  "get_state",
+  "ping",
+  "prompt",
+  "abort",
+  "draft_update",
+  "new_conversation",
+  "switch_conversation",
+  "close_conversation",
+  "list_conversations",
+  "list_models",
+  "set_model",
+  "set_thinking",
+  "get_capabilities",
+  "set_tool_enabled",
+  "search_knowledge",
+  "approval_response",
+  "get_settings",
+  "set_settings",
+] as const satisfies readonly ClientMessage["type"][];
+
+/** Compile-time guard: every ClientMessage discriminant is listed above. */
+type _ClientTypesCovered = Exclude<ClientMessage["type"], (typeof CLIENT_MESSAGE_TYPES)[number]>;
+const _assertAllClientTypesListed: _ClientTypesCovered extends never ? true : never = true;
+void _assertAllClientTypesListed;

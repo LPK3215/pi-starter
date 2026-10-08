@@ -42,9 +42,26 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+      - name: Typecheck (unused symbols)
+        # Dead code is how "declared but never wired" bugs survive review; make the
+        # compiler fail on them.
+        run: npx tsc --noEmit --noUnusedLocals --noUnusedParameters
+
       - name: Test
         # Contract smoke tests: no model calls, no ~/.pi/agent writes.
         run: npm test
+
+      - name: Runtime smoke (WebSocket end-to-end)
+        # Exercises the real transport: frame ordering, pending-queue replay,
+        # origin checks, backpressure-driven disconnect.
+        run: npm run smoke
+
+      - name: Dependency audit
+        # 5 runtime deps keeps the surface small; gate the build on a high-severity
+        # advisory instead of leaving it to a periodic scan someone has to remember.
+        # Pinned to the public registry: some mirrors don't implement the advisories
+        # endpoint and would otherwise fail every build with a 404.
+        run: npm audit --audit-level=high --registry=https://registry.npmjs.org
 
       - name: Build
         run: npm run build

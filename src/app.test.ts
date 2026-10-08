@@ -78,11 +78,74 @@ async function json(url: string, init?: RequestInit): Promise<{ status: number; 
   return { status: res.status, body, text };
 }
 
-test("GET /health 列出当前模型和可用目录", async () => {
+test("GET /health 是轻量存活探针，不依赖模型与数据库", async () => {
   const { app, dispose } = createApp({ agent: fakeAgent(), staticDir: false });
   const { url, close } = await listen(app);
   try {
     const res = await json(`${url}/health`);
+    assert.equal(res.status, 200);
+    const body = res.body as { ok: boolean; uptimeSeconds: number; nodeVersion: string };
+    // Liveness must answer even when a dependency is down — otherwise an orchestrator
+    // would restart-loop a healthy process during a transient provider outage.
+    assert.equal(body.ok, true);
+    assert.equal(typeof body.uptimeSeconds, "number");
+    assert.equal(body.nodeVersion, process.version);
+  } finally {
+    await close();
+    dispose();
+  }
+});
+
+test("GET /health/ready 做依赖深度探针", async () => {
+  const { app, dispose } = createApp({ agent: fakeAgent(), staticDir: false });
+  const { url, close } = await listen(app);
+  try {
+    const res = await json(`${url}/health/ready`);
+    assert.equal(res.status, 200);
+    const body = res.body as {
+      ok: boolean;
+      checks: { model: { ok: boolean; detail?: string }; database: { ok: boolean } };
+    };
+    assert.equal(body.ok, true);
+    assert.equal(body.checks.model.ok, true);
+    assert.equal(body.checks.model.detail, "modelscope/Qwen/demo");
+    assert.equal(body.checks.database.ok, true);
+  } finally {
+    await close();
+    dispose();
+  }
+});
+
+test("GET /metrics 暴露运行时指标，支持 Prometheus 文本格式", async () => {
+  const { app, dispose } = createApp({ agent: fakeAgent(), staticDir: false });
+  const { url, close } = await listen(app);
+  try {
+    const res = await json(`${url}/metrics`);
+    assert.equal(res.status, 200);
+    const body = res.body as {
+      ok: boolean;
+      metrics: Record<string, number>;
+      runtime: { uptimeSeconds: number };
+    };
+    assert.equal(body.ok, true);
+    assert.equal(typeof body.metrics.pi_ws_connections, "number");
+    assert.equal(typeof body.runtime.uptimeSeconds, "number");
+
+    const prom = await fetch(`${url}/metrics?format=prometheus`);
+    const text = await prom.text();
+    assert.match(text, /# TYPE pi_ws_connections gauge/);
+    assert.match(text, /pi_uptime_seconds \d+/);
+  } finally {
+    await close();
+    dispose();
+  }
+});
+
+test("GET /info 列出当前模型和可用目录（原 /health 的完整清单）", async () => {
+  const { app, dispose } = createApp({ agent: fakeAgent(), staticDir: false });
+  const { url, close } = await listen(app);
+  try {
+    const res = await json(`${url}/info`);
     assert.equal(res.status, 200);
     const body = res.body as {
       model: string;
@@ -100,6 +163,28 @@ test("GET /health 列出当前模型和可用目录", async () => {
     assert.deepEqual(body.knowledge, []);
     assert.equal(body.db.ok, true);
     assert.equal(body.db.driver, "sqlite");
+  } finally {
+    await close();
+    dispose();
+  }
+});
+
+test("HTTP 层已加固：安全响应头 + body 超限返回 413", async () => {
+  const { app, dispose } = createApp({ agent: fakeAgent(), staticDir: false, bodyLimit: 64 });
+  const { url, close } = await listen(app);
+  try {
+    const head = await fetch(`${url}/health`);
+    assert.equal(head.headers.get("x-content-type-options"), "nosniff");
+    assert.equal(head.headers.get("x-frame-options"), "DENY");
+    assert.equal(head.headers.get("referrer-policy"), "no-referrer");
+    assert.equal(head.headers.get("x-powered-by"), null, "must not advertise the framework");
+
+    const huge = await fetch(`${url}/db/query`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ sql: "SELECT 1", pad: "x".repeat(4096) }),
+    });
+    assert.equal(huge.status, 413, "oversized body must be rejected, not buffered");
   } finally {
     await close();
     dispose();

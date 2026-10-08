@@ -1,8 +1,12 @@
 /**
- * pi-starter · HTTP 应用（Express + SSE）
+ * pi-starter · HTTP 应用（Express）
  *
  * 把 Agent 封成语言无关的接口。入口 src/server.ts 只负责解析命令行并 listen。
  * 嵌进已有服务时：buildAgent() → createApp() → 挂到自己的 Express / 自己的静态页。
+ *
+ * 两条通道并存（渐进升级，不破坏既有集成）：
+ *   1. REST + SSE（本文件）—— 语言无关、易于 curl，保留 `/chat` 单向流式；
+ *   2. WebSocket（transport/ws.ts）—— 双向、快照驱动、多对话，产品化前端走这条。
  *
  * 不内置登录。本地工具不需要；接到现有模块时用现有鉴权包一层。
  *
@@ -11,15 +15,30 @@
  *   GET  /skills  GET /skills/:name
  *   GET  /knowledge  GET /knowledge/search  GET /knowledge/:name
  *   GET  /db  GET /db/notes  GET /db/notes/:id  POST /db/query
+ *   GET  /capabilities   POST /tools/:name/enabled
+ *   GET  /settings       PATCH /settings
  */
 
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { readFile } from "node:fs/promises";
 import express, { type Express } from "express";
+import type { Model } from "@earendil-works/pi-ai";
 import type { BuiltAgent } from "./agent.js";
-import { searchKnowledge } from "./knowledge/index.js";
 import { sse, translateEvent } from "./sse.js";
+import type { ToolRegistry } from "./tools/registry.js";
+import type { SettingsService } from "./settings.js";
+import { hardenApp, type TimeoutOptions } from "./http/hardening.js";
+import {
+  registerControlRoutes,
+  registerDbRoutes,
+  registerErrorHandler,
+  registerProbeRoutes,
+  registerResourceRoutes,
+} from "./http/routes.js";
+import { AppError, badRequest, busy as busyError } from "./http/errors.js";
+import { createRateLimiter, DEFAULT_RATE_RULES, type RateLimitRule } from "./http/rate-limit.js";
+import { getLogger } from "./log.js";
+import { Metrics, metrics as defaultMetrics } from "./metrics.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -27,6 +46,40 @@ export interface CreateAppOptions {
   agent: BuiltAgent;
   /** 静态页目录。默认仓库 public/。嵌进别人服务时传 false，自己挂前端。 */
   staticDir?: string | false;
+  /** 工具注册表（可选）：提供后开放 /capabilities 与工具开关。 */
+  registry?: ToolRegistry;
+  /** 设置服务（可选）：提供后开放 /settings。 */
+  settings?: SettingsService;
+  /** JSON body 上限，默认 1mb。 */
+  bodyLimit?: string | number;
+  /** 覆盖默认安全响应头；传 false 关闭（仅在自行代理加固时）。 */
+  securityHeaders?: Readonly<Record<string, string>> | false;
+  /** HTTP 服务器超时配置（由入口应用到 node http.Server）。 */
+  timeouts?: TimeoutOptions;
+  /** 实时连接数（供 /metrics 派生 gauge，避免指标与实际漂移）。 */
+  connectionCount?: () => number;
+  /** 实时会话/对话数（供 /metrics）。 */
+  sessionStats?: () => { sessions: number; conversations: number };
+  /** 实时待审批数（供 /metrics）。 */
+  approvalStats?: () => number;
+  /** 指标注册表，缺省用全局单例。 */
+  metrics?: Metrics;
+  /**
+   * 会话中枢（可选）。提供后 `POST /model` 会经它切换，使 REST 与 WS 的模型保持一致；
+   * 缺省则只切换共享 session（适合只嵌 REST 的库调用方）。
+   */
+  hub?: { setModel(ref: string): Promise<Model<any>> };
+  /**
+   * Rate limits for expensive routes. `true` uses DEFAULT_RATE_RULES; pass a rule map to
+   * override. Omit (default) to disable — local single-user usage should not be throttled.
+   */
+  rateLimit?: boolean | Record<string, RateLimitRule>;
+  /**
+   * Proxies whose X-Forwarded-For may be trusted (e.g. ["loopback"] behind a local nginx).
+   * Anything else has the header ignored, because it is client-controlled and would
+   * otherwise let any caller bypass the limit by forging the header.
+   */
+  trustedProxies?: readonly string[];
 }
 
 export interface CreateAppResult {
@@ -39,16 +92,61 @@ export interface CreateAppResult {
 export function createApp(options: CreateAppOptions): CreateAppResult {
   const { session, builtinTools, switchModel, listModels, skills, knowledge, database } =
     options.agent;
-  let currentModel = options.agent.model;
+  const registry = options.registry;
+  const settings = options.settings;
+  /**
+   * Single source of truth for "which model is active" — read live, never cached.
+   *
+   * This used to be a `let currentModel = options.agent.model` snapshot updated only inside
+   * `POST /model`. That silently lied after a **WebSocket** `set_model`, which switches through
+   * `hub.setModel()` and never touches this closure: `/info` and `/health/ready` kept
+   * advertising the old model while every conversation was already running the new one.
+   * Reading the getter per request makes that class of drift impossible.
+   */
+  const currentModel = (): Model<any> => options.agent.model;
   let busy = false;
+  const metricsReg = options.metrics ?? defaultMetrics;
 
   const app = express();
-  app.use(express.json());
+  // 加固三件套：body 上限 + 安全响应头 + 关闭 X-Powered-By。
+  // 原先 express.json() 无上限，单个超大请求即可打满进程内存。
+  hardenApp(app, { bodyLimit: options.bodyLimit, headers: options.securityHeaders });
   if (options.staticDir !== false) {
     app.use(express.static(options.staticDir ?? join(__dirname, "..", "public")));
   }
 
-  app.get("/health", async (_req, res) => {
+  // Rate limits for the expensive routes. Opt-in via `rateLimit: true` (or a custom rule
+  // set) so local single-user usage is never surprised by a quota.
+  if (options.rateLimit) {
+    const rules = options.rateLimit === true ? DEFAULT_RATE_RULES : options.rateLimit;
+    app.use(
+      createRateLimiter({
+        rules,
+        trustedProxies: options.trustedProxies ?? [],
+        onLimit: (info) => {
+          metricsReg.inc("rateLimitedTotal");
+          getLogger().child({ component: "http" }).warn("触发速率限制", info);
+        },
+      }),
+    );
+  }
+
+  // Probes / resources / db / control routes live in src/http/routes.ts.
+  registerProbeRoutes(app, options.agent, {
+    currentModel,
+    isBusy: () => busy,
+    sessionStats: options.sessionStats,
+    approvalStats: options.approvalStats,
+    metrics: metricsReg,
+    connectionCount: options.connectionCount,
+  });
+  registerResourceRoutes(app, options.agent);
+  registerDbRoutes(app, options.agent);
+  registerControlRoutes(app, options.agent, { registry, settings });
+
+  // Rich capability/inventory snapshot (superset of the old /health body).
+  app.get("/info", async (_req, res) => {
+    const active = currentModel();
     const models = await listModels();
     let db: { ok: boolean; driver?: string; path?: string; error?: string };
     try {
@@ -58,14 +156,14 @@ export function createApp(options: CreateAppOptions): CreateAppResult {
     }
     res.json({
       ok: true,
-      model: `${currentModel.provider}/${currentModel.id}`,
-      provider: currentModel.provider,
-      modelId: currentModel.id,
+      model: `${active.provider}/${active.id}`,
+      provider: active.provider,
+      modelId: active.id,
       models: models.map((item) => ({
         provider: item.provider,
         id: item.id,
         name: item.name,
-        current: item.provider === currentModel.provider && item.id === currentModel.id,
+        current: item.provider === active.provider && item.id === active.id,
       })),
       builtinTools,
       busy,
@@ -83,138 +181,33 @@ export function createApp(options: CreateAppOptions): CreateAppResult {
     });
   });
 
-  app.get("/skills", (_req, res) => {
-    res.json({
-      ok: true,
-      skills: skills.map((item) => ({
-        name: item.name,
-        description: item.description,
-        location: item.filePath,
-      })),
-    });
-  });
-
-  app.get("/skills/:name", async (req, res) => {
-    const skill = skills.find((item) => item.name === req.params.name);
-    if (!skill) {
-      res.status(404).json({ error: `没有技能 ${req.params.name}` });
-      return;
-    }
-    const body = await readFile(skill.filePath, "utf-8");
-    res.json({
-      ok: true,
-      skill: {
-        name: skill.name,
-        description: skill.description,
-        location: skill.filePath,
-        body,
-      },
-    });
-  });
-
-  app.get("/knowledge", (_req, res) => {
-    res.json({
-      ok: true,
-      knowledge: knowledge.map((item) => ({
-        name: item.name,
-        title: item.title,
-        description: item.description,
-      })),
-    });
-  });
-
-  app.get("/knowledge/search", (req, res) => {
-    const query = typeof req.query.q === "string" ? req.query.q : "";
-    if (!query.trim()) {
-      res.status(400).json({ error: "q 必填" });
-      return;
-    }
-    const hits = searchKnowledge(knowledge, query);
-    res.json({ ok: true, query, hits });
-  });
-
-  app.get("/knowledge/:name", (req, res) => {
-    const doc = knowledge.find((item) => item.name === req.params.name);
-    if (!doc) {
-      res.status(404).json({ error: `没有文档 ${req.params.name}` });
-      return;
-    }
-    res.json({
-      ok: true,
-      doc: {
-        name: doc.name,
-        title: doc.title,
-        description: doc.description,
-        body: doc.body,
-      },
-    });
-  });
-
-  app.get("/db", (_req, res) => {
-    try {
-      const ping = database.ping();
-      res.json({ ok: true, driver: ping.driver, path: ping.path });
-    } catch (err: unknown) {
-      res.status(503).json({
-        ok: false,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
-  });
-
-  app.get("/db/notes", (_req, res) => {
-    res.json({ ok: true, notes: database.listNotes() });
-  });
-
-  app.get("/db/notes/:id", (req, res) => {
-    const id = Number(req.params.id);
-    if (!Number.isInteger(id)) {
-      res.status(400).json({ error: "id 必须是整数" });
-      return;
-    }
-    const note = database.getNote(id);
-    if (!note) {
-      res.status(404).json({ error: `没有笔记 ${id}` });
-      return;
-    }
-    res.json({ ok: true, note });
-  });
-
-  app.post("/db/query", (req, res) => {
-    const sql = typeof req.body?.sql === "string" ? req.body.sql : "";
-    if (!sql.trim()) {
-      res.status(400).json({ error: "sql 必填" });
-      return;
-    }
-    try {
-      const rows = database.query(sql);
-      res.json({
-        ok: true,
-        columns: rows.columns,
-        rows: rows.rows.map((row) => ({ ...row })),
-      });
-    } catch (err: unknown) {
-      res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
-    }
-  });
-
   app.post("/model", async (req, res) => {
-    if (busy) return res.status(429).json({ error: "Agent 正忙，稍等" });
+    if (busy) throw busyError();
     const body = req.body ?? {};
     const ref = [body.provider, body.model].filter(Boolean).join("/");
-    if (!ref) return res.status(400).json({ error: "model 必填，格式 provider/modelId" });
+    if (!ref) throw badRequest("model is required, format provider/modelId");
     try {
-      currentModel = await switchModel(ref);
-      res.json({ ok: true, model: `${currentModel.provider}/${currentModel.id}` });
+      // Prefer the hub so WS conversations switch too; without it (library embedders that
+      // only pass `agent`) fall back to switching the shared session alone. Use the returned
+      // model rather than a cached field — `currentModel()` now reads live state.
+      const next = options.hub ? await options.hub.setModel(ref) : await switchModel(ref);
+      res.json({ ok: true, model: `${next.provider}/${next.id}` });
     } catch (err: unknown) {
-      res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+      // The SDK's "unknown model" error lists the available choices — that IS the useful
+      // message for the caller, so expose it deliberately instead of 500-ing.
+      throw new AppError("bad_request", err instanceof Error ? err.message : String(err), {
+        expose: true,
+        cause: err,
+      });
     }
   });
 
   app.post("/chat", async (req, res) => {
-    const { message } = req.body ?? {};
-    if (!message) return res.status(400).json({ error: "message 必填" });
-    if (busy) return res.status(429).json({ error: "Agent 正忙，稍等" });
+    // Validate BEFORE writing SSE headers: once the stream starts we can no longer change
+    // the status code, so a 400 must be raised first.
+    const message = req.body?.message;
+    if (typeof message !== "string" || !message) throw badRequest("message is required");
+    if (busy) throw busyError();
     busy = true;
 
     res.writeHead(200, {
@@ -231,13 +224,13 @@ export function createApp(options: CreateAppOptions): CreateAppResult {
         try {
           res.write(payload);
         } catch {
-          /* res 已坏（客户端走了），忽略 */
+          /* response already broken (client left); ignore */
         }
       }
     });
 
-    // 必须监听 res 而不是 req：req 的 close 在「请求体读完」时就触发，
-    // 那时 Agent 才刚起步，会被误判成客户端断开而 abort。
+    // Must listen on res, not req: req 'close' fires when the request body is read,
+    // which is far too early and would abort a freshly started run.
     let settled = false;
     res.on("close", () => {
       off();
@@ -253,11 +246,11 @@ export function createApp(options: CreateAppOptions): CreateAppResult {
     try {
       await session.prompt(message);
     } catch (err: unknown) {
-      const messageText = err instanceof Error ? err.message : "Agent 出错";
+      const messageText = err instanceof Error ? err.message : "agent error";
       try {
         res.write(sse("error", { message: messageText }));
       } catch {
-        /* res 已坏 */
+        /* response already broken */
       }
     } finally {
       settled = true;
@@ -265,12 +258,16 @@ export function createApp(options: CreateAppOptions): CreateAppResult {
       try {
         res.write(sse("done", {}));
       } catch {
-        /* res 已坏 */
+        /* response already broken */
       }
       res.end();
       busy = false;
     }
   });
+
+  // Must be registered AFTER every route: it is the single place that turns a thrown
+  // AppError into a response, and it hides internal detail unless explicitly marked safe.
+  registerErrorHandler(app);
 
   return {
     app,

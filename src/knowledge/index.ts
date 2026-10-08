@@ -23,6 +23,25 @@ export interface KnowledgeDoc {
   body: string;
 }
 
+/**
+ * Caps applied while loading knowledge documents.
+ *
+ * Without these a single oversized `.md` (or a directory of thousands) is read fully into
+ * memory and then injected into the system prompt, which can blow up the context window
+ * before the first user message. Defaults are deliberately generous for real use.
+ */
+export const MAX_DOC_BYTES = 512 * 1024; // 512 KB per document
+export const MAX_DOCS = 500; // documents per load
+
+export interface LoadKnowledgeOptions {
+  /** Skip documents larger than this (bytes). Default MAX_DOC_BYTES. */
+  maxBytes?: number;
+  /** Stop after this many documents. Default MAX_DOCS. */
+  maxDocs?: number;
+  /** Report skipped documents (defaults, tests). */
+  onSkip?: (filePath: string, reason: string) => void;
+}
+
 export function resolveKnowledgeDir(): string | undefined {
   const candidates = [
     __dirname,
@@ -54,32 +73,54 @@ function parseDoc(filePath: string): KnowledgeDoc | undefined {
   };
 }
 
-function loadFromDir(dir: string): KnowledgeDoc[] {
+function loadFromDir(dir: string, options: LoadKnowledgeOptions = {}): KnowledgeDoc[] {
   if (!existsSync(dir)) return [];
+  const maxBytes = options.maxBytes ?? MAX_DOC_BYTES;
+  const onSkip = options.onSkip;
   const docs: KnowledgeDoc[] = [];
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     if (!entry.isFile() && !entry.isSymbolicLink()) continue;
     if (!entry.name.toLowerCase().endsWith(".md")) continue;
     const filePath = join(dir, entry.name);
     try {
-      if (!statSync(filePath).isFile()) continue;
+      const stat = statSync(filePath);
+      if (!stat.isFile()) continue;
+      // Size gate BEFORE reading: a huge file must never be pulled into memory at all.
+      if (stat.size > maxBytes) {
+        onSkip?.(filePath, `超过 ${maxBytes} 字节上限（${stat.size}）`);
+        continue;
+      }
     } catch {
       continue;
     }
-    const doc = parseDoc(filePath);
-    if (doc) docs.push(doc);
+    // parseDoc can still throw on malformed frontmatter; one bad file must not
+    // take down the whole knowledge base.
+    try {
+      const doc = parseDoc(filePath);
+      if (doc) docs.push(doc);
+    } catch (err) {
+      onSkip?.(filePath, err instanceof Error ? err.message : String(err));
+    }
   }
   return docs;
 }
 
 /** 按给定目录加载。同名时先出现的赢。 */
-export function loadKnowledgeFromDirs(dirs: readonly string[]): KnowledgeDoc[] {
+export function loadKnowledgeFromDirs(
+  dirs: readonly string[],
+  options: LoadKnowledgeOptions = {},
+): KnowledgeDoc[] {
+  const maxDocs = options.maxDocs ?? MAX_DOCS;
   const seen = new Set<string>();
   const out: KnowledgeDoc[] = [];
   for (const dir of dirs) {
     if (!dir) continue;
-    for (const doc of loadFromDir(dir)) {
+    for (const doc of loadFromDir(dir, options)) {
       if (seen.has(doc.name)) continue;
+      if (out.length >= maxDocs) {
+        options.onSkip?.(doc.filePath, `文档总数超过 ${maxDocs} 上限`);
+        return out;
+      }
       seen.add(doc.name);
       out.push(doc);
     }
@@ -88,8 +129,11 @@ export function loadKnowledgeFromDirs(dirs: readonly string[]): KnowledgeDoc[] {
 }
 
 /** 脚手架知识库 + extraKnowledgeDirs。同名时仓库内置优先。 */
-export function loadScaffoldKnowledge(extraDirs: readonly string[] = []): KnowledgeDoc[] {
-  return loadKnowledgeFromDirs([resolveKnowledgeDir() ?? "", ...extraDirs]);
+export function loadScaffoldKnowledge(
+  extraDirs: readonly string[] = [],
+  options: LoadKnowledgeOptions = {},
+): KnowledgeDoc[] {
+  return loadKnowledgeFromDirs([resolveKnowledgeDir() ?? "", ...extraDirs], options);
 }
 
 export function formatKnowledgeCatalog(docs: readonly KnowledgeDoc[]): string {
