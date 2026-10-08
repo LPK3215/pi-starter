@@ -12,7 +12,7 @@
  */
 
 import { createServer } from "node:http";
-import { buildAgent } from "./agent.js";
+import { buildAgent, type BuiltAgent } from "./agent.js";
 import { createApp } from "./app.js";
 import { parseCliFlags } from "./cli-args.js";
 import {
@@ -21,7 +21,7 @@ import {
   describeBuiltinToolMode,
   resolveRuntimeConfig,
 } from "./config.js";
-import { createSessionHub } from "./session-hub.js";
+import { createSessionHub, type SessionHub } from "./session-hub.js";
 import { defaultSessionIndexFile, scaffoldSessionDir, sessionCatalog } from "./sessions/store.js";
 import { BUILTIN_TOOL_NAMES, createToolRegistry, defineToolSpec, type ToolRegistry } from "./tools/registry.js";
 import { allTools } from "./tools/index.js";
@@ -35,6 +35,10 @@ import { attachWebSocket, type WsServer } from "./transport/ws.js";
 import { applyServerTimeouts } from "./http/hardening.js";
 import { getLogger } from "./log.js";
 import type { UiApproval } from "./protocol.js";
+import { McpBridge } from "./mcp/bridge.js";
+import { PlanModeController, planModeExtension } from "./modes/plan-mode.js";
+import { createProviderKeyStore, defaultProviderKeysFile } from "./provider-keys.js";
+import { DELEGATE_TOOL_NAME, SUBAGENT_CAPABILITY, createDelegateTool } from "./subagents/index.js";
 
 const SERVER_VERSION = "0.1.0";
 
@@ -98,6 +102,9 @@ const gate = new ApprovalGate({
 
 // The registry is built after the agent; expose it to the approval extension via a holder.
 let registryRef: ToolRegistry | undefined;
+// 同理：子代理工具要往每个连接推失败通知，MCP 工具要现取现用。
+let hubRef: SessionHub | undefined;
+let mcpRef: McpBridge | undefined;
 
 // Web 对话落在本脚手架自己的目录，不和 pi CLI 的会话文件混放。
 // inMemory 必须关掉，否则 resumeFrom 会被拒绝，恢复接不上。
@@ -112,6 +119,35 @@ const sessionIndex = sessionCatalog(
   },
 );
 
+/**
+ * 计划模式状态。
+ *
+ * 状态按会话存，并与会话索引同目录（`plan-mode.json`）——重启后接回同一条对话时模式仍在。
+ * 落盘失败只告警不阻断：模式是运行时开关，配置写不进去不该让服务起不来。
+ */
+const planMode = new PlanModeController({
+  filePath: join(sessionDir, "plan-mode.json"),
+  defaultEnabled: () => settings.get().planMode,
+  logger: (msg, err) => logger.warn(msg, { detail: err instanceof Error ? err.message : String(err) }),
+});
+
+/** 多把 API 密钥：原文只在服务端的 provider-keys.json 里，任何响应都不含它。 */
+const providerKeys = createProviderKeyStore(defaultProviderKeysFile(), {
+  logger: (msg, err) => logger.warn(msg, { detail: err instanceof Error ? err.message : String(err) }),
+});
+
+/**
+ * 派发工具的会话工厂。
+ *
+ * `buildAgent()` 一定提供 `createSession`，但这一步在它**返回之前**求值，
+ * 所以只能延迟取：这里返回的函数会在第一次真正派发时才读到已建好的 agent。
+ */
+const subagentFactory = (): NonNullable<BuiltAgent["createSession"]> => {
+  const factory = agent.createSession;
+  if (!factory) throw new Error("当前装配没有独立会话工厂，无法派发子代理");
+  return factory;
+};
+
 // 2. Build the agent, wiring the approval gate as an extension.
 const agent = await buildAgent({
   provider: flags.provider,
@@ -122,6 +158,17 @@ const agent = await buildAgent({
   allowedSessionRoots,
   // Honour settings.promptTemplate (empty → default order, identical to before).
   promptTemplate: settings.get().promptTemplate,
+  // MCP 工具在建会话的那一刻求值（见 agent.ts 的 resolveToolList）：SDK 的工具白名单在
+  // 构造时固定，传静态数组会把开机那一刻连上的服务器 forever 冻住，之后改配置一律无效。
+  dynamicTools: () => mcpRef?.toolDefinitions() ?? [],
+  extraTools: [
+    createDelegateTool({
+      createSession: async () => subagentFactory()(),
+      notify: (level, text) => {
+        for (const session of hubRef?.all() ?? []) session.notify(level, text);
+      },
+    }),
+  ],
   extraExtensions: [
     approvalExtension(gate, {
       // Each conversation wraps exactly one session, and Conversation.id === session.sessionId.
@@ -129,6 +176,9 @@ const agent = await buildAgent({
       // it instead of leaking it to every conversation. NOTE: the SDK's ExtensionContext exposes
       // the id via `sessionManager.getSessionId()` — there is no `ctx.sessionId` field, so the
       // default key resolver in approvalExtension() reads it from there.
+      capabilitiesOf: (toolName) => registryRef?.capabilitiesOf(toolName) ?? [],
+    }),
+    planModeExtension(planMode, {
       capabilitiesOf: (toolName) => registryRef?.capabilitiesOf(toolName) ?? [],
     }),
   ],
@@ -159,7 +209,44 @@ for (const name of [
     defineToolSpec({ name, description: `dynamic tool ${name}`, source: "dynamic" }),
   );
 }
+registry.register(
+  defineToolSpec({
+    name: DELEGATE_TOOL_NAME,
+    description: "派发子代理执行一个自包含的子任务并取回结论",
+    source: "dynamic",
+    // `shell` 是有意的：子代理能在自己的会话里跑 shell / 写文件，所以计划模式也必须
+    // 拦住派发本身，否则「只规划不实施」会被一次 delegate 绕过。风险等级随之取 high。
+    capabilities: [SUBAGENT_CAPABILITY, "shell"],
+    risk: "high",
+    origin: "subagent",
+  }),
+);
 registryRef = registry;
+
+/** MCP 桥：配置改动即生效（新增连接 / 断开移除 / 命令变更重连），无需重启。 */
+const mcp = new McpBridge({
+  servers: () => settings.get().mcpServers,
+  registry,
+  onChange: (status) => {
+    const ready = status.filter((item) => item.ready);
+    for (const session of hubRef?.all() ?? []) {
+      session.notify(
+        "info",
+        `外部工具已更新：${ready.length}/${status.length} 个 MCP 服务器就绪（${ready
+          .map((item) => `${item.name}:${item.toolCount}`)
+          .join("，") || "无"}）`,
+      );
+    }
+  },
+});
+mcpRef = mcp;
+// 改设置就重算 MCP 集合。挂在 SettingsService 的变更回调上，而不是在每个写入点手写：
+// 漏一处（只改了 REST 或只改了 WS）的表现是「配置生效了但工具没变」，从代码上看不出来。
+settings.setOnChange(() => {
+  void mcp.sync().catch((err: unknown) => {
+    logger.warn("MCP 同步失败", { error: err instanceof Error ? err.message : String(err) });
+  });
+});
 
 logger.info("agent 就绪", {
   model: `${agent.model.provider}/${agent.model.id}`,
@@ -180,10 +267,14 @@ const hub = createSessionHub(
   () => settings.get().toolTimeoutSeconds * 1000,
   allowedSessionRoots,
   sessionIndex,
+  // 计划模式状态挂在 hub 上，由每个 Conversation 按会话 id 查；
+  // 不传则该装配没有计划模式（Conversation.planMode 恒为 false）。
+  { planMode },
 );
+hubRef = hub;
 // Gauges are derived from live state at scrape time (see /metrics) so they cannot drift.
 let wsRef: WsServer | undefined;
-const { app, dispose } = createApp({
+const { app, dispose, addDisposer } = createApp({
   agent,
   registry,
   settings,
@@ -200,7 +291,23 @@ const { app, dispose } = createApp({
   files: new FileService({ root: process.cwd() }),
   // 规则编辑接口：改完立刻落盘（见 rulesStore.setOnChange 的说明）。
   approvalRules: rulesStore,
+  providerKeys,
+  /**
+   * 换激活密钥后必须经 hub 重新应用模型：直接改运行时凭据的话，REST 会说「已激活 B」，
+   * 而每个对话仍在用A 跑，而且不会有任何报错。
+   */
+  applyActiveKey: async (provider) => {
+    const apiKey = providerKeys.resolve(provider);
+    if (!apiKey) return;
+    if (!agent.applyApiKey) {
+      throw new Error("当前装配不支持运行期换 key，请重启后再试");
+    }
+    await agent.applyApiKey(provider, apiKey);
+    await hub.setModel(`${agent.model.provider}/${agent.model.id}`);
+  },
 });
+// 子进程回收必须挂到停机链上：漏掉就是每次重启泄漏一批 stdio 子进程。
+addDisposer(() => mcp.dispose());
 const server = createServer(app);
 // 显式超时：Node 默认值对长轮次 LLM 请求偏紧，对慢速头部又偏松。
 applyServerTimeouts(server);
@@ -229,6 +336,12 @@ server.listen(PORT, runtime.host, () => {
     http: `http://${runtime.host}:${PORT}`,
     ws: `ws://${runtime.host}:${PORT}${runtime.wsPath}`,
     model: `${agent.model.provider}/${agent.model.id}`,
+  });
+  // Connect configured MCP servers after listen, so a slow or broken third-party server
+  // delays neither startup nor the first prompt. Failures are reported per-server and the
+  // rest still load — one bad command must not take the whole bridge down.
+  void mcp.sync().catch((err: unknown) => {
+    logger.warn("MCP 初始同步失败", { error: err instanceof Error ? err.message : String(err) });
   });
 });
 

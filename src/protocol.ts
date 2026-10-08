@@ -137,6 +137,13 @@ export interface UiState {
   stats: UiStats;
   /** 待人类决策的审批请求，null 表示无。 */
   pendingApproval: UiApproval | null;
+  /**
+   * 本对话是否处于计划模式（只规划、不实施）。
+   *
+   * 权威值在快照里而不是让客户端自己记：模式是**服务端**在 `tool_call` 上强制的，
+   * 客户端猜错就会显示出「可以写」而实际被拒的状态。
+   */
+  planMode: boolean;
   /** 运行中对话列表（含自身）。 */
   conversations: UiConversation[];
 }
@@ -185,6 +192,8 @@ export type ClientMessage =
       /** decision = modify 时改写后的工具入参（JSON）。 */
       modifiedArgs?: Record<string, unknown>;
     }
+  // 运行模式
+  | { type: "set_plan_mode"; enabled: boolean; conversationId?: string }
   // 设置
   | { type: "get_settings" }
   | { type: "set_settings"; settings: Record<string, unknown> };
@@ -256,6 +265,31 @@ export type ServerMessage =
       toolName: string;
       delta: string;
     }
+  /**
+   * 一次 ReAct 迭代开始（SDK `turn_start`）。
+   *
+   * 与 `run_start` 的区别：一次 `prompt()` 里可能有**多轮**迭代（模型调用工具后继续想），
+   * `run_start` 只在整轮开始时来一次。客户端要画「正在第几步」的进度条就得靠它。
+   *
+   * `turnIndex` 是**本连接内自增**的序号：SDK 投给会话订阅的事件里没有轮次下标
+   * （`turn_start` 只有 `type`），所以这里由服务端自己数，避免编造一个「看起来像 SDK 的」值。
+   */
+  | { type: "turn_start"; conversationId: string; turnIndex: number }
+  /**
+   * 一次 ReAct 迭代结束（SDK `turn_end`）。
+   *
+   * 带 `stopReason` 与本轮工具调用数，便于客户端在多轮场景里显示「第 N 步结束、调了 M 个工具」。
+   * 停止原因同样来自最后一条 assistant 消息——SDK 的 `turn_end` 不直接带这个字段。
+   */
+  | {
+      type: "turn_end";
+      conversationId: string;
+      turnIndex: number;
+      /** 最后一条 assistant 消息的停止原因（SDK 未提供时留空）。 */
+      stopReason?: string;
+      /** 本轮执行的工具结果条数。 */
+      toolResults?: number;
+    }
   | { type: "conversations"; items: UiConversation[] }
   | { type: "models"; models: UiModel[]; current: string }
   | { type: "capabilities"; capabilities: UiCapabilities }
@@ -273,6 +307,11 @@ export interface UiCapabilities {
   skills: { name: string; description: string }[];
   knowledge: { name: string; title: string; description: string }[];
   commands: { name: string; description: string }[];
+  /**
+   * 新会话的默认计划模式档位（settings.planMode）。
+   * 单个对话的实际档位看快照里的 `planMode`——这里是默认值，不是当前值。
+   */
+  planModeDefault: boolean;
 }
 
 export interface UiKnowledgeHit {
@@ -313,6 +352,7 @@ export const CLIENT_MESSAGE_TYPES = [
   "set_tool_enabled",
   "search_knowledge",
   "approval_response",
+  "set_plan_mode",
   "get_settings",
   "set_settings",
 ] as const satisfies readonly ClientMessage["type"][];

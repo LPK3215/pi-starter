@@ -78,6 +78,84 @@ export function strList(options: { maxItems?: number } = {}): FieldValidator<str
   };
 }
 
+/**
+ * 一个外部 stdio MCP 服务器的声明式配置。
+ *
+ * 只收「启动它需要什么」，不收任何回调：工具的实际调用由 mcp/bridge.ts 负责，
+ * 这样设置文件始终是纯数据，`PATCH /settings` 才不会被退化成任意 JSON 注入。
+ */
+export interface McpServerConfig {
+  /** 服务器名（工具名前缀 `mcp__<name>__<tool>` 的一部分）。 */
+  name: string;
+  command: string;
+  args: string[];
+  /** 追加给子进程的环境变量。 */
+  env?: Record<string, string>;
+  /** 子进程工作目录。缺省继承本进程。 */
+  cwd?: string;
+}
+
+/** 服务器数量上限。桥会为每个 server 拉一个子进程，无上限等于无界开进程。 */
+export const MAX_MCP_SERVERS = 16;
+
+/** 服务器名：工具名前缀必须是合法标识符，所以名字也必须收敛到这个字符集。 */
+const MCP_NAME_RE = /^[a-z0-9][a-z0-9_-]{0,31}$/;
+
+/**
+ * MCP 服务器列表校验器。
+ *
+ * 严格逐条校验：一条非法就整条抛错，由调用方决定是拒绝（API）还是剔除（落盘）。
+ * 错误信息带下标，否则用户只能看到「mcpServers: Expected array of objects」，
+ * 根本不知道是哪一条服务器配错了。
+ */
+export function mcpServerList(): FieldValidator<McpServerConfig[]> {
+  return (raw) => {
+    if (!Array.isArray(raw)) throw new Error("Expected array of MCP server configs");
+    if (raw.length > MAX_MCP_SERVERS) throw new Error(`Too many MCP servers (max ${MAX_MCP_SERVERS})`);
+    const seen = new Set<string>();
+    return raw.map((entry, index) => {
+      const at = `mcpServers[${index}]`;
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+        throw new Error(`${at}: expected an object`);
+      }
+      const item = entry as Record<string, unknown>;
+      const name = item.name;
+      if (typeof name !== "string" || !MCP_NAME_RE.test(name)) {
+        throw new Error(`${at}.name must match ${MCP_NAME_RE.source}`);
+      }
+      if (seen.has(name)) throw new Error(`${at}.name duplicated: ${name}`);
+      seen.add(name);
+      const command = item.command;
+      if (typeof command !== "string" || !command.trim()) {
+        throw new Error(`${at}.command must be a non-empty string`);
+      }
+      const args = item.args ?? [];
+      if (!Array.isArray(args) || args.some((value) => typeof value !== "string")) {
+        throw new Error(`${at}.args must be an array of strings`);
+      }
+      const out: McpServerConfig = { name, command, args: [...(args as string[])] };
+      if (item.env !== undefined) {
+        if (!item.env || typeof item.env !== "object" || Array.isArray(item.env)) {
+          throw new Error(`${at}.env must be an object of string values`);
+        }
+        const env: Record<string, string> = {};
+        for (const [key, value] of Object.entries(item.env as Record<string, unknown>)) {
+          if (typeof value !== "string") throw new Error(`${at}.env.${key} must be a string`);
+          env[key] = value;
+        }
+        out.env = env;
+      }
+      if (item.cwd !== undefined) {
+        if (typeof item.cwd !== "string" || !item.cwd.trim()) {
+          throw new Error(`${at}.cwd must be a non-empty string`);
+        }
+        out.cwd = item.cwd;
+      }
+      return out;
+    });
+  };
+}
+
 /** 持久化端口（默认内存；接文件 / 数据库由调用方注入）。 */
 export interface SettingsPort {
   load(): Record<string, unknown> | undefined;
@@ -192,6 +270,10 @@ export const SETTINGS_DEFAULTS = {
   contextKeepRecent: 6,
   /** 单个工具执行超时（秒）。0 = 关闭看门狗。默认 1200s（20 分钟）。 */
   toolTimeoutSeconds: 1200,
+  /** 新会话是否默认进入计划模式（会话内可单独开关）。 */
+  planMode: false,
+  /** 外部 stdio MCP 服务器清单。空 = 不接任何外部工具。 */
+  mcpServers: [] as McpServerConfig[],
 };
 
 export const SETTINGS_SCHEMA: SettingsSchema = {
@@ -203,6 +285,8 @@ export const SETTINGS_SCHEMA: SettingsSchema = {
   promptTemplate: str({ maxLength: 20000 }),
   contextKeepRecent: int({ min: 1, max: 200 }),
   toolTimeoutSeconds: int({ min: 0, max: 86400 }),
+  planMode: bool(),
+  mcpServers: mcpServerList(),
 };
 
 export type Settings = typeof SETTINGS_DEFAULTS;
@@ -239,9 +323,43 @@ export class SettingsService {
     return result as Settings;
   }
 
-  /** 当前设置（浅拷贝，防止外部改动内部状态）。 */
+  /** 当前设置（深拷贝可变字段，防止外部改动内部状态）。 */
   get(): Settings {
-    return { ...this.current, disabledTools: [...this.current.disabledTools] };
+    return {
+      ...this.current,
+      disabledTools: [...this.current.disabledTools],
+      // Copy the servers too: `mcpServers` holds a nested env record, and the bridge
+      // holds on to what it is handed. A shared reference would let a later caller
+      // rewrite our live config without going through patch() (and without persisting).
+      mcpServers: this.current.mcpServers.map((server) => ({
+        ...server,
+        args: [...server.args],
+        ...(server.env ? { env: { ...server.env } } : {}),
+      })),
+    };
+  }
+
+  /**
+   * 注册一个「设置变了」的回调（WS `set_settings` 与 REST `PATCH /settings` 都会触发）。
+   *
+   * MCP 桥靠它做到改配置即生效：谁都不必记得在每个写入点手动调一次 `sync()`——
+   * 漏一次的表现是「配置改了但工具没变」，而那从代码上看不出来。
+   *
+   * 回调抛错**不**回滚设置：设置已经落盘，回滚会让文件与内存不一致。
+   */
+  setOnChange(listener: (settings: Settings) => void): void {
+    this.onChange = listener;
+  }
+
+  private onChange: ((settings: Settings) => void) | undefined;
+
+  private notifyChange(): void {
+    if (!this.onChange) return;
+    try {
+      this.onChange(this.get());
+    } catch {
+      /* listener failures must not corrupt the applied settings */
+    }
   }
 
   /** 读取单个字段。 */
@@ -262,13 +380,19 @@ export class SettingsService {
     }
     this.current = next as Settings;
     this.port.save(this.get());
+    this.notifyChange();
     return this.get();
   }
 
   /** 重置为默认值。 */
   reset(): Settings {
-    this.current = { ...this.defaults, disabledTools: [...this.defaults.disabledTools] };
+    this.current = {
+      ...this.defaults,
+      disabledTools: [...this.defaults.disabledTools],
+      mcpServers: [],
+    };
     this.port.save(this.get());
+    this.notifyChange();
     return this.get();
   }
 }

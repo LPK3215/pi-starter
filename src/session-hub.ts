@@ -26,6 +26,7 @@ import { computeSoftCap, contextUsageRatio, estimateTokens, planContextTrim, typ
 import { getLogger } from "./log.js";
 import { AppError, badRequest } from "./http/errors.js";
 import { assertSessionFileAllowed, type SessionCatalog, type StoredConversation } from "./sessions/store.js";
+import type { PlanModeController } from "./modes/plan-mode.js";
 import { ToolWatchdog } from "./approval/watchdog.js";
 import { metrics } from "./metrics.js";
 import type {
@@ -134,6 +135,12 @@ export interface ConversationOptions {
    * signal. 0 / omitted disables the watchdog.
    */
   toolTimeoutMs?: number;
+  /**
+   * 计划模式状态控制器（可选）。
+   *
+   * 不传 = 这套装配没有计划模式，`planMode` 恒为 false，行为与接入前一致。
+   */
+  planMode?: PlanModeController;
 }
 
 export class Conversation {
@@ -145,6 +152,14 @@ export class Conversation {
   lastActiveAt = Date.now();
   promptedSinceActive = false;
   pendingApproval: UiApproval | null = null;
+  /**
+   * 本连接内自增的迭代序号。
+   *
+   * SDK 投给会话订阅的 `turn_start` 只有 `type`（轮次下标在扩展层才有），
+   * 所以序号由这里自己数，并且**明确**是「本连接内第几轮」，不冒充 SDK 的下标。
+   */
+  private turnIndex = 0;
+  private readonly planMode: PlanModeController | undefined;
 
   private push: (msg: ServerMessage) => void;
   private readonly unsubscribe: () => void;
@@ -173,6 +188,7 @@ export class Conversation {
     this.listConversations = opts.listConversations;
     this.onTurnEnd = opts.onTurnEnd;
     this.keepRecent = opts.keepRecent ?? (() => 6);
+    this.planMode = opts.planMode;
     this.id = opts.session.sessionId;
     const log = getLogger().child({ component: "conversation", conversationId: this.id });
     const timeout = opts.toolTimeoutMs ?? 0;
@@ -286,6 +302,28 @@ export class Conversation {
         this.onTurnEnd?.();
         break;
       }
+      case "turn_start": {
+        // One ReAct iteration inside a single prompt(). `run_start` only fires once per
+        // prompt, so a multi-step turn (model → tool → model) is otherwise invisible.
+        this.push({ type: "turn_start", conversationId: this.id, turnIndex: ++this.turnIndex });
+        break;
+      }
+      case "turn_end": {
+        const message = (event as { message?: AgentMessage }).message;
+        const stopReason =
+          message && typeof (message as { stopReason?: unknown }).stopReason === "string"
+            ? (message as { stopReason: string }).stopReason
+            : undefined;
+        const toolResults = (event as { toolResults?: unknown[] }).toolResults;
+        this.push({
+          type: "turn_end",
+          conversationId: this.id,
+          turnIndex: this.turnIndex,
+          ...(stopReason ? { stopReason } : {}),
+          ...(Array.isArray(toolResults) ? { toolResults: toolResults.length } : {}),
+        });
+        break;
+      }
       case "message_end": {
         this.streamingText = "";
         this.refreshTitleFromSession();
@@ -329,6 +367,7 @@ export class Conversation {
     // Snapshot checkpoint policy: boundaries flush immediately, everything else throttles.
     if (
       event.type === "agent_end" ||
+      event.type === "turn_end" ||
       event.type === "tool_execution_end" ||
       event.type === "message_end" ||
       event.type === "compaction_end" ||
@@ -473,6 +512,7 @@ export class Conversation {
         },
       },
       pendingApproval: this.pendingApproval,
+      planMode: this.isPlanMode(),
       conversations: this.listConversations(),
     };
   }
@@ -542,6 +582,27 @@ export class Conversation {
 
   getState(): void {
     this.snap.flushSnapshot(true);
+  }
+
+  /* ─────────────── 计划模式 ─────────────── */
+
+  /**
+   * 本对话当前是否处于计划模式。
+   *
+   * 未装配控制器时恒为 false：没有控制器的装配里根本没有这个能力，
+   * 让它读设置默认值只会造出一个「看起来开着、实际没人拦」的假状态。
+   */
+  isPlanMode(): boolean {
+    return this.planMode?.isEnabled(this.id) ?? false;
+  }
+
+  /** 开关本对话的计划模式。返回设置后的值；没装配控制器时返回 false 且不改任何状态。 */
+  setPlanMode(enabled: boolean): boolean {
+    if (!this.planMode) return false;
+    const next = this.planMode.set(this.id, enabled);
+    // 状态变了立刻出一份新快照：否则客户端要等到下一个增量才知道模式变了。
+    this.getState();
+    return next;
   }
 
   /** Surface a pending approval request and push it immediately. */
@@ -643,6 +704,8 @@ export interface ClientSessionOptions {
    * applies to newly created conversations. 0 (or omitted) disables the watchdog.
    */
   toolTimeoutMs?: () => number;
+  /** 计划模式状态控制器（可选）；不传则该装配没有计划模式。 */
+  planMode?: PlanModeController;
 }
 
 /** Default cap on simultaneously open conversations per client (matches pi-web-ui). */
@@ -674,6 +737,7 @@ export class ClientSession {
   private readonly allowedSessionRoots: readonly string[];
   private readonly persistedConversations: () => readonly StoredConversation[];
   private readonly rememberConversation: ((conv: Conversation) => void) | undefined;
+  private readonly planMode: PlanModeController | undefined;
 
   constructor(options: ClientSessionOptions) {
     this.clientId = options.clientId;
@@ -688,6 +752,7 @@ export class ClientSession {
     this.allowedSessionRoots = options.allowedSessionRoots ?? [];
     this.persistedConversations = options.persistedConversations ?? (() => []);
     this.rememberConversation = options.rememberConversation;
+    this.planMode = options.planMode;
   }
 
   /** Rebind the outbound sink for every conversation (client reconnect). */
@@ -766,6 +831,7 @@ export class ClientSession {
       },
       keepRecent: this.keepRecent,
       toolTimeoutMs: this.toolTimeoutMs(),
+      planMode: this.planMode,
       ownsSession: Boolean(factory),
     });
     const saved = this.persistedConversations().find((entry) => entry.sessionId === conv.id);
@@ -895,6 +961,16 @@ export class ClientSession {
     this.active?.setThinking(level);
   }
 
+  /**
+   * 向本连接推一条通知。
+   *
+   * 给「服务端发生了一件事，客户端必须立刻看到」用（子代理失败、MCP 服务器掉线）。
+   * 这类事件没有对应的快照字段——等下一次快照才看到，用户会以为什么都没发生。
+   */
+  notify(level: "info" | "warn" | "error", text: string): void {
+    this.emit({ type: "notice", level, text });
+  }
+
   /** Apply a tool set to every conversation (the tool registry is client-wide). */
   applyToolSet(toolNames: readonly string[]): void {
     for (const conv of this.convs.values()) conv.applyToolSet(toolNames);
@@ -946,6 +1022,13 @@ export class SessionHub {
     private readonly toolTimeoutMs: () => number = () => 0,
     private readonly allowedSessionRoots: readonly string[] = [],
     private readonly catalog?: SessionCatalog,
+    /**
+     * 可选的按名装配参数。
+     *
+     * 位置参数已经排到第 8 个，再加第 9 个会让调用方无法分辨「传错顺序」与「少传一个」——
+     * 而这类错误只表现为行为诡异，不会报错。新增能力从这里进。
+     */
+    private readonly options: { planMode?: PlanModeController } = {},
   ) {}
 
   /**
@@ -1012,6 +1095,7 @@ export class SessionHub {
       allowedSessionRoots: this.allowedSessionRoots,
       persistedConversations: () => this.catalog?.list() ?? [],
       rememberConversation: (conv) => this.remember(conv),
+      planMode: this.options.planMode,
     });
     this.sessions.set(clientId, session);
     await session.attach();
@@ -1108,8 +1192,10 @@ export function createSessionHub(
   toolTimeoutMs?: () => number,
   allowedSessionRoots?: readonly string[],
   catalog?: SessionCatalog,
+  options?: { planMode?: PlanModeController },
 ): SessionHub {
   return new SessionHub(
     agent, cfg, cwd, keepRecent, maxOpenConversations, toolTimeoutMs, allowedSessionRoots, catalog,
+    options,
   );
 }

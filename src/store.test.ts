@@ -15,7 +15,9 @@ import {
   SettingsService,
   fileSettingsPort,
   defaultSettingsFile,
+  memorySettingsPort,
   sanitizeSettings,
+  MAX_MCP_SERVERS,
   SETTINGS_DEFAULTS,
 } from "./settings.js";
 import {
@@ -114,6 +116,80 @@ test("持久化：sanitizeSettings 剔除非法字段但保留合法字段", () 
   assert.equal(clean.disabledTools, undefined);
   assert.deepEqual(dropped.sort(), ["contextKeepRecent", "disabledTools", "nope"]);
   assert.deepEqual(sanitizeSettings(undefined).clean, {});
+});
+
+test("持久化：mcpServers 逐条校验，错误信息带下标", () => {
+  const svc = new SettingsService(memorySettingsPort());
+  const good = { name: "demo", command: "node", args: ["server.mjs"] };
+  svc.patch({ mcpServers: [good] });
+  assert.deepEqual(svc.get().mcpServers, [good]);
+
+  // 错误必须指出是哪一条，否则用户只看到「Expected array of MCP server configs」。
+  assert.throws(
+    () => svc.patch({ mcpServers: [good, { name: "Bad Name", command: "node" }] }),
+    /mcpServers\[1\]\.name/,
+  );
+  assert.throws(() => svc.patch({ mcpServers: [good, { name: "b", command: "node", args: [1] }] }), /mcpServers\[1\]\.args/);
+  assert.throws(() => svc.patch({ mcpServers: [good, good] }), /duplicated/);
+  assert.throws(
+    () => svc.patch({ mcpServers: Array.from({ length: MAX_MCP_SERVERS + 1 }, (_, i) => ({ name: `s${i}`, command: "node" })) }),
+    /Too many/,
+  );
+  assert.deepEqual(
+    svc.get().mcpServers,
+    [good],
+    "a rejected patch must not partially apply",
+  );
+});
+
+test("持久化：落盘文件里的非法 mcpServers 只丢该字段，服务照常起来", () => {
+  const file = join(tmpDir(), "settings.json");
+  writeFileSync(
+    file,
+    JSON.stringify({ locale: "en-US", mcpServers: [{ name: "../evil", command: "node" }] }),
+    "utf8",
+  );
+  // 与 server.ts 的装配一致：不传 sanitize 时构造会直接抛错（配置坏了就是死局）。
+  const svc = new SettingsService(
+    fileSettingsPort(file, { sanitize: (raw) => sanitizeSettings(raw).clean }),
+  );
+  assert.equal(svc.get().locale, "en-US", "the rest of the file must survive");
+  assert.deepEqual(svc.get().mcpServers, [], "a hostile entry must not be kept");
+
+  // 反向验证：没有清洗时同一份文件必须让构造失败，而不是静默加载。
+  assert.throws(
+    () => new SettingsService(fileSettingsPort(file)),
+    /mcpServers\[0\]\.name/,
+    "loading must not silently accept an invalid MCP server",
+  );
+});
+
+test("设置：get() 深拷贝可变字段，外部改动污染不到内部状态", () => {
+  const svc = new SettingsService(memorySettingsPort());
+  svc.patch({ mcpServers: [{ name: "a", command: "node", env: { K: "v" } }] });
+  const snapshot = svc.get();
+  snapshot.mcpServers[0]!.name = "hacked";
+  snapshot.mcpServers[0]!.env!.K = "hacked";
+  assert.equal(svc.get().mcpServers[0]?.name, "a", "MCP config must not be mutable from outside");
+  assert.equal(svc.get().mcpServers[0]?.env?.K, "v");
+});
+
+test("设置：setOnChange 在 patch 与 reset 后触发，回调抛错不影响已存设置", () => {
+  const svc = new SettingsService(memorySettingsPort());
+  const seen: number[] = [];
+  svc.setOnChange((settings) => {
+    seen.push(settings.mcpServers.length);
+    throw new Error("listener blew up");
+  });
+  svc.patch({ mcpServers: [{ name: "a", command: "node" }] });
+  assert.deepEqual(seen, [1]);
+  assert.equal(
+    svc.get().mcpServers.length,
+    1,
+    "a listener failure must not roll back settings that were already persisted",
+  );
+  svc.reset();
+  assert.deepEqual(seen, [1, 0]);
 });
 
 test("持久化：写入是原子的（不留临时文件、不是截断态）", () => {

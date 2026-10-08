@@ -34,6 +34,11 @@ export interface ToolSpec {
   capabilities: string[];
   /** 风险等级。 */
   risk: ToolRisk;
+  /**
+   * 归属标记（可选）。运行期增删的工具（MCP）用它标出「这条属于谁」，
+   * 服务器下线时才能精确摘掉它贡献的全部条目，而不必猜名字前缀。
+   */
+  origin?: string;
   /** SDK 工具定义（builtin 之外才有；builtin 由 SDK 提供时可为 undefined）。 */
   definition?: ToolDefinition;
 }
@@ -107,6 +112,31 @@ export class ToolRegistry {
   /** 批量登记。 */
   registerAll(specs: readonly ToolSpec[]): void {
     for (const spec of specs) this.register(spec);
+  }
+
+  /**
+   * 注销一个工具。返回是否命中。
+   *
+   * 运行期增删工具（MCP 桥改配置、临时注入）必须能把条目**拿掉**：只增不减的话，
+   * 服务器下线后它的工具仍留在能力目录里，模型会一直去调一个已经没人应答的名字。
+   * `order` 也要同步删，否则 `list()` 的顺序数组会随每次热重载单调增长。
+   */
+  unregister(name: string): boolean {
+    if (!this.specs.delete(name)) return false;
+    this.enabled.delete(name);
+    const index = this.order.indexOf(name);
+    if (index >= 0) this.order.splice(index, 1);
+    return true;
+  }
+
+  /** 批量注销（按来源清理，例如断掉一个 MCP 服务器后清掉它贡献的全部工具）。 */
+  unregisterWhere(predicate: (spec: ToolSpec) => boolean): string[] {
+    const removed: string[] = [];
+    for (const spec of this.list()) {
+      if (!predicate(spec)) continue;
+      if (this.unregister(spec.name)) removed.push(spec.name);
+    }
+    return removed;
   }
 
   get(name: string): ToolSpec | undefined {

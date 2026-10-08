@@ -169,4 +169,9 @@ export const DEFAULT_RATE_RULES: Record<string, RateLimitRule> = {
   "/files/rename": { windowMs: 60_000, max: 60 },
   "/files/copy": { windowMs: 60_000, max: 60 },
   "/files/upload": { windowMs: 60_000, max: 30 },
+  // 密钥写盘与运行中换key：写盘 + 重建模型凭据快照，不是廉价操作。
+  // 路径不含参数，所以这里的字面路径能真正匹配上（限流器按 req.path 查表）。
+  "/provider-keys": { windowMs: 60_000, max: 20 },
+  "/provider-keys/activate": { windowMs: 60_000, max: 20 },
+  "/provider-keys/remove": { windowMs: 60_000, max: 20 },
 };

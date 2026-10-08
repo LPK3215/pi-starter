@@ -38,8 +38,10 @@ import {
 import { AppError, badRequest, busy as busyError } from "./http/errors.js";
 import { registerFileRoutes } from "./http/file-routes.js";
 import { registerApprovalRoutes } from "./http/approval-routes.js";
+import { registerProviderKeyRoutes } from "./http/provider-key-routes.js";
 import type { ApprovalRulesStore } from "./approval/rules.js";
 import type { FileService } from "./files/service.js";
+import type { ProviderKeyStore } from "./provider-keys.js";
 import { createRateLimiter, DEFAULT_RATE_RULES, type RateLimitRule } from "./http/rate-limit.js";
 import { getLogger } from "./log.js";
 import { Metrics, metrics as defaultMetrics } from "./metrics.js";
@@ -99,6 +101,19 @@ export interface CreateAppOptions {
    * 省略则不注册——修改审批策略是敏感能力，不该默认开启。
    */
   approvalRules?: ApprovalRulesStore;
+  /**
+   * 多把API 密钥的存储。提供后开放 `/provider-keys`。
+   *
+   * 省略则不注册——能替换运行中的模型凭据是敏感能力，不该默认开启。
+   */
+  providerKeys?: ProviderKeyStore;
+  /**
+   * 把某个 provider 的**当前激活密钥**装进运行中的模型运行时。
+   *
+   * 由装配层注入（内部走 `SessionHub.setModel`）。缺省则密钥只落盘不生效——
+   * 那会让接口返回 ok:true 而实际仍在用旧 key，所以生产装配必须提供。
+   */
+  applyActiveKey?: (provider: string) => Promise<void>;
   rateLimit?: boolean | Record<string, RateLimitRule>;
   /**
    * Proxies whose X-Forwarded-For may be trusted (e.g. ["loopback"] behind a local nginx).
@@ -187,6 +202,12 @@ export function createApp(options: CreateAppOptions): CreateAppResult {
   registerControlRoutes(app, options.agent, { registry, settings });
   if (options.files) registerFileRoutes(app, { service: options.files });
   if (options.approvalRules) registerApprovalRoutes(app, { store: options.approvalRules });
+  if (options.providerKeys) {
+    registerProviderKeyRoutes(app, {
+      store: options.providerKeys,
+      applyActive: options.applyActiveKey,
+    });
+  }
 
   // Rich capability/inventory snapshot (superset of the old /health body).
   app.get("/info", async (_req, res) => {

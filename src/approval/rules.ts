@@ -170,6 +170,17 @@ const BUILTIN_RULES: ApprovalRule[] = [
     action: "ask",
     builtin: true,
   },
+  {
+    // 子代理在自己的会话里可以跑 bash / 写文件，而它的工具调用不经过**这条**对话的
+    // 审批卡片；不拦住派发，就等于开了一条绕过审批的旁路。
+    id: "builtin:subagent.delegate",
+    description: "Dispatch a subagent (it may run shell / write tools on its own)",
+    tools: "*",
+    field: "params",
+    match: { kind: "capability", value: "subagent" },
+    action: "ask",
+    builtin: true,
+  },
 ];
 
 /** 内置规则（只读副本，供 store 合并与 UI 展示）。 */

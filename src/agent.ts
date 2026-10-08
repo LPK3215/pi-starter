@@ -118,6 +118,13 @@ export interface BuildAgentOptions {
   resumeFrom?: string;
   /** 注入额外工具（叠在 src/tools 登记的工具之上） */
   extraTools?: ToolDefinition[];
+  /**
+   * 运行期增删的工具来源（MCP 桥）。
+   *
+   * 是**函数**而不是数组：MCP 工具随配置变化，必须在每次建会话的那一刻取当时最新的集合。
+   * 传数组的话，MCP 服务器是会话建好之后才连上的，工具就永远进不了白名单。
+   */
+  dynamicTools?: () => readonly ToolDefinition[];
   /** 注入额外扩展（叠在 src/extensions 登记的钩子之上，排在 guard / audit 后面） */
   extraExtensions?: ExtensionFactory[];
   /** 额外技能目录（叠在 src/skills 之上，同名时仓库内置优先）。交给 SDK additionalSkillPaths */
@@ -186,6 +193,14 @@ export interface BuiltAgent {
    * 可选：缺席时 Web 端自动降级为单对话模式（复用 `session`）。
    */
   createSession?(opts?: { resumeFrom?: string }): Promise<AgentSession>;
+  /**
+   * 换掉某个 provider 运行时使用的 API Key。
+   *
+   * 走 SDK 的 `ModelRuntime.setRuntimeApiKey()`：它会同时更新凭据与「已配置 provider」
+   * 快照，所以随后的 `listModels()` / `switchModel()` 立刻看到新 key 对应的可用模型，
+   * 不需要重建 ModelRuntime。原始 key 只在这里出现一次，调用方不要往日志里打。
+   */
+  applyApiKey?(provider: string, apiKey: string): Promise<void>;
   dispose(): void;
 }
 
@@ -270,14 +285,21 @@ export async function buildAgent(options: BuildAgentOptions = {}): Promise<Built
     createDbStatusTool(database),
     createDbQueryTool(database),
   ];
-  const allToolList = [...allTools, ...dynamicTools, ...(options.extraTools ?? [])];
-  const toolPolicy = sessionToolPolicy(
-    cfg.builtinTools,
-    allToolList.map((tool) => tool.name),
-  );
+
+  /**
+   * 每个会话各自的工具清单。
+   *
+   * 刻意在 `createSession` **内部**求值：`createAgentSession` 的 `tools` 会变成 SDK 的
+   * `allowedToolNames` 硬白名单，构造之后无法增补。所以运行期新增的工具（MCP）
+   * 只能从下一次建会话起生效——白名单必须按会话重算，不能在build 的时候算一次存起来。
+   */
+  const resolveToolList = (): ToolDefinition[] => {
+    const live = options.dynamicTools?.() ?? [];
+    return [...allTools, ...dynamicTools, ...live, ...(options.extraTools ?? [])];
+  };
 
   /** Build a fresh resource loader (one per session, so conversations stay isolated). */
-  const buildLoader = async (): Promise<DefaultResourceLoader> => {
+  const buildLoader = async (toolList: readonly ToolDefinition[]): Promise<DefaultResourceLoader> => {
     const loader = new DefaultResourceLoader({
       cwd: process.cwd(),
       agentDir: getAgentDir(),
@@ -289,7 +311,7 @@ export async function buildAgent(options: BuildAgentOptions = {}): Promise<Built
       appendSystemPromptOverride: () => [],
       extensionFactories: [
         (pi) => {
-          for (const tool of allToolList) pi.registerTool(tool);
+          for (const tool of toolList) pi.registerTool(tool);
         },
         ...allExtensions,
         ...(options.extraExtensions ?? []),
@@ -308,7 +330,12 @@ export async function buildAgent(options: BuildAgentOptions = {}): Promise<Built
    * 路径校验在 `resolveSessionManager` 里，不在调用方的注释里。
    */
   const createSession = async (opts?: { resumeFrom?: string }): Promise<AgentSession> => {
-    const loader = await buildLoader();
+    const toolList = resolveToolList();
+    const toolPolicy = sessionToolPolicy(
+      cfg.builtinTools,
+      toolList.map((tool) => tool.name),
+    );
+    const loader = await buildLoader(toolList);
     const sessionManager = resolveSessionManager(
       options.inMemory,
       options.sessionDir,
@@ -362,6 +389,9 @@ export async function buildAgent(options: BuildAgentOptions = {}): Promise<Built
       return next.model;
     },
     createSession,
+    applyApiKey: async (provider, apiKey) => {
+      await modelRuntime.setRuntimeApiKey(provider, apiKey);
+    },
     dispose: () => {
       session.dispose();
       database.close();

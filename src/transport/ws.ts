@@ -204,6 +204,7 @@ function buildCapabilities(runtime: WsRuntime): UiCapabilities {
       description: k.description,
     })),
     commands: [...DEFAULT_COMMANDS, ...(runtime.slashCommands ?? [])],
+    planModeDefault: runtime.settings.get().planMode,
   };
 }
 
@@ -462,6 +463,26 @@ class ClientConn {
         case "get_settings":
           this.send({ type: "settings_state", settings: runtime.settings.get() });
           break;
+        case "set_plan_mode": {
+          // The plan-mode gate lives in an extension keyed by the SDK session id, so this
+          // command must resolve a real conversation first: toggling "the mode" without a
+          // conversation would silently do nothing.
+          const target = msg.conversationId?.trim()
+            ? this.cs?.get(msg.conversationId)
+            : this.cs?.active;
+          if (!target) {
+            this.send({ type: "error", message: "no conversation to set plan mode on" });
+            break;
+          }
+          const next = target.setPlanMode(msg.enabled);
+          this.send({
+            type: "notice",
+            level: "info",
+            text: next ? "计划模式已开启：只规划，不实施" : "计划模式已关闭",
+          });
+          this.send({ type: "capabilities", capabilities: buildCapabilities(runtime) });
+          break;
+        }
         case "set_settings": {
           try {
             const settings = runtime.settings.patch(msg.settings);

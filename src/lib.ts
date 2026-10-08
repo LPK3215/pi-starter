@@ -206,11 +206,14 @@ export {
   bool,
   enumOf,
   int,
+  MAX_MCP_SERVERS,
   memorySettingsPort,
+  mcpServerList,
   str,
   strList,
   validateSettings,
   type FieldValidator,
+  type McpServerConfig,
   type Settings,
   type SettingsPort,
   type SettingsSchema,
@@ -333,3 +336,57 @@ export {
   MAX_SKILL_PATHS,
   type LoadSkillsOptions,
 } from "./skills/index.js";
+
+/* ─────────────── MCP / 计划模式 / 子代理 / 多密钥 ─────────────── */
+
+export {
+  McpClient,
+  flattenContent,
+  type McpClientOptions,
+  type McpProcessHandle,
+  type McpToolCallResult,
+  type McpToolDescriptor,
+  type SpawnFn,
+} from "./mcp/client.js";
+
+export {
+  McpBridge,
+  type McpBridgeOptions,
+  type McpServerStatus,
+} from "./mcp/bridge.js";
+
+export {
+  MAX_PLAN_MODE_ENTRIES,
+  PLAN_MODE_PROMPT_SECTION,
+  PlanModeController,
+  planModeDenyReason,
+  planModeExtension,
+  type PlanModeControllerOptions,
+} from "./modes/plan-mode.js";
+
+export {
+  DELEGATE_TOOL_NAME,
+  DEFAULT_MAX_CONCURRENT_SUBAGENTS,
+  DEFAULT_SUBAGENT_TIMEOUT_MS,
+  MAX_SUBAGENT_OUTPUT_CHARS,
+  SUBAGENT_CAPABILITY,
+  buildSubagentPrompt,
+  createDelegateTool,
+  lastAssistantText,
+  truncateSubagentOutput,
+  type SubagentRunnerOptions,
+  type SubagentSession,
+} from "./subagents/index.js";
+
+export {
+  MAX_PROVIDER_KEYS,
+  createProviderKeyStore,
+  defaultProviderKeysFile,
+  type ProviderKeyInfo,
+  type ProviderKeyStore,
+} from "./provider-keys.js";
+
+export {
+  registerProviderKeyRoutes,
+  type ProviderKeyRoutesOptions,
+} from "./http/provider-key-routes.js";

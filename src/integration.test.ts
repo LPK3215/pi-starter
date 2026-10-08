@@ -20,11 +20,12 @@ import { WebSocket } from "ws";
 import { SessionHub, DEFAULT_MAX_OPEN_CONVERSATIONS, MAX_SNAPSHOT_MESSAGES } from "./session-hub.js";
 import { listenExistingServer } from "./test-server.js";
 import { resolveRuntimeConfig } from "./config.js";
-import { PROTOCOL_VERSION, type ServerMessage, type UiState } from "./protocol.js";
+import { PROTOCOL_VERSION, type ServerMessage, type UiCapabilities, type UiState } from "./protocol.js";
 import { attachWebSocket } from "./transport/ws.js";
 import { Metrics } from "./metrics.js";
 import { createToolRegistry } from "./tools/registry.js";
-import { SettingsService } from "./settings.js";
+import { SettingsService, memorySettingsPort } from "./settings.js";
+import { PlanModeController } from "./modes/plan-mode.js";
 import type { BuiltAgent } from "./agent.js";
 import type { Model } from "@earendil-works/pi-ai";
 
@@ -336,10 +337,14 @@ interface Harness {
 async function startHarness(
   rateLimit?: Record<string, { windowMs: number; max: number }>,
   agentOverride?: BuiltAgent,
+  options: { planMode?: PlanModeController } = {},
 ): Promise<Harness> {
   const agent = agentOverride ?? makeAgent();
   const cfg = resolveRuntimeConfig();
-  const hub = new SessionHub(agent, cfg);
+  const hub = new SessionHub(
+    agent, cfg, process.cwd(), undefined, undefined, undefined, undefined, undefined,
+    options.planMode ? { planMode: options.planMode } : {},
+  );
   const settings = new SettingsService();
   const metrics = new Metrics();
   // Use the real registry rather than a hand-rolled stub: it keeps the test honest about
@@ -402,6 +407,59 @@ async function startHarness(
 
 const send = (h: Harness, msg: unknown) => h.socket.send(JSON.stringify(msg));
 const settle = (ms = 200) => new Promise((r) => setTimeout(r, ms));
+
+test("集成：WS set_plan_mode 真的改到权威状态（协议→hub→快照 全链路）", async () => {
+  const planMode = new PlanModeController({ defaultEnabled: () => false });
+  const h = await startHarness(undefined, undefined, { planMode });
+  try {
+    send(h, { type: "hello", protocolVersion: PROTOCOL_VERSION });
+    await settle(250);
+
+    // 能力目录必须带默认档：客户端要能在连上之前就知道新对话会不会进计划模式。
+    send(h, { type: "get_capabilities" });
+    await settle(150);
+    const caps = h.frames.filter((f) => f.type === "capabilities").at(-1) as
+      | { capabilities: UiCapabilities }
+      | undefined;
+    assert.equal(caps?.capabilities.planModeDefault, false);
+
+    send(h, { type: "set_plan_mode", enabled: true });
+    await settle(200);
+    const notices = h.frames.filter((f) => f.type === "notice") as { text: string }[];
+    assert.ok(
+      notices.some((n) => /计划模式已开启/.test(n.text)),
+      "the client must be told the mode changed",
+    );
+    const latest = h.frames.filter((f) => f.type === "snapshot").at(-1) as { state: UiState } | undefined;
+    assert.equal(
+      latest?.state.planMode,
+      true,
+      "the snapshot is the authoritative source; a client-held flag would drift from what the gate enforces",
+    );
+
+    send(h, { type: "set_plan_mode", enabled: false });
+    await settle(200);
+    const after = h.frames.filter((f) => f.type === "snapshot").at(-1) as { state: UiState } | undefined;
+    assert.equal(after?.state.planMode, false);
+  } finally {
+    await h.close();
+  }
+});
+
+test("集成：未装配计划模式时 set_plan_mode 不会假装成功", async () => {
+  const h = await startHarness();
+  try {
+    send(h, { type: "hello", protocolVersion: PROTOCOL_VERSION });
+    await settle(250);
+    send(h, { type: "set_plan_mode", enabled: true });
+    await settle(200);
+    // 没有控制器 → 状态恒为 false。谎报开启会让客户端显示「已锁定」而实际没人拦。
+    const latest = h.frames.filter((f) => f.type === "snapshot").at(-1) as { state: UiState } | undefined;
+    assert.equal(latest?.state.planMode, false);
+  } finally {
+    await h.close();
+  }
+});
 
 test("集成：hello → ready 优先，其余命令按序回放", async () => {
   const h = await startHarness();
@@ -678,6 +736,114 @@ test("集成：agent_end 发出 run_end（含 stopReason / aborted），工具 u
   });
   const aborted = sink.frames.find((f) => f.type === "run_end") as { aborted?: boolean } | undefined;
   assert.equal(aborted!.aborted, true, "an abort must be flagged");
+
+  hub.dispose();
+});
+
+test("集成：turn_start / turn_end 逐迭代播报，轮次序号自增", async () => {
+  const agent = makeAgent();
+  const hub = new SessionHub(agent, resolveRuntimeConfig());
+  const sink = collector();
+  const cs = await hub.attach("c1", sink.push);
+  const session = cs.active!.sdkSession as unknown as FakeSession;
+
+  // 一次 prompt 里模型可能「调用工具 → 再想」多轮；run_start 只来一次，
+  // 所以逐迭代的进度只能靠 turn_* 帧——缺了它客户端只能显示「在忙」而看不出走到第几步。
+  const isSnapshot = (f: ServerMessage) => f.type === "snapshot" || f.type === "snapshot_delta";
+  const latestRev = () =>
+    Math.max(0, ...sink.frames.filter(isSnapshot).map((f) => (f as { rev?: number }).rev ?? 0));
+
+  sink.frames.length = 0;
+  const revBefore = latestRev();
+  session.emit({ type: "turn_start" });
+  session.emit({
+    type: "turn_end",
+    message: { role: "assistant", content: "a", timestamp: 2, stopReason: "toolUse" },
+    toolResults: [{ toolCallId: "t1", toolName: "read", output: "ok" }],
+  } as never);
+  session.emit({ type: "turn_start" });
+  session.emit({
+    type: "turn_end",
+    message: { role: "assistant", content: "b", timestamp: 3, stopReason: "stop" },
+  } as never);
+
+  const starts = sink.frames.filter((f) => f.type === "turn_start") as { turnIndex: number }[];
+  const ends = sink.frames.filter((f) => f.type === "turn_end") as {
+    turnIndex: number;
+    stopReason?: string;
+    toolResults?: number;
+  }[];
+  assert.equal(starts.length, 2, "every ReAct iteration must be announced");
+  assert.equal(ends.length, 2);
+  assert.deepEqual(
+    starts.map((f) => f.turnIndex),
+    [1, 2],
+    "turn index must increase monotonically within the connection",
+  );
+  assert.equal(ends[0]!.turnIndex, 1, "an iteration ends under the index it started with");
+  assert.equal(ends[1]!.turnIndex, 2);
+  assert.equal(ends[0]!.stopReason, "toolUse", "stopReason must be carried over");
+  assert.equal(ends[0]!.toolResults, 1, "the tool-result count must reach the client");
+  assert.equal(ends[1]!.toolResults, undefined, "no array → no invented count");
+
+  // 逐迭代结束也要推进快照版本：进度条靠它更新，而不是等整轮跑完。
+  //（帧可能是全量 snapshot 或增量 snapshot_delta，两者都算推进，所以看 rev 而不是看类型。）
+  assert.ok(
+    latestRev() > revBefore,
+    `each iteration boundary must advance the snapshot rev, got ${latestRev()} <= ${revBefore}`,
+  );
+
+  hub.dispose();
+});
+
+test("集成：计划模式按会话隔离，快照里的 planMode 是权威值", async () => {
+  const planMode = new PlanModeController({ defaultEnabled: () => false });
+  const agent = makeAgent();
+  const hub = new SessionHub(agent, resolveRuntimeConfig(), process.cwd(), undefined, undefined, undefined, undefined, undefined, {
+    planMode,
+  });
+  const sink = collector();
+  const cs = await hub.attach("c1", sink.push);
+  const other = await hub.attach("c2", collector().push);
+
+  const snapshotPlanMode = () =>
+    (sink.frames.filter((f) => f.type === "snapshot").at(-1) as { state: UiState } | undefined)
+      ?.state.planMode;
+  assert.equal(snapshotPlanMode(), false, "plan mode must be part of the authoritative snapshot");
+
+  assert.equal(cs.active!.setPlanMode(true), true);
+  assert.equal(snapshotPlanMode(), true, "toggling must publish a fresh snapshot immediately");
+  assert.equal(
+    other.active!.isPlanMode(),
+    false,
+    "plan mode is per conversation: one being planned must not freeze another",
+  );
+
+  // 再建一条对话：跟随默认档，而不是继承上一条的选择。
+  const fresh = await cs.newConversation();
+  assert.equal(fresh.isPlanMode(), false, "a new conversation starts from the default");
+
+  hub.dispose();
+});
+
+test("集成：settings.planMode 只影响跟随默认档的会话", async () => {
+  const settings = new SettingsService(memorySettingsPort());
+  const planMode = new PlanModeController({ defaultEnabled: () => settings.get().planMode });
+  const agent = makeAgent();
+  const hub = new SessionHub(agent, resolveRuntimeConfig(), process.cwd(), undefined, undefined, undefined, undefined, undefined, {
+    planMode,
+  });
+  const cs = await hub.attach("c1", collector().push);
+
+  settings.patch({ planMode: true });
+  assert.equal(cs.active!.isPlanMode(), true, "a conversation with no explicit choice follows the default");
+  cs.active!.setPlanMode(false);
+  settings.patch({ planMode: false });
+  assert.equal(
+    cs.active!.isPlanMode(),
+    false,
+    "an explicit choice must outrank the default, otherwise flipping the setting silently overrides it",
+  );
 
   hub.dispose();
 });
