@@ -21,6 +21,9 @@ import { Metrics } from "../metrics.js";
 import type { BuiltAgent } from "../agent.js";
 import type { ToolRegistry } from "../tools/registry.js";
 import type { SettingsService } from "../settings.js";
+// Type-only: routes.ts is imported by app.ts, which also imports session-hub.ts. A value
+// import would create a runtime cycle for no benefit — the hub is only used as a type here.
+import type { CompactionOutcome } from "../session-hub.js";
 
 /** Narrow a request body field, throwing a typed error instead of hand-writing 400s. */
 function requireString(value: unknown, field: string): string {
@@ -28,6 +31,15 @@ function requireString(value: unknown, field: string): string {
     throw validationFailed(`${field} is required`);
   }
   return value;
+}
+
+/** Wrap an async route so rejected promises reach the error middleware. */
+export function asyncRoute(
+  handler: (req: Request, res: Response) => Promise<void>,
+): (req: Request, res: Response, next: import("express").NextFunction) => void {
+  return (req, res, next) => {
+    handler(req, res).catch(next);
+  };
 }
 
 /* ────────────────────────── 探针与指标 ────────────────────────── */
@@ -211,9 +223,32 @@ export function registerDbRoutes(app: Express, agent: BuiltAgent): void {
 export function registerControlRoutes(
   app: Express,
   agent: BuiltAgent,
-  options: { registry?: ToolRegistry; settings?: SettingsService },
+  options: {
+    registry?: ToolRegistry;
+    settings?: SettingsService;
+    hub?: { compactAcrossClients(instructions?: string): Promise<CompactionOutcome & { compacted: number }> };
+  },
 ): void {
-  const { registry, settings } = options;
+  const { registry, settings, hub } = options;
+
+  /**
+   * 主动压缩上下文（REST 侧）。
+   *
+   * 压缩是**对话级**操作，所以作用到所有连接的当前对话；没有 hub 时端点不挂载——
+   * 悄悄作用在错误的会话上比不提供这个端点更糟。
+   *
+   * 失败也返回 200 + `ok:false` + 中文原因：「上下文还很小，压不划算」是给用户看的
+   * 判断依据，不是协议错误——用 4xx 会让前端把它当异常弹窗。
+   */
+  if (hub) {
+    app.post("/context/compact", asyncRoute(async (req, res) => {
+      const instructions = req.body?.instructions;
+      if (instructions !== undefined && typeof instructions !== "string") {
+        throw validationFailed("instructions must be a string");
+      }
+      res.json(await hub.compactAcrossClients(instructions));
+    }));
+  }
 
   if (registry) {
     app.get("/capabilities", (_req, res) => {
@@ -259,15 +294,6 @@ export function registerControlRoutes(
       }
     });
   }
-}
-
-/** Wrap an async route so rejected promises reach the error middleware. */
-export function asyncRoute(
-  handler: (req: Request, res: Response) => Promise<void>,
-): (req: Request, res: Response, next: import("express").NextFunction) => void {
-  return (req, res, next) => {
-    handler(req, res).catch(next);
-  };
 }
 
 /** Mount the typed error handler. Must be registered after every route. */

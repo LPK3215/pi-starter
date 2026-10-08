@@ -339,6 +339,16 @@ class ClientConn {
         case "abort":
           await this.cs?.abort();
           break;
+        case "compact_context": {
+          // Failures come back as an outcome object, not an exception: this is a user-initiated
+          // action, and "上下文还很小，压不划算" is information the UI should show, not an error.
+          const outcome = await this.cs?.compact(msg.instructions);
+          if (outcome && !outcome.ok && outcome.reason) {
+            this.metrics.inc("dispatchErrorsTotal");
+            this.send({ type: "notice", level: "warn", text: outcome.reason });
+          }
+          break;
+        }
         case "draft_update":
           // Drafts are client-local for now; accepted for forward compatibility.
           break;

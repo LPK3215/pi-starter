@@ -143,6 +143,36 @@ export interface ConversationOptions {
   planMode?: PlanModeController;
 }
 
+/**
+ * 主动压缩的结果。
+ *
+ * 失败也返回结构化结果而不是抛错：调用方是 UI 触发的一次用户操作，把它变成
+ * 协议错误帧只会得到一个红色弹窗，而这里的信息（多少 tokens、为什么不能压）
+ * 恰恰是用户需要的判断依据。
+ */
+export interface CompactionOutcome {
+  ok: boolean;
+  /** 失败原因（面向用户的中文，可直接展示）；成功时为空。 */
+  reason?: string;
+  tokensBefore?: number;
+  tokensAfter?: number;
+}
+
+/**
+ * 低于这个 token 数就不值得压。
+ *
+ * 压缩本身要调一次 LLM 做全文摘要，成本与延迟都不低；而几百 token 的上下文
+ * 压完几乎还是那么多，纯属白花一次调用。低于门槛时如实告诉用户"现在压不划算"。
+ */
+export const MIN_COMPACTABLE_TOKENS = 2_000;
+
+/** SDK 的压缩原因 → 面向用户的中文。给未知值留兜底，别让前端拿到裸英文枚举。 */
+const COMPACTION_REASON: Record<string, string> = {
+  manual: "手动触发",
+  threshold: "达到上下文阈值",
+  overflow: "上下文溢出",
+};
+
 export class Conversation {
   readonly id: string;
   readonly clientId: string;
@@ -163,9 +193,13 @@ export class Conversation {
 
   private push: (msg: ServerMessage) => void;
   private readonly unsubscribe: () => void;
-  private readonly cache: ProjectionCache = new WeakMap();
+  /**
+   * UI 投影缓存。压缩会整体重写消息历史，所以它必须可替换——readonly 做不到，
+   * 这不是为了方便改字段，而是「压缩后旧投影必须整体失效」本身就是正确性要求。
+   */
+  private cache: ProjectionCache = new WeakMap();
   /** Per-message token counts, keyed by the stable projected UiMessage reference. */
-  private readonly tokenCache = new WeakMap<UiMessage, number>();
+  private tokenCache: WeakMap<UiMessage, number> = new WeakMap();
   private readonly toolStartTimes = new Map<string, number>();
   /** Called after a turn ends, so the owning ClientSession can refresh its conversation list. */
   private readonly onTurnEnd: (() => void) | undefined;
@@ -339,14 +373,18 @@ export class Conversation {
         break;
       }
       case "compaction_start": {
-        this.push({ type: "notice", level: "info", text: `Compaction started (${event.reason})` });
+        this.push({
+          type: "notice",
+          level: "info",
+          text: `上下文压缩开始（${COMPACTION_REASON[event.reason] ?? event.reason}）`,
+        });
         break;
       }
       case "compaction_end": {
         this.push({
           type: "notice",
           level: event.aborted ? "warn" : "info",
-          text: event.aborted ? "Compaction aborted" : "Compaction finished",
+          text: event.aborted ? "上下文压缩被中止" : "上下文压缩完成",
         });
         break;
       }
@@ -582,6 +620,64 @@ export class Conversation {
 
   getState(): void {
     this.snap.flushSnapshot(true);
+  }
+
+  /* ─────────────── 主动压缩 ─────────────── */
+
+  /**
+   * 主动压缩本对话的上下文。
+   *
+   * 之前内核只有 SDK 自动触发时的被动 notice——客户端看得见「压缩发生了」，却没有任何
+   * 办法自己发起。上下文快满时只能等模型自己决定，而「该保留什么」只有用户知道
+   * （例如"保留所有文件路径与最终结论"）。
+   *
+   * 三条前置条件都给出**明确**理由而不是静默无效或硬崩：
+   *   - 正在流式 → 压缩要重写消息历史，与正在追加的消息冲突；
+   *   - 上下文太小 → 压了也省不下什么，白白花一次 LLM 调用；
+   *   - SDK 不支持 → 装配里没有这个能力。
+   */
+  async compact(instructions?: string): Promise<CompactionOutcome> {
+    const session = this.session;
+    if (session.isStreaming) {
+      return { ok: false, reason: "正在生成中，请等本轮结束后再压缩" };
+    }
+    const before = this.estimateTokensCached(this.boundedMessages(this.currentMessages()));
+    if (before <= MIN_COMPACTABLE_TOKENS) {
+      return {
+        ok: false,
+        reason: `上下文还很小（约 ${before} tokens），压缩收益不大`,
+        tokensBefore: before,
+      };
+    }
+    const compactFn = (session as { compact?: (i?: string) => Promise<unknown> }).compact;
+    if (typeof compactFn !== "function") {
+      return { ok: false, reason: "当前 SDK 不支持主动压缩", tokensBefore: before };
+    }
+
+    this.push({ type: "notice", level: "info", text: "开始压缩上下文…" });
+    try {
+      await compactFn.call(session, instructions?.trim() || undefined);
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      this.push({ type: "notice", level: "error", text: `压缩失败：${reason}` });
+      return { ok: false, reason, tokensBefore: before };
+    }
+    // 历史被重写过，投影缓存与 token 缓存都必须作废。
+    //
+    // 这不是杞人忧天：如果 SDK **原地改写**已有消息对象（而不是换新对象），WeakMap 的键
+    // 引用没变，就会命中压缩前的投影与 token 数——快照会继续显示被压掉的旧内容。
+    // 换新对象时 WeakMap 自然 miss，作废看似多余；但两种实现都存在，所以显式作废。
+    this.cache = new WeakMap();
+    this.tokenCache = new WeakMap();
+    this.streamingText = "";
+    const after = this.estimateTokensCached(this.boundedMessages(this.currentMessages()));
+    this.getState();
+    this.push({
+      type: "notice",
+      level: "info",
+      text: `压缩完成：约 ${before} → ${after} tokens`,
+    });
+    return { ok: true, tokensBefore: before, tokensAfter: after };
   }
 
   /* ─────────────── 计划模式 ─────────────── */
@@ -945,6 +1041,18 @@ export class ClientSession {
     await this.active?.abort();
   }
 
+  /**
+   * 主动压缩当前对话的上下文。
+   *
+   * 没有活动对话时**什么也不做**并说明原因——静默返回会让用户以为压过了，
+   * 下次上下文满时才发现根本没生效。
+   */
+  async compact(instructions?: string): Promise<CompactionOutcome> {
+    const conv = this.active;
+    if (!conv) return { ok: false, reason: "还没有对话，先发一条消息再压缩" };
+    return conv.compact(instructions);
+  }
+
   getState(): void {
     this.active?.getState();
   }
@@ -1153,6 +1261,47 @@ export class SessionHub {
       });
     }
     return model;
+  }
+
+  /**
+   * REST侧主动压缩：作用到**所有**连接的当前对话。
+   *
+   * REST 没有「哪个连接」的上下文，所以语义只能是全局的。逐个会话串行压缩而不是
+   * `Promise.all`：压缩要调 LLM，同时发起会撞上速率限制，而且一个失败不该让
+   * 其余的静默不出结果——失败会被收集并在最后一起报出。
+   */
+  async compactAcrossClients(instructions?: string): Promise<{
+    ok: boolean;
+    compacted: number;
+    reason?: string;
+    results: Array<{ clientId: string; ok: boolean; reason?: string; tokensBefore?: number; tokensAfter?: number }>;
+  }> {
+    const sessions = [...this.sessions.values()];
+    if (sessions.length === 0) {
+      return { ok: false, compacted: 0, reason: "当前没有活动连接", results: [] };
+    }
+    const results: Array<{
+      clientId: string; ok: boolean; reason?: string; tokensBefore?: number; tokensAfter?: number;
+    }> = [];
+    for (const session of sessions) {
+      try {
+        const outcome = await session.compact(instructions);
+        results.push({ clientId: session.clientId, ...outcome });
+      } catch (err) {
+        results.push({
+          clientId: session.clientId,
+          ok: false,
+          reason: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+    const compacted = results.filter((r) => r.ok).length;
+    return {
+      ok: compacted > 0,
+      compacted,
+      reason: compacted === 0 ? results[0]?.reason ?? "没有可压缩的对话" : undefined,
+      results,
+    };
   }
 
   private remember(conv: Conversation): void {

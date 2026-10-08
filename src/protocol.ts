@@ -168,6 +168,14 @@ export type ClientMessage =
   // 对话运行
   | { type: "prompt"; text: string }
   | { type: "abort" }
+  /**
+   * 主动压缩上下文。
+   *
+   * 之前只有 SDK 自动触发的被动 notice（`compaction_start` / `compaction_end`），
+   * 客户端看得见「压缩发生了」却**无法主动发起**——上下文快满时只能等模型自己决定。
+   * `instructions` 用来告诉它该保留什么（"保留所有文件路径与最终结论"）。
+   */
+  | { type: "compact_context"; instructions?: string }
   | { type: "draft_update"; text: string }
   // 会话编排
   | { type: "new_conversation" }
@@ -355,6 +363,7 @@ export const CLIENT_MESSAGE_TYPES = [
   "set_plan_mode",
   "get_settings",
   "set_settings",
+  "compact_context",
 ] as const satisfies readonly ClientMessage["type"][];
 
 /** Compile-time guard: every ClientMessage discriminant is listed above. */

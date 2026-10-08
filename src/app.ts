@@ -41,6 +41,7 @@ import { registerApprovalRoutes } from "./http/approval-routes.js";
 import { registerProviderKeyRoutes } from "./http/provider-key-routes.js";
 import type { ApprovalRulesStore } from "./approval/rules.js";
 import type { FileService } from "./files/service.js";
+import type { CompactionOutcome } from "./session-hub.js";
 import type { ProviderKeyStore } from "./provider-keys.js";
 import { createRateLimiter, DEFAULT_RATE_RULES, type RateLimitRule } from "./http/rate-limit.js";
 import { getLogger } from "./log.js";
@@ -74,7 +75,14 @@ export interface CreateAppOptions {
    * 会话中枢（可选）。提供后 `POST /model` 会经它切换，使 REST 与 WS 的模型保持一致；
    * 缺省则只切换共享 session（适合只嵌 REST 的库调用方）。
    */
-  hub?: { setModel(ref: string): Promise<Model<any>> };
+  /**
+   * 会话编排层。声明成**最小结构**而不是 `SessionHub`：路由只用到这两个方法，
+   * 写窄接口让测试替身与库嵌入方不必造一整个 hub，也不会让路由层反向依赖具体实现。
+   */
+  hub?: {
+    setModel(ref: string): Promise<Model<any>>;
+    compactAcrossClients(instructions?: string): Promise<CompactionOutcome & { compacted: number }>;
+  };
   /**
    * Rate limits for expensive routes. `true` uses DEFAULT_RATE_RULES; pass a rule map to
    * override. Omit (default) to disable — local single-user usage should not be throttled.
@@ -199,7 +207,7 @@ export function createApp(options: CreateAppOptions): CreateAppResult {
   });
   registerResourceRoutes(app, options.agent);
   registerDbRoutes(app, options.agent);
-  registerControlRoutes(app, options.agent, { registry, settings });
+  registerControlRoutes(app, options.agent, { registry, settings, hub: options.hub });
   if (options.files) registerFileRoutes(app, { service: options.files });
   if (options.approvalRules) registerApprovalRoutes(app, { store: options.approvalRules });
   if (options.providerKeys) {
