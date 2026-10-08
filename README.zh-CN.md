@@ -411,7 +411,7 @@ description: 套餐、单价、计费周期
 
 重启即可。模型先 `search_knowledge({ query: "专业版多少钱" })`，再 `read_knowledge({ name: "pricing" })`。当库用：`buildAgent({ extraKnowledgeDirs: ["/path/to/docs"] })`。
 
-默认是进程内关键词检索（不是向量库）。RAG 是**可选且可插拔**的：设 `PI_KNOWLEDGE_RETRIEVAL=vector` + embedding 源 `PI_EMBEDDINGS_PROVIDER=openai|ollama|transformers`。`transformers` 是**进程内**跑 `@huggingface/transformers`（首次用自动从 HF Hub 下 ONNX 权重到 `PI_EMBEDDINGS_CACHE_DIR`，不需 Ollama/外部服务；靠懒加载 opt-in，默认仍零依赖）。`search_knowledge` 透明切到 embedding + `VectorStore` cosine（默认内存；`PI_KNOWLEDGE_VECTOR_STORE=sqlite` 用 node:sqlite 持久化，重启不重算）。要用真正的向量库（Qdrant/pgvector），实现 `VectorStore` 并经 `buildAgent({ vectorStore })` 传入，工具侧与模型侧完全不变。这正是官方姿势：SDK 不带 RAG，只让你注册一个可搜索工具（本脚手架已经这么做），检索后端自己选。
+默认是进程内关键词检索（不是向量库）。RAG 是**可选且可插拔**的：设 `PI_KNOWLEDGE_RETRIEVAL=vector` + embedding 源 `PI_EMBEDDINGS_PROVIDER=openai|ollama|transformers`。`transformers` 是**进程内**跑 `@huggingface/transformers`（首次用自动从 HF Hub 下 ONNX 权重到 `PI_EMBEDDINGS_CACHE_DIR`，不需 Ollama/外部服务；靠懒加载 opt-in，默认仍零依赖）。`search_knowledge` 透明切到 embedding + `VectorStore` cosine（默认内存；`PI_KNOWLEDGE_VECTOR_STORE=sqlite` 用 node:sqlite 持久化，重启不重算）。要用真正的向量库（Qdrant/pgvector），实现 `VectorStore` 并经 `buildAgent({ vectorStore })` 传入，工具侧与模型侧完全不变。这正是官方姿势：SDK 不带 RAG，只让你注册一个可搜索工具（本脚手架已经这么做），检索后端自己选。`@huggingface/transformers` 已列入 **optionalDependencies**（默认会装、原生构建失败不致命，代码仍懒加载）。`npm run rag:smoke` 一键实机验证本地进程内路径；模型主机/原生运行时不可达时会打 `SKIP`（退码 0，不假绿）。
 
 ### 加一个提示词模板
 

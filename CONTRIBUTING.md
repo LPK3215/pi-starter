@@ -72,6 +72,7 @@ See the [Project Structure](README.md#project-structure) section of the README f
 | `npm run build` | Cleans `dist/`, compiles via `tsconfig.build.json`, copies prompt / skill / knowledge assets |
 | `npm run dev` | Starts the interactive CLI (needs a working `.env` + `npm run setup`) |
 | `npm run web` | Starts the HTTP + SSE server on `:3000` |
+| `npm run rag:smoke` | Optional live check of the local in-process vector RAG (`@huggingface/transformers`); prints `SKIP` + exit 0 when the model host / native runtime is unreachable, so it never false-greens or blocks you |
 | `npm run clean` | Removes `dist/` |
 
 ## Commit & PR conventions

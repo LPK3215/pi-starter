@@ -44,6 +44,7 @@
     "typecheck": "tsc --noEmit",
     "test": "tsx --test src/config.test.ts src/models.test.ts src/sse.test.ts src/app.test.ts src/backend.test.ts src/infra.test.ts src/integration.test.ts src/extensions.test.ts src/files/service.test.ts src/store.test.ts src/approval/watchdog.test.ts src/http/errors.test.ts src/http/rate-limit.test.ts src/extensions/guard.test.ts src/setup.test.ts src/skills/index.test.ts src/prompt-templates/index.test.ts src/knowledge/index.test.ts src/knowledge/retrieval.test.ts src/knowledge/embeddings.test.ts src/knowledge/vector-store-sqlite.test.ts src/tools/resource.test.ts src/db/index.test.ts src/sessions/store.test.ts src/sessions/resume.test.ts src/sessions/edit.test.ts src/sessions/cap.test.ts src/http/approval-routes.test.ts src/mcp/mcp.test.ts src/modes/plan-mode.test.ts src/subagents/subagents.test.ts src/provider-keys.test.ts src/tools/registry.test.ts src/exec/runner.test.ts src/context-compact.test.ts src/settings.test.ts src/graceful.test.ts",
     "smoke": "tsx scripts/smoke-ws.mjs",
+    "rag:smoke": "tsx scripts/rag-smoke.mjs",
     "e2e": "tsx scripts/e2e-restart.mjs",
     "verify:embed": "node scripts/verify-embed.mjs",
     "verify": "npm run typecheck && npm test && npm run smoke && npm run build && npm run verify:embed",
@@ -76,5 +77,8 @@
       "brace-expansion": "^5.0.12",
       "undici": "^8.11.2"
     }
+  },
+  "optionalDependencies": {
+    "@huggingface/transformers": "^4.3.1"
   }
 }
