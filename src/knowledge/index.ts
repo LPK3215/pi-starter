@@ -6,6 +6,7 @@
  *
  * 新增一篇文档 = 丢一个 .md 进去（可用 frontmatter 写 title / description），重启即可。
  * 当库用：buildAgent({ extraKnowledgeDirs: ["/path/to/docs"] })
+ * 不要内置示例（`about.md`）：buildAgent({ extraKnowledgeDirs: [...], builtinKnowledge: false })
  */
 
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
@@ -40,6 +41,16 @@ export interface LoadKnowledgeOptions {
   maxDocs?: number;
   /** Report skipped documents (defaults, tests). */
   onSkip?: (filePath: string, reason: string) => void;
+  /**
+   * 是否加载**包内置**的示例文档（`about.md`）。默认 true。
+   *
+   * 只对 `loadScaffoldKnowledge` 生效：`loadKnowledgeFromDirs` 收什么目录就加载什么目录。
+   *
+   * 为什么需要它：`extraKnowledgeDirs` 是**叠加**而不是替换——内置目录永远排在最前，
+   * 且同名时内置优先。业务方装上本包后，`about.md`（一份介绍 pi-starter 自己的文档）
+   * 会被 `formatKnowledgeCatalog` 写进系统提示词，且没有任何办法关掉。
+   */
+  includeBuiltin?: boolean;
 }
 
 export function resolveKnowledgeDir(): string | undefined {
@@ -128,12 +139,18 @@ export function loadKnowledgeFromDirs(
   return out;
 }
 
-/** 脚手架知识库 + extraKnowledgeDirs。同名时仓库内置优先。 */
+/**
+ * 脚手架知识库 + extraKnowledgeDirs。同名时仓库内置优先。
+ *
+ * `options.includeBuiltin === false` 时**只**加载 `extraDirs`——这是业务方把内置示例
+ * 文档（`about.md`）彻底排除在系统提示词之外的唯一出口。
+ */
 export function loadScaffoldKnowledge(
   extraDirs: readonly string[] = [],
   options: LoadKnowledgeOptions = {},
 ): KnowledgeDoc[] {
-  return loadKnowledgeFromDirs([resolveKnowledgeDir() ?? "", ...extraDirs], options);
+  const builtin = options.includeBuiltin === false ? [] : [resolveKnowledgeDir() ?? ""];
+  return loadKnowledgeFromDirs([...builtin, ...extraDirs], options);
 }
 
 export function formatKnowledgeCatalog(docs: readonly KnowledgeDoc[]): string {

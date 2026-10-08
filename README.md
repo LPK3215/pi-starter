@@ -285,13 +285,15 @@ pi-starter/
 │       └── audit.ts      #   example: tool-call audit log
 ├── scripts/
 │   ├── dist-assets.cjs   # clean / copy prompt+skill+knowledge assets into dist/
+│   ├── verify-embed.mjs  # embedding self-check (part of `npm run verify`)
 │   └── visualization/    # README diagram generators (see below)
 │       ├── generate_architecture.mjs
 │       ├── generate_request_flow.mjs
 │       └── README.md
-├── docs/                 # generated SVG diagrams referenced from the READMEs
+├── docs/                 # generated SVGs + guides, referenced from the READMEs
 │   ├── architecture.svg
-│   └── sse-protocol.svg
+│   ├── sse-protocol.svg
+│   └── 嵌入指南.md      #   embedding into an existing Express service
 ├── .github/workflows/
 │   └── ci.yml            # typecheck + unused + test + smoke + audit + build (ubuntu/win/mac)
 ├── public/
@@ -485,7 +487,16 @@ Backend endpoints are listed below. Build your own page later; do not edit the s
 
 `/db/query` accepts a **single** read-only statement. Validation strips comments and string literals first, then scans the whole statement for write/DDL keywords — so `WITH x AS (DELETE …) SELECT …` is rejected even though it starts with `WITH`. Rejections state the specific reason (e.g. `检测到非只读关键字：DELETE`) so a model can self-correct. Results are capped at 200 rows and report `truncated` / `totalRows`.
 
-When embedding into an existing Express app use `createApp({ agent, staticDir: false })`; do not open a second port. Wrap authentication with your existing middleware.
+When embedding into an existing Express app use `createApp({ agent, staticDir: false })`; do not open a second port. Full assembly, auth placement and measured results: **[`docs/嵌入指南.md`](docs/嵌入指南.md)**.
+
+⚠️ **Auth must sit on the parent app.** `app.use(auth)` after `createApp()` — or inside its `configure` hook — has **no effect**: the kernel registers its routes first, so your middleware is ordered after `/chat` and `/model` and never runs (measured: an unauthenticated request to `/skills` still returns 200, which leaves `POST /chat` and `POST /model` exposed). Mount the kernel app as a sub-app instead:
+
+```ts
+const { app: agentApp } = createApp({ agent, staticDir: false });
+const server = express();
+server.use("/agent", requireAuth, agentApp); // ✅ measured 401 / 200
+server.listen(3000);
+```
 
 ## Scope boundaries
 
@@ -497,7 +508,7 @@ The scaffold does the following; everything else is left to business code:
 | CLI + HTTP share one `buildAgent`; the web tier runs several conversations per connection (cap 8 + LRU) | Multi-user. The `busy` gate only guards the shared-session path |
 | Repo skills via the SDK ResourceLoader; Markdown knowledge search; sqlite liveness + read-only query | Vector stores, external RAG, scanning local `~/.pi/agent/skills` |
 | `guard` blocks dangerous bash and paths escaping cwd | Sandboxing. Regexes cannot stop command substitution, encoded bypasses, symlinks. Use containers for isolation |
-| `noExtensions` / `noSkills`: local extensions and skills are not scanned | Public-internet exposure. It binds all interfaces by default, with no auth |
+| `noExtensions` / `noSkills`: local extensions and skills are not scanned | Public-internet exposure. **Binds `127.0.0.1` by default, with no auth**; only a non-loopback `PI_HOST` actually exposes it, and startup warns loudly when you do |
 | Default `PI_BUILTIN_TOOLS=off` | Turning on `coding` hands disk edits and shell execution to the model |
 
 Why coding tools are off by default while `read` stays on: we**always** pass `tools` to `createAgentSession()`, and it becomes the SDK's `allowedToolNames` allowlist — passing nothing is what enables the full `read` / `bash` / `edit` / `write` set. The list comes from `sessionToolPolicy(tier)` driven by `PI_BUILTIN_TOOLS` (`off` yields just `read`), so bash/edit/write must be opened explicitly.
@@ -512,11 +523,12 @@ Why local extensions and skills are not loaded: pi extensions/skills on your mac
 
 ## Advanced (business decides)
 
-- **Login**: local desktop / CLI usage can live without it. When attaching to an existing backend, add middleware outside `createApp()`; do not modify the scaffold.
+- **Login**: local desktop / CLI usage can live without it. When attaching to an existing backend, mount auth on the **parent** app (see `server.use("/agent", auth, agentApp)` above) — adding middleware after `createApp()`, or in `configure`, does not cover the kernel routes.
 - **Multi-user**: one `buildAgent()` + independent session per user; do not reuse the current single `busy` flag.
 - **Enable coding tools**: `PI_BUILTIN_TOOLS=coding` or `--builtin-tools coding`. Even then, `guard` still blocks dangerous bash and paths escaping cwd.
 - **Model switching**: at startup `--model provider/modelId`; in CLI `/model`; over HTTP `POST /model`. Only models with configured keys are accepted, via `session.setModel`, no session rebuild.
 - **Skills / knowledge / database**: skills into `src/skills/`; knowledge into `src/knowledge/`; the DB is in-memory by default, or set `PI_DATABASE_PATH` / pass `buildAgent({ database })`. For vector stores or remote SQL, write a tool and pass it through `extraTools`.
+- **Turning off the built-in example content**: `buildAgent({ builtinKnowledge: false, builtinSkills: false })`. The bundled `about.md` (a document describing the scaffold itself) and the `summarize` skill land in the system prompt, and `extraKnowledgeDirs` / `extraSkillPaths` are **additive, not replacing** — so this is the only way to exclude them. Worth doing when embedding into someone else's service.
 - **Custom WS commands**: `attachWebSocket(server, { commands: { my_cmd: defineCommand<{ a: number }>({ handler }) } })`. Clients invoke it with `{type:"my_cmd"}`; **unregistered commands get an explicit error frame** rather than silence. Built-ins cannot be shadowed by a same-named registration.
 - **Custom HTTP routes**: `createApp({ configure: (app) => app.get("/biz", ...) })`. **Use this hook** — do not add routes after grabbing `app`: the error handler is mounted inside `createApp`, so later routes are registered after it and their thrown errors escape translation (measured: internal details reaching the client). If you already added routes, call the returned `seal()`.
 - **Resource cleanup**: the values returned by `createApp()` / `attachWebSocket()` expose `addDisposer(fn)`, invoked on `dispose()` / `close()`. Register timers, child processes and temp files opened by your extension.
@@ -533,6 +545,7 @@ Why local extensions and skills are not loaded: pi extensions/skills on your mac
 | [`CONTRIBUTING.md`](CONTRIBUTING.md) | Dev setup, project map, self-check commands, commit conventions |
 | [`SECURITY.md`](SECURITY.md) | Vulnerability reporting and known protection boundaries |
 | [`FAQ.md`](FAQ.md) | Setup, runtime, model switching, deployment, development Q&A |
+| **[`docs/嵌入指南.md`](docs/嵌入指南.md)** | **Embedding the agent into an existing Express service: two routes, auth placement, measured checklist** |
 | [`AUTHORS`](AUTHORS) | Maintainers |
 | [`scripts/visualization/README.md`](scripts/visualization/README.md) | How the diagrams above are regenerated |
 
@@ -547,7 +560,7 @@ node scripts/visualization/generate_request_flow.mjs
 
 ## Security
 
-pi-starter is a **local-first** scaffold. The HTTP server binds all interfaces by default and has no auth; `guard` is regex-based interception, not a sandbox. See [`SECURITY.md`](SECURITY.md) before exposing anything beyond `localhost`.
+pi-starter is a **local-first** scaffold. The HTTP server binds `127.0.0.1` by default and has no auth; read [`SECURITY.md`](SECURITY.md) before widening `PI_HOST` to a non-loopback address (startup warns when you do). `guard` is regex-based interception, not a sandbox.
 
 ## Authors
 

@@ -15,8 +15,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **持久化**：会话、设置、审批规则三处落盘（原子写 + 损坏回落）。规则**改动即写盘**——唯一写盘时机是「我们自己改动时」，因此停机不再写盘，运行期间用户手改规则文件不会被停机覆盖。会话重启后可恢复，只恢复本工作区、不做跨客户端过户。
 - **通用能力补齐**：MCP 桥（stdio 子进程 + 配置热生效）、计划模式（会话级只规划不实施）、子代理（不占主对话 LRU 额度）、多把 API 密钥（原始值永不出服务端）、`turn_start` / `turn_end` 轮次信号。
 - **测试基础设施**：集成测试层用遵守 SDK 契约的 session 替身驱动真实编排栈（不依赖网络与 API Key，CI 可跑）；`listenTestServer()` 接住端口错误并重试、强制断开 keep-alive 连接；`waitFor(条件)` 取代固定 sleep，消除全量并发下的偶发失败。
+- **嵌入路径**：[`docs/嵌入指南.md`](docs/嵌入指南.md) —— 已有 Express 服务的两条路线、鉴权挂法、可重复执行的自检清单。
+- **关闭内置示例内容**：`buildAgent({ builtinKnowledge: false, builtinSkills: false })`（底层为 `loadScaffoldKnowledge` / `resolveSkillPaths` 的 `includeBuiltin`）。此前 `extraKnowledgeDirs` / `extraSkillPaths` 只叠加、内置同名优先，业务方**没有任何办法**把 `about.md` 与 `summarize` 技能从系统提示词里去掉。
+- **嵌入自检**：`npm run verify:embed`（已并入 `npm run verify`），打 `dist/` 跑 8 项断言，覆盖内置示例内容的开关、`createApp` 返回值形状、内核路由可用性，以及鉴权中间件三种挂载位置的实测对比。
 
 ### Fixed
+
+- 文档给出的鉴权建议**无效且危险**：README（中英双版）写的是「在 `createApp()` 外面加中间件」，实测中间件排在内核路由之后，`/chat`、`/model`、`/skills` 全部绕过鉴权直接返回 200——等于把 Agent 端点无鉴权暴露。正确写法是把内核 app 作为子应用挂到父应用上（`server.use("/agent", auth, agentApp)`），已同步 README、`SECURITY.md`、`FAQ.md` 与嵌入指南。
+- 安全边界描述与实现相反：README / `SECURITY.md` / `FAQ.md` 称 HTTP 服务「默认监听所有网卡」，实际 `RUNTIME_DEFAULTS.host` 是 `127.0.0.1`（回环），仅当 `PI_HOST` 设为非回环地址时才对外监听，且启动会告警。
 
 - 业务方经 HTTP 注入的路由此前落在错误处理器之后，抛出的 `AppError` 不会被翻译——实测会把密码、绝对路径与源码行号原样返回客户端。
 - 审批规则的 `match.value` 未校验：缺 `value` 的 `glob` 在**匹配时**崩溃，缺 `value` 的 `regex` 会静默匹配字面量 `"undefined"`。

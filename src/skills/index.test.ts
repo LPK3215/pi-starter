@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { loadSkillsFromDirs, resolveSkillPaths } from "./index.js";
+import { loadSkillsFromDirs, loadScaffoldSkills, resolveSkillPaths } from "./index.js";
 
 test("扫描 SKILL.md，同名时先登记的赢", () => {
   const root = mkdtempSync(join(tmpdir(), "pi-skills-"));
@@ -83,4 +83,27 @@ test("技能数量超上限时截断，且不报错", () => {
   }
   assert.equal(loadSkillsFromDirs([root], { maxSkills: 3 }).length, 3);
   assert.equal(resolveSkillPaths([root], { maxSkills: 2 }).length, 2);
+});
+
+test("includeBuiltin: false 同时清掉清单与交给 SDK 的路径", () => {
+  const extra = mkdtempSync(join(tmpdir(), "pi-skills-only-"));
+  const mine = join(extra, "my-skill");
+  mkdirSync(mine, { recursive: true });
+  writeFileSync(join(mine, "SKILL.md"), "---\nname: my-skill\ndescription: d\n---\n# mine\n");
+
+  // 默认：内置示例技能 summarize 在清单里。
+  assert.ok(loadScaffoldSkills([]).some((s) => s.name === "summarize"), "默认带内置示例");
+
+  // 关掉后清单里只剩业务技能——注意不能只改清单：additionalSkillPaths 不跟着清的话，
+  // SDK 照样会把 summarize 写进 <available_skills>，提示词与 /skills 就会漂移。
+  assert.deepEqual(loadScaffoldSkills([extra], { includeBuiltin: false }).map((s) => s.name), [
+    "my-skill",
+  ]);
+  const paths = resolveSkillPaths([extra], { includeBuiltin: false });
+  assert.deepEqual(paths, [mine], "交给 SDK 的路径里也不能有内置技能目录");
+  assert.ok(!paths.some((p) => p.includes("summarize")), "内置技能目录不得进 additionalSkillPaths");
+
+  // 没有额外目录时关掉内置 = 空。
+  assert.deepEqual(loadScaffoldSkills([], { includeBuiltin: false }), []);
+  assert.deepEqual(resolveSkillPaths([], { includeBuiltin: false }), []);
 });

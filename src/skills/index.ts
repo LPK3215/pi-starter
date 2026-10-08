@@ -10,6 +10,7 @@
  *
  * 新增技能：src/skills/<name>/SKILL.md，重启即可。
  * 当库用：buildAgent({ extraSkillPaths: ["/path/to/skills"] })
+ * 不要内置示例（`summarize`）：buildAgent({ extraSkillPaths: [...], builtinSkills: false })
  */
 
 import { existsSync, readdirSync, statSync } from "node:fs";
@@ -56,6 +57,18 @@ export interface LoadSkillsOptions {
   maxBytes?: number;
   /** Report skipped skills (defaults, tests). */
   onSkip?: (skillDir: string, reason: string) => void;
+  /**
+   * 是否加载**包内置**的示例技能（`summarize`）。默认 true。
+   *
+   * 只对 `resolveSkillPaths` / `loadScaffoldSkills` 生效；`loadSkillsFromDirs` 收什么目录
+   * 就加载什么目录。
+   *
+   * 为什么需要它：`extraSkillPaths` 是**叠加**而不是替换，且内置目录排在最前、同名时内置优先。
+   * 业务方装上本包后，`summarize` 会被 SDK 写进系统提示词的 `<available_skills>`，
+   * 而没有任何办法关掉。注意这里必须同时影响 `resolveSkillPaths`——只过滤清单的话，
+   * SDK 照样会从 additionalSkillPaths 加载它，清单与提示词就漂移了。
+   */
+  includeBuiltin?: boolean;
 }
 
 function uniqueExisting(dirs: readonly string[], maxPaths = MAX_SKILL_PATHS): string[] {
@@ -144,8 +157,9 @@ export function resolveSkillPaths(
   extraPaths: readonly string[] = [],
   options: LoadSkillsOptions = {},
 ): string[] {
+  const builtin = options.includeBuiltin === false ? [] : [resolveSkillsDir() ?? ""];
   const roots = uniqueExisting(
-    [resolveSkillsDir() ?? "", ...extraPaths],
+    [...builtin, ...extraPaths],
     options.maxPaths ?? MAX_SKILL_PATHS,
   );
   return collectSkillDirs(roots, options).ok;
@@ -180,7 +194,12 @@ export function loadSkillsFromDirs(
   return out;
 }
 
-/** 脚手架技能目录 + extraSkillPaths。同名时仓库内置优先。 */
+/**
+ * 脚手架技能目录 + extraSkillPaths。同名时仓库内置优先。
+ *
+ * `options.includeBuiltin === false` 时**只**加载 `extraPaths`——这是业务方把内置示例
+ * 技能（`summarize`）彻底排除在系统提示词之外的唯一出口。
+ */
 export function loadScaffoldSkills(
   extraPaths: readonly string[] = [],
   options: LoadSkillsOptions = {},

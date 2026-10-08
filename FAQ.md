@@ -81,7 +81,7 @@ Slash commands are handled by the CLI and are not sent to the model.
 
 ### Is the server safe to expose to the internet?
 
-No — see [SECURITY.md](SECURITY.md). It has no auth, no rate limiting, and binds all interfaces by default. Put a reverse proxy with authentication in front, or use `createApp({ agent, staticDir: false })` and mount onto your existing authenticated Express app.
+No — see [SECURITY.md](SECURITY.md). It has no auth and no rate limiting by default, and binds `127.0.0.1` only (set `PI_HOST` to widen that; startup warns). Put a reverse proxy with authentication in front, or use `createApp({ agent, staticDir: false })` and mount `app` onto your existing authenticated Express app — the auth must sit on the **parent** app, since middleware added after `createApp()` does not run before the kernel routes. Details in [docs/嵌入指南.md](docs/嵌入指南.md).
 
 ### Can I embed `createApp` into an existing Express?
 

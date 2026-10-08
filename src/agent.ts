@@ -131,6 +131,22 @@ export interface BuildAgentOptions {
   extraSkillPaths?: string[];
   /** 额外知识库目录（叠在 src/knowledge 之上，同名时仓库内置优先） */
   extraKnowledgeDirs?: string[];
+  /**
+   * 是否加载包内置的**示例**知识库（`about.md`）。默认 true。
+   *
+   * `extraKnowledgeDirs` 是叠加不是替换，且内置目录排在最前、同名时内置优先——
+   * 也就是说业务方**没有任何办法**把内置示例文档从系统提示词里去掉，只能靠这个开关。
+   * 嵌入别人已有服务时通常应当传 false：那份文档介绍的是 pi-starter 自己，
+   * 留在业务 Agent 的提示词里既是噪声，也会让模型去检索无关内容。
+   */
+  builtinKnowledge?: boolean;
+  /**
+   * 是否加载包内置的**示例**技能（`summarize`）。默认 true。同样只有这个开关能关掉它。
+   *
+   * 与知识库不同，这里必须同时从交给 SDK 的 `additionalSkillPaths` 里去掉，
+   * 否则 SDK 仍会把技能目录写进 `<available_skills>`，出现「清单里没有、提示词里有」的漂移。
+   */
+  builtinSkills?: boolean;
   /** sqlite 路径。默认 :memory:，也读 PI_DATABASE_PATH */
   databasePath?: string;
   /** 注入已打开的数据库。传了就不再 openScaffoldDatabase */
@@ -237,13 +253,16 @@ export async function buildAgent(options: BuildAgentOptions = {}): Promise<Built
   // disagree with what the system prompt actually carries. Surfaces what was dropped —
   // a silently missing skill is far harder to debug than a noisy log line.
   const skillOptions = {
+    includeBuiltin: options.builtinSkills,
     onSkip: (skillDir: string, reason: string) => {
       getLogger().warn("技能已跳过", { skillDir, reason });
     },
   };
   const skillPaths = resolveSkillPaths(options.extraSkillPaths, skillOptions);
   const skills = loadScaffoldSkills(options.extraSkillPaths, skillOptions);
-  const knowledge = loadScaffoldKnowledge(options.extraKnowledgeDirs);
+  const knowledge = loadScaffoldKnowledge(options.extraKnowledgeDirs, {
+    includeBuiltin: options.builtinKnowledge,
+  });
   const database =
     options.database ??
     openScaffoldDatabase({

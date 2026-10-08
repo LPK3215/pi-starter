@@ -265,13 +265,15 @@ pi-starter/
 │       └── audit.ts      #   示例：工具调用审计日志
 ├── scripts/
 │   ├── dist-assets.cjs   # clean / copy 将 prompts+skills+knowledge 拷到 dist/
+│   ├── verify-embed.mjs  # 嵌入路径自检（已并入 npm run verify）
 │   └── visualization/    # README 图产出脚本（见下）
 │       ├── generate_architecture.mjs
 │       ├── generate_request_flow.mjs
 │       └── README.md
-├── docs/                 # 自动生成的 SVG，两份 README 都引用同一份
+├── docs/                 # 架构图（自动生成）+ 指南，两份 README 都引用同一份
 │   ├── architecture.svg
-│   └── sse-protocol.svg
+│   ├── sse-protocol.svg
+│   └── 嵌入指南.md      #   把 Agent 装进已有 Express 服务
 ├── .github/workflows/
 │   └── ci.yml            # typecheck + test + build，矩阵跨 ubuntu / windows / macos
 ├── public/
@@ -453,7 +455,16 @@ curl -X POST http://localhost:3000/db/query \
 | POST | `/model` | `{ "model": "provider/modelId" }`，当前会话切换 |
 | POST | `/chat` | `{ "message": "..." }`，响应是 SSE 流 |
 
-嵌进已有 Express 时用 `createApp({ agent, staticDir: false })`，不要再开一个端口。登录用现有鉴权包一层。
+嵌进已有 Express 时用 `createApp({ agent, staticDir: false })`，不要再开一个端口。完整装配、鉴权挂法与实测结论见 **[`docs/嵌入指南.md`](docs/嵌入指南.md)**。
+
+⚠️ **鉴权只能挂父应用**：`app.use(auth)` 加在 `createApp()` 之后、或加在 `configure` 里都**无效**——内核路由先注册，中间件排在后面永远命中不到（实测无 token 请求 `/skills` 仍返回 200，等于把 `POST /chat`、`POST /model` 裸奔出去）。正确写法是把内核 app 当子应用挂上去：
+
+```ts
+const { app: agentApp } = createApp({ agent, staticDir: false });
+const server = express();
+server.use("/agent", requireAuth, agentApp); // ✅ 401 / 200 实测通过
+server.listen(3000);
+```
 
 ## 功能边界
 
@@ -465,7 +476,7 @@ curl -X POST http://localhost:3000/db/query \
 | CLI + HTTP 共用 `buildAgent`；Web 端每连接多对话并发（上限 8 + LRU） | 多用户。`busy` 闸门只作用于共享 session 那条路径 |
 | 仓库内技能走 SDK ResourceLoader；知识库 Markdown 检索；sqlite 探活 + 只读查询 | 向量库、外部 RAG、扫本机 `~/.pi/agent/skills` |
 | `guard` 拦危险 bash 和越出 cwd 的路径 | 沙箱。正则挡不住命令替换、编码绕过、symlink。要隔离用容器 |
-| `noExtensions` / `noSkills`，不扫本机扩展和技能 | 公网暴露。默认监听所有网卡，没有鉴权 |
+| `noExtensions` / `noSkills`，不扫本机扩展和技能 | 公网暴露。**默认只绑 `127.0.0.1` 且无鉴权**；`PI_HOST` 改成非回环地址才会真的暴露，启动时会告警 |
 | 默认 `PI_BUILTIN_TOOLS=off` | 打开 `coding` 等于把改磁盘、跑 shell 交给模型 |
 
 为什么默认关编码工具、仍开 `read`：我们**总是**给 `createAgentSession()` 传 `tools`，它会变成 SDK 的 `allowedToolNames` 硬白名单——不传反而会打开 `read` / `bash` / `edit` / `write` 全套。工具清单由 `sessionToolPolicy(档位)` 按 `PI_BUILTIN_TOOLS` 生成（`off` 只给 `read`），bash/edit/write 必须显式打开。
@@ -480,11 +491,12 @@ curl -X POST http://localhost:3000/db/query \
 
 ## 进阶（业务自己决定）
 
-- **登录**：本地桌面 / 本机 CLI 可以没有。接到已有后台时，在 `createApp()` 外面加中间件，不要改脚手架。
+- **登录**：本地桌面 / 本机 CLI 可以没有。接到已有后台时**在父应用上挂**鉴权（见上面「接进现有模块」的 `server.use("/agent", auth, agentApp)`）——不要用 `createApp()` 之后加中间件或 `configure`，那两种都挡不住内核路由。
 - **多用户**：每个用户一个 `buildAgent()` + 独立 session；不要共用现在这个 `busy` 标志。
 - **打开编码工具**：`PI_BUILTIN_TOOLS=coding` 或 `--builtin-tools coding`。打开后 `guard` 仍会拦截危险 bash 和越出 cwd 的路径。
 - **模型切换**：启动时 `--model provider/modelId`；CLI `/model`；HTTP `POST /model`。只接受已配好 Key 的模型，走 `session.setModel`，不重建会话。
 - **技能 / 知识库 / 数据库**：技能丢进 `src/skills/`；知识库丢进 `src/knowledge/`；数据库默认内存，或 `PI_DATABASE_PATH` / `buildAgent({ database })`。要接向量库或远程 SQL，写成工具从 `extraTools` 进来。
+- **关掉内置示例内容**：`buildAgent({ builtinKnowledge: false, builtinSkills: false })`。内置的 `about.md`（一份介绍脚手架自己的文档）和 `summarize` 技能会进系统提示词，而 `extraKnowledgeDirs` / `extraSkillPaths` 是**叠加不是替换**、内置同名优先——所以这是唯一的关闭入口。当库嵌入别人服务时通常该关掉。
 - **自定义 WS 命令**：`attachWebSocket(server, { commands: { my_cmd: defineCommand<{ a: number }>({ handler }) } })`。客户端发 `{type:"my_cmd"}` 即可调用；**未注册的命令会回明确错误帧**，不会静默。内置命令不可被同名覆盖。
 - **自定义 HTTP 路由**：`createApp({ configure: (app) => app.get("/biz", ...) })`。**必须用这个钩子**，不要拿到 `app` 之后再加——错误处理器已在其内部挂载，之后加的路由排在它后面，抛出的错不会被翻译（实测会把内部细节返回给客户端）。已经加完了才想起封口，用返回值的 `seal()`。
 - **注册资源回收**：`createApp()` / `attachWebSocket()` 的返回值有 `addDisposer(fn)`，`dispose()` / `close()` 时统一回收。扩展里开的定时器、子进程、临时文件都该登记。
@@ -501,6 +513,7 @@ curl -X POST http://localhost:3000/db/query \
 | [`CONTRIBUTING.md`](CONTRIBUTING.md) | 开发环境、项目地图、自检命令、提交约定 |
 | [`SECURITY.md`](SECURITY.md) | 漏洞报告与内建安全边界 |
 | [`FAQ.md`](FAQ.md) | 安装 / 运行时 / 模型切换 / 部署 / 开发 常见问题 |
+| **[`docs/嵌入指南.md`](docs/嵌入指南.md)** | **把 Agent 装进已有 Express 服务：两条路线、鉴权挂法、实测自检清单** |
 | [`AUTHORS`](AUTHORS) | 维护者 |
 | [`scripts/visualization/README.md`](scripts/visualization/README.md) | 上面两张图的重新生成方式 |
 
@@ -515,7 +528,7 @@ node scripts/visualization/generate_request_flow.mjs
 
 ## 安全
 
-pi-starter 定位 **本地优先** 脚手架。HTTP 服务默认监听所有网卡且无鉴权；`guard` 基于正则拦截，不是沙箱。部署到 `localhost` 以外环境前请先读 [`SECURITY.md`](SECURITY.md)。
+pi-starter 定位 **本地优先** 脚手架。HTTP 服务默认绑 `127.0.0.1`、无鉴权；把 `PI_HOST` 改成非回环地址前请先读 [`SECURITY.md`](SECURITY.md)（启动时会告警）。`guard` 基于正则拦截，不是沙箱。
 
 ## 作者
 
