@@ -8,14 +8,16 @@ Generators for the SVG diagrams referenced from the top-level READMEs. Every scr
 |---|---|---|
 | `generate_architecture.mjs` | `docs/architecture.svg` | `package.json`, `src/tools/*.ts`, `src/skills/*/SKILL.md`, `src/knowledge/*.md`, `src/extensions/index.ts`, `src/app.ts`, `src/sse.ts`, all `src/**/*.test.ts` |
 | `generate_request_flow.mjs` | `docs/sse-protocol.svg` | `src/sse.ts` (event names + `TOOL_RESULT_PREVIEW_LIMIT`), `src/app.ts` (SSE frames emitted outside the translator, e.g. `done` / `error`) |
+| `generate_retrieval.mjs` | `docs/knowledge-retrieval.svg` | `src/knowledge/retrieval.ts`, `src/knowledge/embeddings*.ts`, `src/knowledge/vector-store-sqlite.ts` (Retriever / EmbeddingProvider / VectorStore class names) |
 
 ## Run
 
-Both scripts use only Node.js built-ins (`node:fs`, `node:path`). From the repo root:
+All scripts use only Node.js built-ins (`node:fs`, `node:path`). From the repo root:
 
 ```bash
 node scripts/visualization/generate_architecture.mjs
 node scripts/visualization/generate_request_flow.mjs
+node scripts/visualization/generate_retrieval.mjs
 ```
 
 Each script prints the numbers it picked up so drift is visible in the terminal too.

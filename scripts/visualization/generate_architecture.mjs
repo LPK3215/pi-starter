@@ -166,13 +166,14 @@ const header = `
   ${text(W - 40, 55, `v${pkg.version} · Node ${pkg.engines?.node ?? ""}`, { size: 14, weight: "600", fill: C.muted, anchor: "end" })}
 `;
 
-// Row 1: Entry points (CLI / HTTP+SSE / Library)
+// Row 1: Entry points (CLI / HTTP+SSE / Library / RPC)
 const y1 = 100;
 const rowH = 90;
 const entries = [
-  { title: "CLI", sub: "npm run dev", extra: "src/index.ts · /models, /model" },
+  { title: "CLI", sub: "npm run dev", extra: "src/index.ts · /models, /model, /cycle" },
   { title: "HTTP + SSE", sub: "npm run web", extra: `src/server.ts → app.ts · ${endpoints.length} endpoints` },
-  { title: "Library", sub: "import { buildAgent, createApp }", extra: "src/lib.ts · dist/lib.js" },
+  { title: "Library", sub: "import { buildAgent }", extra: "src/lib.ts · dist/lib.js" },
+  { title: "RPC stdio", sub: "--mode rpc", extra: "src/rpc.ts · official JSONL" },
 ];
 const entryW = (W - 60) / entries.length;
 let row1 = "";
@@ -190,7 +191,7 @@ const row2H = 84;
 let row2 = "";
 row2 += box(30, y2, W - 60, row2H, { stroke: C.gold });
 row2 += text(50, y2 + 26, "Assembly · src/agent.ts", { size: 15, weight: "700", fill: C.gold });
-row2 += text(50, y2 + 50, "model + prompts + tools + skills + knowledge + database + extensions → AgentSession", { size: 12, fill: C.text });
+row2 += text(50, y2 + 50, "model + prompts + tools + skills + knowledge(+retrieval) + database + extensions → AgentSession · scopedModels cycling", { size: 12, fill: C.text });
 row2 += text(50, y2 + 70, `config precedence: CLI flags > .env > default · built-in tools tier = "${process.env.PI_BUILTIN_TOOLS_HINT ?? "off"}"`, { size: 11, fill: C.muted });
 
 // Row 3: Business resources (4 columns)
@@ -199,7 +200,7 @@ const row3H = 148;
 const cards = [
   { title: "Tools", items: toolNames, note: "src/tools/", color: C.ok },
   { title: "Skills", items: skillNames, note: "src/skills/<name>/SKILL.md", color: C.ok },
-  { title: "Knowledge", items: knowledgeDocs.map((n) => n.replace(/\.md$/, "")), note: "src/knowledge/*.md", color: C.ok },
+  { title: "Knowledge", items: knowledgeDocs.map((n) => n.replace(/\.md$/, "")), note: "src/knowledge/*.md · retrieval: keyword | vector", color: C.ok },
   { title: "Extensions", items: extensionNames, note: "src/extensions/", color: C.warn },
 ];
 const colW = (W - 60) / cards.length;
@@ -258,6 +259,7 @@ row5 += text(cx + 16, y5 + 42, "• .env (PI_MODEL / PI_MODELS / PI_API_KEY / PI
 row5 += text(cx + 16, y5 + 58, "• ~/.pi/agent/models.json  ← npm run setup (merge-write)", { size: 10, fill: C.muted });
 row5 += text(cx + 16, y5 + 74, "• ~/.pi/agent/auth.json    ← mode 0o600, --force to overwrite", { size: 10, fill: C.muted });
 row5 += text(cx + 16, y5 + 90, `• Contract smoke tests: ${testFiles.length} files · ${testCases} cases`, { size: 10, fill: C.muted });
+row5 += text(cx + 16, y5 + 104, "• PI_SCOPED_MODELS · PI_KNOWLEDGE_RETRIEVAL=vector · PI_EMBEDDINGS_* · Dockerfile", { size: 10, fill: C.muted });
 
 // Arrows between rows (single column, centered)
 let arrows = "";

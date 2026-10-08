@@ -22,7 +22,7 @@
   <img alt="pi-starter 架构分层图" src="./docs/architecture.svg" width="920"/>
 </p>
 
-*脚手架分层视图。从上到下：入口（CLI / HTTP + SSE / 库）→ `src/agent.ts` 组装层 → 业务资源（工具 / 技能 / 知识库 / 扩展）→ HTTP 契约与 SSE 翻译 → 运行时依赖与配置面。图中所有计数、模块名、版本与事件名都由 [`scripts/visualization/generate_architecture.mjs`](scripts/visualization/generate_architecture.mjs) 在生成时从源码里读。*
+*脚手架分层视图。从上到下：入口（CLI / HTTP + SSE / 库 / 官方 RPC）→ `src/agent.ts` 组装层 → 业务资源（工具 / 技能 / 知识库+检索 / 扩展）→ HTTP 契约与 SSE 翻译 → 运行时依赖与配置面。图中所有计数、模块名、版本与事件名都由 [`scripts/visualization/`](scripts/visualization/README.md) 下的脚本在生成时从源码里读。*
 
 每次 `POST /chat` 都走同一条链路：HTTP 体→忙碌闸门→`session.prompt`→`tool_call` 钩子（扩展链，例如 `guard`）→工具执行→`tool_result` 钩子（例如 `audit`）→SDK 事件→`translateEvent()`→SSE 帧回到客户端。
 
@@ -290,10 +290,12 @@ pi-starter/
 │   └── visualization/    # README 图产出脚本（见下）
 │       ├── generate_architecture.mjs
 │       ├── generate_request_flow.mjs
+│       ├── generate_retrieval.mjs
 │       └── README.md
 ├── docs/                 # 架构图（自动生成）+ 指南，两份 README 都引用同一份
 │   ├── architecture.svg
 │   ├── sse-protocol.svg
+│   ├── knowledge-retrieval.svg # 可插拔 RAG 检索管线
 │   ├── 能力与边界.md    #   与 SDK 对齐的能力矩阵与边界
 │   ├── 项目分析报告.md  #   工程体检报告
 │   └── 嵌入指南.md      #   把 Agent 装进已有 Express 服务
@@ -425,6 +427,12 @@ description: 套餐、单价、计费周期
 重启即可。模型先 `search_knowledge({ query: "专业版多少钱" })`，再 `read_knowledge({ name: "pricing" })`。当库用：`buildAgent({ extraKnowledgeDirs: ["/path/to/docs"] })`。
 
 默认是进程内关键词检索（不是向量库）。RAG 是**可选且可插拔**的：设 `PI_KNOWLEDGE_RETRIEVAL=vector` + embedding 源 `PI_EMBEDDINGS_PROVIDER=openai|ollama|transformers`。`transformers` 是**进程内**跑 `@huggingface/transformers`（首次用自动从 HF Hub 下 ONNX 权重到 `PI_EMBEDDINGS_CACHE_DIR`，不需 Ollama/外部服务；靠懒加载 opt-in，默认仍零依赖）。`search_knowledge` 透明切到 embedding + `VectorStore` cosine（默认内存；`PI_KNOWLEDGE_VECTOR_STORE=sqlite` 用 node:sqlite 持久化，重启不重算）。要用真正的向量库（Qdrant/pgvector），实现 `VectorStore` 并经 `buildAgent({ vectorStore })` 传入，工具侧与模型侧完全不变。这正是官方姿势：SDK 不带 RAG，只让你注册一个可搜索工具（本脚手架已经这么做），检索后端自己选。`@huggingface/transformers` 已列入 **optionalDependencies**（默认会装、原生构建失败不致命，代码仍懒加载）。`npm run rag:smoke` 一键实机验证本地进程内路径；模型主机/原生运行时不可达时会打 `SKIP`（退码 0，不假绿）。
+
+<p align="center">
+  <img alt="知识检索可插拔管线" src="./docs/knowledge-retrieval.svg" width="820"/>
+</p>
+
+*检索可插拔管线（图内文字为英文）：`search_knowledge` 工具与 `GET /knowledge/search` 共用同一个 `Retriever`；默认 `KeywordRetriever`（零依赖），`VectorRetriever` 组合 `EmbeddingProvider`（OpenAI 兼容 / Ollama / 进程内 transformers）与 `VectorStore`（内存 / sqlite）。后端类名由 [`scripts/visualization/generate_retrieval.mjs`](scripts/visualization/generate_retrieval.mjs) 从源码读取生成。*
 
 ### 加一个提示词模板
 

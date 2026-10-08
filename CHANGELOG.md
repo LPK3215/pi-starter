@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Documentation
+
+- **可视化资产与 README 同步**：`generate_architecture.mjs` 补上官方 RPC 入口、检索层、新 env（`PI_SCOPED_MODELS`/`PI_KNOWLEDGE_RETRIEVAL`/`PI_EMBEDDINGS_*`）；新增 `scripts/visualization/generate_retrieval.mjs` → `docs/knowledge-retrieval.svg`（可插拔 RAG 检索管线，后端类名从源码动态读取）；中英 README 架构图注与知识库节同步引用新图，章节结构一一对齐。徽章均为 shields.io 动态端点（版本自动跟随）；SVG 资产英文单版。
+
 ## [0.2.0] - 2026-10-09
 
 ### Added

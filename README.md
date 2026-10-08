@@ -22,7 +22,7 @@ An **agent scaffold** built on the [pi-agent](https://github.com/earendil-works/
   <img alt="pi-starter architecture" src="./docs/architecture.svg" width="920"/>
 </p>
 
-*Layered view of the scaffold. Top to bottom: entry points (CLI, HTTP + SSE, library) → assembly in `src/agent.ts` → business resources (tools / skills / knowledge / extensions) → HTTP contract and SSE translator → runtime deps and configuration surface. Counts, module names, versions and event names are parsed from source at generation time by [`scripts/visualization/generate_architecture.mjs`](scripts/visualization/generate_architecture.mjs).*
+*Layered view of the scaffold. Top to bottom: entry points (CLI, HTTP + SSE, library, official RPC) → assembly in `src/agent.ts` → business resources (tools / skills / knowledge+retrieval / extensions) → HTTP contract and SSE translator → runtime deps and configuration surface. Counts, module names, versions and event names are parsed from source at generation time by the scripts under [`scripts/visualization/`](scripts/visualization/README.md).*
 
 Every `POST /chat` follows the same lifecycle: HTTP body → busy guard → `session.prompt` → `tool_call` hook (extension chain, e.g. `guard`) → tool execution → `tool_result` hook (e.g. `audit`) → SDK events → `translateEvent()` → SSE frames back to the client.
 
@@ -310,10 +310,12 @@ pi-starter/
 │   └── visualization/    # README diagram generators (see below)
 │       ├── generate_architecture.mjs
 │       ├── generate_request_flow.mjs
+│       ├── generate_retrieval.mjs
 │       └── README.md
 ├── docs/                 # generated SVGs + guides, referenced from the READMEs
 │   ├── architecture.svg
 │   ├── sse-protocol.svg
+│   ├── knowledge-retrieval.svg # pluggable RAG retrieval pipeline
 │   ├── 能力与边界.md    #   capability matrix & boundaries vs the SDK
 │   ├── 项目分析报告.md  #   engineering review
 │   └── 嵌入指南.md      #   embedding into an existing Express service
@@ -454,6 +456,12 @@ Basic 99/month, Pro 299/month.
 Restart and it is live. The model calls `search_knowledge({ query: "how much is Pro" })` first, then `read_knowledge({ name: "pricing" })`. As a library: `buildAgent({ extraKnowledgeDirs: ["/path/to/docs"] })`.
 
 This is in-process Markdown search by default (keyword). RAG is **opt-in and pluggable**: set `PI_KNOWLEDGE_RETRIEVAL=vector` plus an embeddings source — `PI_EMBEDDINGS_PROVIDER=openai|ollama|transformers`. `transformers` runs the model **in-process** via `@huggingface/transformers` (auto-downloads ONNX weights to `PI_EMBEDDINGS_CACHE_DIR` on first use; no Ollama/server — but it's a lazy-loaded opt-in dep, so the default stays zero-dependency). `search_knowledge` transparently switches to embedding + cosine over a `VectorStore` (default in-memory; `PI_KNOWLEDGE_VECTOR_STORE=sqlite` persists to node:sqlite so restarts skip re-embedding). To use a real vector DB (Qdrant/pgvector), implement `VectorStore` and pass `buildAgent({ vectorStore })`; the tool contract and model side stay unchanged. This is the SDK's prescribed pattern — it ships no RAG; you register a searchable tool (we do) and pick the backend. `@huggingface/transformers` is an **optionalDependency** (installs by default; a failed native build is non-fatal; the code lazy-imports it). `npm run rag:smoke` verifies the local in-process path end-to-end and prints `SKIP` (exit 0, no false green) when the model host / native runtime isn't reachable.
+
+<p align="center">
+  <img alt="knowledge retrieval pipeline" src="./docs/knowledge-retrieval.svg" width="820"/>
+</p>
+
+*Pluggable retrieval pipeline: `search_knowledge` and `GET /knowledge/search` share one `Retriever`. Default `KeywordRetriever` (zero-dep); `VectorRetriever` (opt-in) composes an `EmbeddingProvider` (OpenAI-compatible / Ollama / in-process transformers) and a `VectorStore` (in-memory / sqlite). Backend class names are read from source at generation time by [`scripts/visualization/generate_retrieval.mjs`](scripts/visualization/generate_retrieval.mjs).*
 
 ### Add a prompt template
 
