@@ -37,6 +37,8 @@ import {
 } from "./http/routes.js";
 import { AppError, badRequest, busy as busyError } from "./http/errors.js";
 import { registerFileRoutes } from "./http/file-routes.js";
+import { registerApprovalRoutes } from "./http/approval-routes.js";
+import type { ApprovalRulesStore } from "./approval/rules.js";
 import type { FileService } from "./files/service.js";
 import { createRateLimiter, DEFAULT_RATE_RULES, type RateLimitRule } from "./http/rate-limit.js";
 import { getLogger } from "./log.js";
@@ -91,6 +93,12 @@ export interface CreateAppOptions {
    * 省略则不注册这些路由——把内核暴露到文件系统是嵌入方的决定，不该默认开启。
    */
   files?: FileService;
+  /**
+   * 审批规则库。提供后开放 `/approval/rules`（查看 / 替换 / 新增 / 删除）。
+   *
+   * 省略则不注册——修改审批策略是敏感能力，不该默认开启。
+   */
+  approvalRules?: ApprovalRulesStore;
   rateLimit?: boolean | Record<string, RateLimitRule>;
   /**
    * Proxies whose X-Forwarded-For may be trusted (e.g. ["loopback"] behind a local nginx).
@@ -178,6 +186,7 @@ export function createApp(options: CreateAppOptions): CreateAppResult {
   registerDbRoutes(app, options.agent);
   registerControlRoutes(app, options.agent, { registry, settings });
   if (options.files) registerFileRoutes(app, { service: options.files });
+  if (options.approvalRules) registerApprovalRoutes(app, { store: options.approvalRules });
 
   // Rich capability/inventory snapshot (superset of the old /health body).
   app.get("/info", async (_req, res) => {

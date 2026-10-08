@@ -22,13 +22,11 @@ import {
   resolveRuntimeConfig,
 } from "./config.js";
 import { createSessionHub } from "./session-hub.js";
+import { defaultSessionIndexFile, scaffoldSessionDir, sessionCatalog } from "./sessions/store.js";
 import { BUILTIN_TOOL_NAMES, createToolRegistry, defineToolSpec, type ToolRegistry } from "./tools/registry.js";
 import { allTools } from "./tools/index.js";
 import { SettingsService, fileSettingsPort, defaultSettingsFile, sanitizeSettings } from "./settings.js";
-import {
-  loadApprovalRulesFromFile,
-  saveApprovalRulesToFile,
-} from "./approval/rules.js";
+import { createPersistentRulesStore } from "./approval/rules.js";
 import { join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { FileService } from "./files/service.js";
@@ -73,8 +71,9 @@ const settings = new SettingsService(
     },
   }),
 );
-const rulesFile = join(getAgentDir(), "pi-starter-approval-rules.json");
-const rulesStore = loadApprovalRulesFromFile(rulesFile, {
+// 装配「读盘 + 改动即落盘」的唯一入口：原先把这两步散落在装配代码里，漏掉任一步
+// 就会变成「能改但重启丢」，而这种半成品从代码上完全看不出来。
+const rulesStore = createPersistentRulesStore(join(getAgentDir(), "pi-starter-approval-rules.json"), {
   logger: (msg, err) => logger.warn(msg, { detail: err instanceof Error ? err.message : String(err) }),
 });
 
@@ -100,12 +99,27 @@ const gate = new ApprovalGate({
 // The registry is built after the agent; expose it to the approval extension via a holder.
 let registryRef: ToolRegistry | undefined;
 
+// Web 对话落在本脚手架自己的目录，不和 pi CLI 的会话文件混放。
+// inMemory 必须关掉，否则 resumeFrom 会被拒绝，恢复接不上。
+const sessionDir = scaffoldSessionDir(process.cwd());
+const allowedSessionRoots = [sessionDir];
+const sessionIndex = sessionCatalog(
+  defaultSessionIndexFile(sessionDir),
+  allowedSessionRoots,
+  process.cwd(),
+  {
+    logger: (msg, err) => logger.warn(msg, { detail: err instanceof Error ? err.message : String(err) }),
+  },
+);
+
 // 2. Build the agent, wiring the approval gate as an extension.
 const agent = await buildAgent({
   provider: flags.provider,
   modelId: flags.model,
   builtinTools: flags.builtinTools,
-  inMemory: true,
+  inMemory: false,
+  sessionDir,
+  allowedSessionRoots,
   // Honour settings.promptTemplate (empty → default order, identical to before).
   promptTemplate: settings.get().promptTemplate,
   extraExtensions: [
@@ -164,6 +178,8 @@ const hub = createSessionHub(
   () => settings.get().contextKeepRecent,
   undefined,
   () => settings.get().toolTimeoutSeconds * 1000,
+  allowedSessionRoots,
+  sessionIndex,
 );
 // Gauges are derived from live state at scrape time (see /metrics) so they cannot drift.
 let wsRef: WsServer | undefined;
@@ -182,6 +198,8 @@ const { app, dispose } = createApp({
   // File service scoped to the process cwd: an Agent needs hands, and every path is
   // validated (no traversal, no symlink escape) inside FileService itself.
   files: new FileService({ root: process.cwd() }),
+  // 规则编辑接口：改完立刻落盘（见 rulesStore.setOnChange 的说明）。
+  approvalRules: rulesStore,
 });
 const server = createServer(app);
 // 显式超时：Node 默认值对长轮次 LLM 请求偏紧，对慢速头部又偏松。
@@ -222,12 +240,6 @@ async function shutdown(): Promise<void> {
   // Ordered teardown: stop accepting new approvals first (gate.dispose denies in-flight
   // requests so no tool call is left hanging), then close sockets, then drop sessions.
   gate.dispose();
-  // Flush rule edits before teardown so they survive the restart.
-  try {
-    saveApprovalRulesToFile(rulesFile, rulesStore);
-  } catch (err) {
-    logger.warn("审批规则保存失败", { error: err instanceof Error ? err.message : String(err) });
-  }
   await ws.close();
   hub.dispose();
   dispose();

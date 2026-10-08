@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createServer } from "node:http";
+import { listenTestServer } from "./test-server.js";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -53,17 +53,8 @@ async function listen(app: ReturnType<typeof createApp>["app"]): Promise<{
   url: string;
   close: () => Promise<void>;
 }> {
-  const server = createServer(app);
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const address = server.address();
-  if (!address || typeof address === "string") throw new Error("listen failed");
-  return {
-    url: `http://127.0.0.1:${address.port}`,
-    close: () =>
-      new Promise((resolve, reject) => {
-        server.close((err) => (err ? reject(err) : resolve()));
-      }),
-  };
+  const s = await listenTestServer(app);
+  return { url: s.url, close: () => s.close() };
 }
 
 async function json(url: string, init?: RequestInit): Promise<{ status: number; body: unknown; text: string }> {

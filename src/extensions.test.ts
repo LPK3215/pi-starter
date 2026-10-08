@@ -14,6 +14,7 @@ import { WebSocket } from "ws";
 import { createApp } from "./app.js";
 import { AppError, notFound } from "./http/errors.js";
 import { attachWebSocket, defineCommand, type WsCommandRegistry } from "./transport/ws.js";
+import { listenExistingServer, waitFor } from "./test-server.js";
 import { SessionHub } from "./session-hub.js";
 import { resolveRuntimeConfig } from "./config.js";
 import { PROTOCOL_VERSION, type ServerMessage } from "./protocol.js";
@@ -85,7 +86,6 @@ function makeAgent(): BuiltAgent {
   } as never;
 }
 
-const settle = (ms = 220) => new Promise((r) => setTimeout(r, ms));
 
 /** 起一套真实的 HTTP + WS，业务命令通过 commands 注入。 */
 async function start(commands?: WsCommandRegistry) {
@@ -126,9 +126,9 @@ async function start(commands?: WsCommandRegistry) {
       ? [{ name: "/biz", description: "业务斜杠命令" }]
       : undefined,
   });
-  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
-  const port = (server.address() as { port: number }).port;
-  const base = `http://127.0.0.1:${port}`;
+  const listener = await listenExistingServer(server);
+  const port = listener.port;
+  const base = listener.url;
 
   const frames: ServerMessage[] = [];
   const socket = new WebSocket(`ws://127.0.0.1:${port}/ws`, { origin: base });
@@ -143,10 +143,7 @@ async function start(commands?: WsCommandRegistry) {
       socket.terminate();
       await ws.close().catch(() => undefined);
       hub.dispose();
-      // `fetch` (undici) keeps HTTP connections alive in a pool, and `server.close()` only
-      // fires once every connection ends — so without this the test process never exits.
-      server.closeAllConnections();
-      await new Promise<void>((r) => server.close(() => r()));
+      await listener.close();
     },
   };
 }
@@ -199,9 +196,9 @@ test("扩展点：业务方注册的 WS 命令被正确执行", async () => {
   });
   try {
     h.send({ type: "hello", protocolVersion: PROTOCOL_VERSION });
-    await settle();
+    await waitFor(() => h.frames.some((f) => f.type === "ready"), "ready");
     h.send({ type: "biz_sum", a: 2, b: 40 });
-    await settle();
+    await waitFor(() => h.frames.some((f) => f.type === "notice"), "自定义命令的 notice 回帧");
 
     const notice = h.frames.find((f) => f.type === "notice") as { text: string } | undefined;
     assert.ok(notice, "the custom command must produce a reply");
@@ -217,10 +214,10 @@ test("扩展点：未注册的 WS 命令明确报错，不再静默", async () =
   });
   try {
     h.send({ type: "hello", protocolVersion: PROTOCOL_VERSION });
-    await settle();
+    await waitFor(() => h.frames.some((f) => f.type === "ready"), "ready");
     h.frames.length = 0;
     h.send({ type: "biz_nope", x: 1 });
-    await settle();
+    await waitFor(() => h.frames.some((f) => f.type === "error"), "未注册命令的 error 回帧");
 
     const err = h.frames.find((f) => f.type === "error") as { message: string } | undefined;
     assert.ok(err, "an unknown command MUST get an explicit error frame");
@@ -241,17 +238,19 @@ test("扩展点：业务命令抛错不会杀掉连接", async () => {
   });
   try {
     h.send({ type: "hello", protocolVersion: PROTOCOL_VERSION });
-    await settle();
+    await waitFor(() => h.frames.some((f) => f.type === "ready"), "ready");
     h.send({ type: "biz_boom" });
-    await settle();
+    await waitFor(() => h.frames.some((f) => f.type === "error"), "命令失败的 error 回帧");
     h.send({ type: "ping" });
-    await settle(300);
+    await waitFor(() => h.frames.some((f) => f.type === "pong"), "失败后的 pong");
 
     const err = h.frames.find((f) => f.type === "error") as { message: string } | undefined;
     assert.ok(err, "the failure must surface as an error frame");
     assert.match(err!.message, /业务处理失败/);
-    const pong = h.frames.find((f) => f.type === "pong");
-    assert.ok(pong, "the connection must stay usable after a failing command");
+    assert.ok(
+      h.frames.some((f) => f.type === "pong"),
+      "the connection must stay usable after a failing command",
+    );
     assert.equal(h.socket.readyState, WebSocket.OPEN);
   } finally {
     await h.close();
@@ -266,10 +265,11 @@ test("扩展点：自定义命令不能覆盖内置命令", async () => {
   });
   try {
     h.send({ type: "hello", protocolVersion: PROTOCOL_VERSION });
-    await settle();
+    await waitFor(() => h.frames.some((f) => f.type === "ready"), "ready");
     h.frames.length = 0;
     h.send({ type: "ping" });
-    await settle(300);
+    // 等 pong 而不是等固定时长：全量并发时消息处理会变慢，固定 sleep 会偶发失败。
+    await waitFor(() => h.frames.some((f) => f.type === "pong"), "内置 ping 的 pong");
 
     assert.ok(
       h.frames.some((f) => f.type === "pong"),
@@ -303,7 +303,7 @@ test("扩展点：注册的资源随 dispose / close 一起回收", async () => 
     serverVersion: "test",
     metrics: new Metrics(),
   });
-  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  const lifecycleListener = await listenExistingServer(server);
 
   let appDisposed = 0;
   let wsDisposed = 0;
@@ -319,15 +319,14 @@ test("扩展点：注册的资源随 dispose / close 一起回收", async () => 
   assert.equal(appDisposed, 2, "both working disposers run even though one threw");
 
   hub.dispose();
-  server.closeAllConnections();
-  await new Promise<void>((r) => server.close(() => r()));
+  await lifecycleListener.close();
 });
 
 test("扩展点：业务斜杠命令进入能力目录", async () => {
   const h = await start({ biz_x: { handler: () => {} } });
   try {
     h.send({ type: "hello", protocolVersion: PROTOCOL_VERSION });
-    await settle(300);
+    await waitFor(() => h.frames.some((f) => f.type === "ready"), "ready");
     // `ready` carries the capability catalog (get_capabilities replies with a standalone frame).
     const ready = h.frames.find((f) => f.type === "ready") as
       | { capabilities: { commands: Array<{ name: string }> } }

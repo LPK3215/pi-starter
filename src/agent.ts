@@ -38,6 +38,8 @@ import type { Model } from "@earendil-works/pi-ai";
 import { allTools } from "./tools/index.js";
 import { allExtensions, type ExtensionFactory } from "./extensions/index.js";
 import { loadScaffoldSkills, resolveSkillPaths, type LoadedSkill } from "./skills/index.js";
+import { badRequest } from "./http/errors.js";
+import { assertSessionFileAllowed } from "./sessions/store.js";
 import { formatKnowledgeCatalog, loadScaffoldKnowledge, type KnowledgeDoc } from "./knowledge/index.js";
 import {
   composePrompt,
@@ -95,8 +97,25 @@ export interface BuildAgentOptions {
   promptTemplate?: string;
   /** 追加到系统提示词的业务段（对应模板的 `{{append}}`），垂直 Agent 注入领域规则用。 */
   promptAppend?: string;
-  /** 是否使用内存会话（Web 场景推荐；CLI 可落盘） */
+  /** 是否使用内存会话（默认 false = 落盘；传 true 则完全不写盘） */
   inMemory?: boolean;
+  /**
+   * 会话落盘目录。不传则交给 SDK 按 `~/.pi/agent/sessions/--<cwd>--` 推导（CLI）。
+   * Web 必须传入本脚手架自己的目录（见 `scaffoldSessionDir`），不要和 CLI 的记录混放。
+   */
+  sessionDir?: string;
+  /**
+   * `resumeFrom` 允许落在哪些目录里。空数组 = 不允许打开已有文件（fail-closed）。
+   * Web 传入 `[sessionDir]`。只传 `sessionDir` 不会自动放开恢复。
+   */
+  allowedSessionRoots?: readonly string[];
+  /**
+   * 恢复一个已有会话文件（重启后接回上次的对话）。
+   *
+   * 只有 SDK 的 `SessionManager.open()` 能做到——`createAgentSession` 本身没有
+   * `resume` 参数，它只认 `sessionManager`。路径会在 open 之前再校验一次。
+   */
+  resumeFrom?: string;
   /** 注入额外工具（叠在 src/tools 登记的工具之上） */
   extraTools?: ToolDefinition[];
   /** 注入额外扩展（叠在 src/extensions 登记的钩子之上，排在 guard / audit 后面） */
@@ -114,6 +133,27 @@ export interface BuildAgentOptions {
 }
 
 type AgentSession = Awaited<ReturnType<typeof createAgentSession>>["session"];
+
+/**
+ * 选一个 SessionManager：内存 / 新建落盘 / 打开已有文件。
+ *
+ * 打开已有文件的唯一出口在这里：先 `assertSessionFileAllowed`，再 `SessionManager.open`。
+ * 内存会话不能恢复——静默忽略 `resumeFrom` 会让「已经接上恢复」变成空会话。
+ */
+export function resolveSessionManager(
+  inMemory: boolean | undefined,
+  sessionDir: string | undefined,
+  resumeFrom: string | undefined,
+  allowedRoots: readonly string[],
+): SessionManager {
+  if (resumeFrom) {
+    if (inMemory) throw badRequest("内存会话不能恢复磁盘文件");
+    assertSessionFileAllowed(resumeFrom, allowedRoots);
+    return SessionManager.open(resumeFrom, sessionDir);
+  }
+  if (inMemory) return SessionManager.inMemory();
+  return SessionManager.create(process.cwd(), sessionDir);
+}
 
 /** 组装完成后的结果 */
 export interface BuiltAgent {
@@ -145,7 +185,7 @@ export interface BuiltAgent {
    * 每次调用都会重建 loader，保证对话之间不共享可变状态。
    * 可选：缺席时 Web 端自动降级为单对话模式（复用 `session`）。
    */
-  createSession?(): Promise<AgentSession>;
+  createSession?(opts?: { resumeFrom?: string }): Promise<AgentSession>;
   dispose(): void;
 }
 
@@ -259,22 +299,36 @@ export async function buildAgent(options: BuildAgentOptions = {}): Promise<Built
     return loader;
   };
 
-  const createSession = async (): Promise<AgentSession> => {
+  /**
+   * 造一个会话工厂。
+   *
+   * `resumeFrom` 让调用方（SessionHub）能把「磁盘上的某个会话文件」接回来——这是重启后
+   * 恢复对话的唯一途径：`createAgentSession` 只认 `sessionManager`，而只有
+   * `SessionManager.open(path)` 会把历史消息、模型与 thinkingLevel 一并恢复。
+   * 路径校验在 `resolveSessionManager` 里，不在调用方的注释里。
+   */
+  const createSession = async (opts?: { resumeFrom?: string }): Promise<AgentSession> => {
     const loader = await buildLoader();
+    const sessionManager = resolveSessionManager(
+      options.inMemory,
+      options.sessionDir,
+      opts?.resumeFrom,
+      options.allowedSessionRoots ?? [],
+    );
     const { session } = await createAgentSession({
       cwd: process.cwd(),
       model,
       modelRuntime,
       resourceLoader: loader,
-      sessionManager: options.inMemory
-        ? SessionManager.inMemory()
-        : SessionManager.create(process.cwd()),
+      sessionManager,
       ...toolPolicy,
     });
     return session;
   };
 
-  const session = await createSession();
+  const session = await createSession(
+    options.resumeFrom ? { resumeFrom: options.resumeFrom } : undefined,
+  );
 
   /**
    * Single source of truth for "which model is active".

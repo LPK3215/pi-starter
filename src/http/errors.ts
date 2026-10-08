@@ -27,6 +27,7 @@ export const APP_ERROR_CODES = [
   "busy",
   "payload_too_large",
   "read_only_sql",
+  "forbidden",
   "internal",
 ] as const;
 
@@ -59,6 +60,7 @@ const DEFAULT_STATUS: Record<AppErrorCode, number> = {
   busy: 429,
   payload_too_large: 413,
   read_only_sql: 400,
+  forbidden: 403,
   internal: 500,
 };
 
@@ -78,11 +80,13 @@ const ALWAYS_EXPOSED: ReadonlySet<AppErrorCode> = new Set<AppErrorCode>([
   "busy",
   "payload_too_large",
   "read_only_sql",
+  "forbidden",
 ]);
 
 /** Generic text shown when an error is not explicitly safe to expose. */
 const GENERIC_MESSAGE: Record<number, string> = {
   400: "请求无效",
+  403: "无权访问该资源",
   404: "资源不存在",
   409: "状态冲突",
   413: "请求体过大",

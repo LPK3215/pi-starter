@@ -34,6 +34,7 @@ import type { SettingsService } from "../settings.js";
 import { searchKnowledge } from "../knowledge/index.js";
 import { Metrics, metrics as defaultMetrics } from "../metrics.js";
 import { getLogger } from "../log.js";
+import { AppError } from "../http/errors.js";
 
 /** 运行期依赖（由 server 入口装配后传入）。 */
 export interface WsRuntime {
@@ -343,6 +344,23 @@ class ClientConn {
         case "new_conversation":
           await this.cs?.newConversation();
           break;
+        case "open_conversation": {
+          if (!this.cs || !this.clientId) {
+            this.send({ type: "error", message: "not attached" });
+            break;
+          }
+          if (!msg.conversationId?.trim()) {
+            this.send({ type: "error", message: "conversationId is required" });
+            break;
+          }
+          try {
+            await runtime.hub.openConversation(this.clientId, msg.conversationId);
+          } catch (err) {
+            const message = err instanceof AppError ? err.clientMessage() : "无法打开该会话";
+            this.send({ type: "error", message });
+          }
+          break;
+        }
         case "switch_conversation":
           if (!this.cs?.switchConversation(msg.conversationId)) {
             this.send({ type: "error", message: `unknown conversation ${msg.conversationId}` });

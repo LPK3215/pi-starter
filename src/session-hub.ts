@@ -15,6 +15,7 @@
  *      UI 进度条与真实裁剪阈值永远一致。
  */
 
+import { existsSync } from "node:fs";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import type { Model } from "@earendil-works/pi-ai";
@@ -23,6 +24,8 @@ import type { RuntimeConfig } from "./config.js";
 import { SnapshotEmitter } from "./snapshot.js";
 import { computeSoftCap, contextUsageRatio, estimateTokens, planContextTrim, type TrimPlan } from "./context/budget.js";
 import { getLogger } from "./log.js";
+import { AppError, badRequest } from "./http/errors.js";
+import { assertSessionFileAllowed, type SessionCatalog, type StoredConversation } from "./sessions/store.js";
 import { ToolWatchdog } from "./approval/watchdog.js";
 import { metrics } from "./metrics.js";
 import type {
@@ -565,6 +568,31 @@ export class Conversation {
     };
   }
 
+  /**
+   * 用索引里的标题盖过占位符；索引没有时再从会话消息里取。
+   * 已经有真实标题时不再被「New conversation」逻辑改掉。
+   */
+  adoptSavedTitle(saved: string | undefined): void {
+    if (saved && saved !== "New conversation") this.title = saved;
+    this.refreshTitleFromSession();
+  }
+
+  /**
+   * 写进索引的条目。文件还没落盘（SDK 要等第一条 assistant 消息）时返回 undefined，
+   * 调用方安静跳过，不要把一条还不存在的路径写进索引。
+   */
+  toStored(): StoredConversation | undefined {
+    const sessionFile = this.session.sessionFile;
+    if (!sessionFile || !existsSync(sessionFile)) return undefined;
+    return {
+      sessionId: this.id,
+      sessionFile,
+      title: this.title,
+      updatedAt: this.lastActiveAt,
+      messageCount: this.session.messages.length,
+    };
+  }
+
   dispose(): void {
     // Order matters: stop the watchdog first so it cannot abort a session mid-teardown.
     this.watchdog.dispose();
@@ -602,6 +630,15 @@ export interface ClientSessionOptions {
    */
   maxOpenConversations?: number;
   /**
+   * 允许打开的会话文件目录（恢复历史对话用）。默认空 = 禁止恢复。
+   * Web 传入本脚手架自己的会话目录，不是 CLI 的那一个。
+   */
+  allowedSessionRoots?: readonly string[];
+  /** 本工作区已落盘、但当前连接还没打开的对话。不传就没有历史列表。 */
+  persistedConversations?: () => readonly StoredConversation[];
+  /** 一轮结束或关闭前把这条对话写回索引。文件还不存在时由 `toStored()` 跳过。 */
+  rememberConversation?: (conv: Conversation) => void;
+  /**
    * Per-tool timeout (ms) for each conversation's watchdog, read lazily so a settings change
    * applies to newly created conversations. 0 (or omitted) disables the watchdog.
    */
@@ -628,6 +665,15 @@ export class ClientSession {
   private readonly keepRecent: () => number;
   private readonly toolTimeoutMs: () => number;
   private readonly maxOpenConversations: number;
+  /**
+   * 允许打开的会话文件目录。空数组 = **禁止恢复**（fail-closed）。
+   *
+   * 必须显式注入。客户端只提交会话 id，路径从索引里查；这里再挡一层，
+   * 避免工厂被直接塞进一个目录外的文件。
+   */
+  private readonly allowedSessionRoots: readonly string[];
+  private readonly persistedConversations: () => readonly StoredConversation[];
+  private readonly rememberConversation: ((conv: Conversation) => void) | undefined;
 
   constructor(options: ClientSessionOptions) {
     this.clientId = options.clientId;
@@ -639,6 +685,9 @@ export class ClientSession {
     this.toolTimeoutMs = options.toolTimeoutMs ?? (() => 0);
     const cap = options.maxOpenConversations ?? DEFAULT_MAX_OPEN_CONVERSATIONS;
     this.maxOpenConversations = Number.isInteger(cap) && cap >= 1 ? cap : DEFAULT_MAX_OPEN_CONVERSATIONS;
+    this.allowedSessionRoots = options.allowedSessionRoots ?? [];
+    this.persistedConversations = options.persistedConversations ?? (() => []);
+    this.rememberConversation = options.rememberConversation;
   }
 
   /** Rebind the outbound sink for every conversation (client reconnect). */
@@ -665,7 +714,21 @@ export class ClientSession {
    * Create a new conversation. Uses the injected session factory when available;
    * otherwise degrades to the single shared session (CLI / library callers).
    */
-  async newConversation(): Promise<Conversation> {
+  async newConversation(opts?: { resumeFrom?: string }): Promise<Conversation> {
+    // 路径来自索引，不来自客户端。这里先挡目录，`resolveSessionManager` 打开前再挡一次。
+    // 没有独立会话工厂时不能假装恢复成功——那会静默退回共享 session。
+    if (opts?.resumeFrom) {
+      assertSessionFileAllowed(opts.resumeFrom, this.allowedSessionRoots);
+      if (!this.agent.createSession) {
+        throw badRequest("当前代理没有独立会话工厂，无法恢复历史对话");
+      }
+      const known = this.persistedConversations().some((entry) => entry.sessionFile === opts.resumeFrom);
+      if (!known) throw new AppError("forbidden", "只能打开索引中的会话");
+    }
+    return this.addConversation(opts?.resumeFrom);
+  }
+
+  private async addConversation(resumeFrom?: string): Promise<Conversation> {
     const factory = this.agent.createSession;
 
     // Without a session factory every conversation would share one session (and thus one
@@ -685,8 +748,11 @@ export class ClientSession {
     // allocating first and trimming after would briefly exceed the budget we are protecting.
     this.evictForCapacity();
 
-    const session = factory ? await factory() : this.agent.session;
-    const conv = new Conversation({
+    const session = factory
+      ? await factory(resumeFrom ? { resumeFrom } : undefined)
+      : this.agent.session;
+    let conv!: Conversation;
+    conv = new Conversation({
       clientId: this.clientId,
       session,
       fallbackModel: this.agent.model,
@@ -694,11 +760,17 @@ export class ClientSession {
       cfg: this.cfg,
       push: (msg) => this.emit(msg),
       listConversations: () => this.listConversations(),
-      onTurnEnd: () => this.emitConversations(),
+      onTurnEnd: () => {
+        this.rememberConversation?.(conv);
+        this.emitConversations();
+      },
       keepRecent: this.keepRecent,
       toolTimeoutMs: this.toolTimeoutMs(),
       ownsSession: Boolean(factory),
     });
+    const saved = this.persistedConversations().find((entry) => entry.sessionId === conv.id);
+    conv.adoptSavedTitle(saved?.title);
+    this.rememberConversation?.(conv);
     // Defensive: never leave a live wrapper for the same id behind (it would keep its subscription).
     const collision = this.convs.get(conv.id);
     if (collision && collision !== conv) collision.dispose();
@@ -731,6 +803,7 @@ export class ClientSession {
           open: this.convs.size,
           cap: this.maxOpenConversations,
         });
+      this.rememberConversation?.(victim);
       victim.dispose();
       this.convs.delete(victim.id);
     }
@@ -757,6 +830,7 @@ export class ClientSession {
     if (!conv) return false;
     // Keep at least one conversation alive.
     if (this.convs.size === 1) return false;
+    this.rememberConversation?.(conv);
     conv.dispose();
     this.convs.delete(conversationId);
     if (this.activeId === conversationId) {
@@ -769,9 +843,20 @@ export class ClientSession {
   }
 
   listConversations(): UiConversation[] {
-    return [...this.convs.values()]
-      .map((conv) => conv.toSummary(conv.id === this.activeId))
-      .sort((a, b) => b.updatedAt - a.updatedAt);
+    const live = [...this.convs.values()].map((conv) => conv.toSummary(conv.id === this.activeId));
+    const liveIds = new Set(live.map((item) => item.id));
+    const dormant: UiConversation[] = this.persistedConversations()
+      .filter((entry) => !liveIds.has(entry.sessionId))
+      .map((entry) => ({
+        id: entry.sessionId,
+        title: entry.title,
+        active: false,
+        streaming: false,
+        messageCount: entry.messageCount,
+        updatedAt: entry.updatedAt,
+        dormant: true,
+      }));
+    return [...live, ...dormant].sort((a, b) => b.updatedAt - a.updatedAt);
   }
 
   /** Number of open conversations (for metrics). */
@@ -819,8 +904,27 @@ export class ClientSession {
     this.convs.get(conversationId)?.requestApproval(request);
   }
 
+  /**
+   * 丢掉一条对话，哪怕它是最后一条。只用于恢复结果和索引对不上的失败路径，
+   * 正常关闭仍走 `closeConversation`（至少留一条）。
+   */
+  dropConversation(conversationId: string): void {
+    const conv = this.convs.get(conversationId);
+    if (!conv) return;
+    conv.dispose();
+    this.convs.delete(conversationId);
+    if (this.activeId === conversationId) {
+      const next = this.convs.keys().next();
+      this.activeId = next.done ? "" : next.value;
+    }
+    this.emitConversations();
+  }
+
   dispose(): void {
-    for (const conv of this.convs.values()) conv.dispose();
+    for (const conv of this.convs.values()) {
+      this.rememberConversation?.(conv);
+      conv.dispose();
+    }
     this.convs.clear();
     this.activeId = "";
   }
@@ -830,6 +934,8 @@ export class ClientSession {
 
 export class SessionHub {
   private readonly sessions = new Map<string, ClientSession>();
+  /** sessionId 正在被某个连接打开，挡住并发的第二次 open。 */
+  private readonly opening = new Set<string>();
 
   constructor(
     private readonly agent: BuiltAgent,
@@ -838,7 +944,57 @@ export class SessionHub {
     private readonly keepRecent: () => number = () => 6,
     private readonly maxOpenConversations: number = DEFAULT_MAX_OPEN_CONVERSATIONS,
     private readonly toolTimeoutMs: () => number = () => 0,
+    private readonly allowedSessionRoots: readonly string[] = [],
+    private readonly catalog?: SessionCatalog,
   ) {}
+
+  /**
+   * 按索引里的会话 id 打开历史对话。客户端不提供路径。
+   * 另一个连接已经打开同一条时拒绝，不把对话抢走。
+   */
+  async openConversation(clientId: string, conversationId: string): Promise<Conversation> {
+    const owner = this.sessions.get(clientId);
+    if (!owner) throw badRequest("连接尚未建立");
+    if (!conversationId.trim()) throw badRequest("会话 id 不能为空");
+    const already = owner.get(conversationId);
+    if (already) {
+      owner.switchConversation(conversationId);
+      return already;
+    }
+    for (const [id, session] of this.sessions) {
+      if (id !== clientId && session.get(conversationId)) {
+        throw new AppError("conflict", "该对话正由另一个连接使用");
+      }
+    }
+    const entry = this.catalog?.get(conversationId);
+    if (!entry) throw new AppError("not_found", "没有这条历史对话");
+    if (this.opening.has(conversationId)) {
+      throw new AppError("conflict", "该对话正在被打开");
+    }
+    this.opening.add(conversationId);
+    try {
+      const conv = await owner.newConversation({ resumeFrom: entry.sessionFile });
+      if (conv.id !== conversationId) {
+        owner.dropConversation(conv.id);
+        throw new AppError("internal", "恢复后的会话标识与索引不一致");
+      }
+      return conv;
+    } catch (err) {
+      if (err instanceof AppError) {
+        // 文件已经没了就别再留在列表里。其它拒绝（目录不对、工厂缺失）保留索引。
+        if (err.code === "forbidden" && !existsSync(entry.sessionFile)) {
+          this.catalog?.remove(conversationId);
+        }
+        throw err;
+      }
+      getLogger().warn("打开历史会话失败", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      throw new AppError("internal", "无法打开该会话", { cause: err });
+    } finally {
+      this.opening.delete(conversationId);
+    }
+  }
 
   /** Attach a client id to a fresh ClientSession (disposes any previous one). */
   async attach(clientId: string, push: (msg: ServerMessage) => void): Promise<ClientSession> {
@@ -853,6 +1009,9 @@ export class SessionHub {
       keepRecent: this.keepRecent,
       toolTimeoutMs: this.toolTimeoutMs,
       maxOpenConversations: this.maxOpenConversations,
+      allowedSessionRoots: this.allowedSessionRoots,
+      persistedConversations: () => this.catalog?.list() ?? [],
+      rememberConversation: (conv) => this.remember(conv),
     });
     this.sessions.set(clientId, session);
     await session.attach();
@@ -912,6 +1071,19 @@ export class SessionHub {
     return model;
   }
 
+  private remember(conv: Conversation): void {
+    if (!this.catalog) return;
+    const entry = conv.toStored();
+    if (!entry) return;
+    try {
+      this.catalog.upsert(entry);
+    } catch (err) {
+      getLogger().warn("会话索引更新失败", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
   detach(clientId: string): void {
     const session = this.sessions.get(clientId);
     if (session) {
@@ -934,6 +1106,10 @@ export function createSessionHub(
   keepRecent?: () => number,
   maxOpenConversations?: number,
   toolTimeoutMs?: () => number,
+  allowedSessionRoots?: readonly string[],
+  catalog?: SessionCatalog,
 ): SessionHub {
-  return new SessionHub(agent, cfg, cwd, keepRecent, maxOpenConversations, toolTimeoutMs);
+  return new SessionHub(
+    agent, cfg, cwd, keepRecent, maxOpenConversations, toolTimeoutMs, allowedSessionRoots, catalog,
+  );
 }

@@ -149,7 +149,7 @@ test("持久化：审批规则落盘后重启不丢", () => {
     match: { kind: "prefix", value: "/etc" },
     action: "deny",
   });
-  saveApprovalRulesToFile(file, store);
+  saveApprovalRulesToFile(file, store.listUserRules());
 
   const reloaded = loadApprovalRulesFromFile(file);
   assert.equal(reloaded.listUserRules().length, 1);

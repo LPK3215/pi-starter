@@ -99,6 +99,11 @@ export interface UiConversation {
   streaming: boolean;
   messageCount: number;
   updatedAt: number;
+  /**
+   * 在磁盘上、当前连接还没加载。为 true 时 `switch_conversation` 不会切过去，
+   * 要发 `open_conversation`（只带 id，不带文件路径）。
+   */
+  dormant?: boolean;
 }
 
 /**
@@ -159,6 +164,7 @@ export type ClientMessage =
   | { type: "draft_update"; text: string }
   // 会话编排
   | { type: "new_conversation" }
+  | { type: "open_conversation"; conversationId: string }
   | { type: "switch_conversation"; conversationId: string }
   | { type: "close_conversation"; conversationId: string }
   | { type: "list_conversations" }
@@ -296,6 +302,7 @@ export const CLIENT_MESSAGE_TYPES = [
   "abort",
   "draft_update",
   "new_conversation",
+  "open_conversation",
   "switch_conversation",
   "close_conversation",
   "list_conversations",

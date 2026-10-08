@@ -18,6 +18,7 @@ import { createServer, type Server } from "node:http";
 import { once } from "node:events";
 import { WebSocket } from "ws";
 import { SessionHub, DEFAULT_MAX_OPEN_CONVERSATIONS, MAX_SNAPSHOT_MESSAGES } from "./session-hub.js";
+import { listenExistingServer } from "./test-server.js";
 import { resolveRuntimeConfig } from "./config.js";
 import { PROTOCOL_VERSION, type ServerMessage, type UiState } from "./protocol.js";
 import { attachWebSocket } from "./transport/ws.js";
@@ -371,9 +372,9 @@ async function startHarness(
     metrics,
   });
   wsRef = ws;
-  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
-  const port = (server.address() as { port: number }).port;
-  const base = `http://127.0.0.1:${port}`;
+  const listener = await listenExistingServer(server);
+  const port = listener.port;
+  const base = listener.url;
 
   const frames: ServerMessage[] = [];
   const socket = new WebSocket(`ws://127.0.0.1:${port}/ws`, { origin: base });
@@ -393,10 +394,7 @@ async function startHarness(
         /* already closed */
       }
       socket.terminate();
-      // fetch's pooled keep-alive connections would otherwise keep server.close() pending,
-      // leaving the test process alive after every assertion has passed.
-      server.closeAllConnections();
-      await new Promise<void>((r) => server.close(() => r()));
+      await listener.close();
       hub.dispose();
     },
   };

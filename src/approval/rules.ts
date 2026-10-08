@@ -16,6 +16,8 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { isPathInsideCwd } from "../extensions/guard.js";
+import { validationFailed } from "../http/errors.js";
+import { getLogger } from "../log.js";
 
 /** 规则命中后的动作。 */
 export type ApprovalAction = "allow" | "deny" | "ask";
@@ -292,11 +294,19 @@ function truncate(text: string, limit = 200): string {
 
 /* ────────────────────────── 规则库（可持久化） ────────────────────────── */
 
+/** 用户规则条数上限。内置规则之外再堆太多，评估成本与维护成本都不划算。 */
+export const MAX_USER_RULES = 500;
+
 export interface ApprovalRulesStoreOptions {
   /** 用户自定义规则（自顶向下，排在内置之前，便于覆盖）。 */
   userRules?: readonly ApprovalRule[];
   /** 是否附带内置规则。默认 true。 */
   includeBuiltin?: boolean;
+  /**
+   * 改动即落盘的回调。**不要**改成「停机时写」——那会用内存副本覆盖运行期间的外部修改。
+   * 回调抛错不影响规则在内存中的生效。
+   */
+  onChange?: (rules: readonly ApprovalRule[]) => void;
 }
 
 /**
@@ -306,10 +316,24 @@ export interface ApprovalRulesStoreOptions {
 export class ApprovalRulesStore {
   private userRules: ApprovalRule[];
   private readonly includeBuiltin: boolean;
+  /**
+   * 改动回调：每次规则变化后立刻触发，由调用方在此**立即落盘**。
+   *
+   * 为什么是「改动即写」而不是「停机时写」：后者会在运行期间被外部修改（用户手改
+   * 规则文件）时，用启动时读入的内存副本覆盖掉那次修改——把别人的改动悄悄抹掉。
+   * 改成只有「我们自己改动」这一个写盘时机后，停机不再需要写盘，那类覆盖也就不存在了。
+   */
+  private onChange: ((rules: readonly ApprovalRule[]) => void) | undefined;
 
   constructor(options: ApprovalRulesStoreOptions = {}) {
-    this.userRules = [...(options.userRules ?? [])];
+  this.userRules = [...(options.userRules ?? [])];
     this.includeBuiltin = options.includeBuiltin !== false;
+    this.onChange = options.onChange;
+  }
+
+  /** 设置改动回调（装配后注入，避免构造期就要引用文件路径）。 */
+  setOnChange(fn: ((rules: readonly ApprovalRule[]) => void) | undefined): void {
+    this.onChange = fn;
   }
 
   /** 生效规则（用户规则在前）。 */
@@ -319,12 +343,26 @@ export class ApprovalRulesStore {
 
   /** 用户规则列表。 */
   listUserRules(): ApprovalRule[] {
-    return [...this.userRules];
+ return [...this.userRules];
   }
 
-  /** 整体替换用户规则。 */
+  /** 整体替换用户规则（会触发落盘回调）。 */
   setUserRules(rules: readonly ApprovalRule[]): void {
     this.userRules = [...rules];
+    this.onChange?.(this.listUserRules());
+  }
+
+  private notifyChanged(): void {
+    try {
+ this.onChange?.(this.listUserRules());
+    } catch (err) {
+      // 落盘失败不能连带让规则改动回滚——规则已经在内存里生效了，静默失败更糟。
+      getLogger()
+        .child({ component: "approval-rules" })
+        .error("规则落盘失败（改动已在内存生效）", {
+   error: err instanceof Error ? err.message : String(err),
+        });
+    }
   }
 
   /** 新增 / 覆盖一条用户规则（同 id 覆盖）。 */
@@ -332,13 +370,16 @@ export class ApprovalRulesStore {
     const index = this.userRules.findIndex((item) => item.id === rule.id);
     if (index >= 0) this.userRules[index] = rule;
     else this.userRules.push(rule);
+    this.notifyChanged();
   }
 
   /** 删除一条用户规则（内置规则不可删）。 */
   remove(id: string): boolean {
     const before = this.userRules.length;
     this.userRules = this.userRules.filter((rule) => rule.id !== id);
-    return this.userRules.length < before;
+    const removed = this.userRules.length < before;
+    if (removed) this.notifyChanged();
+    return removed;
   }
 
   /** 评估一个工具调用。 */
@@ -379,9 +420,18 @@ export function loadApprovalRulesFromFile(
         ? ((parsed as { userRules: unknown[] }).userRules)
         : [];
     const valid: ApprovalRule[] = [];
-    for (const item of rawRules) {
-      if (isApprovalRule(item)) valid.push(item);
-      else log?.("跳过非法的审批规则", item);
+    const capped = rawRules.slice(0, MAX_USER_RULES);
+    if (rawRules.length > MAX_USER_RULES) {
+      log?.("审批规则条数超限，只保留前若干条", rawRules.length);
+    }
+    for (const item of capped) {
+      // 用与 API 入口**同一个**校验器：否则会出现「手写文件被拦、API 却能塞进去」
+      // 这种两条路径标准不一致的漏洞。
+      try {
+        valid.push(validateApprovalRule(item));
+      } catch (err) {
+        log?.("跳过非法的审批规则", err instanceof Error ? err.message : String(err));
+      }
     }
     return ApprovalRulesStore.fromJSON({ userRules: valid });
   } catch (err) {
@@ -390,15 +440,58 @@ export function loadApprovalRulesFromFile(
   }
 }
 
-/** 把规则库写回文件（原子写）。 */
+/**
+ * 装配一个「读盘 + 改动即写盘」的规则库。
+ *
+ * 抽出来而不是让调用方自己拼 `load` + `setOnChange`：那两步一旦漏掉其中之一，
+ * 规则就变成「能改但重启丢」，而这种半成品从代码上完全看不出来。
+ * 单一入口也让测试能复现与生产一致的装配。
+ */
+export function createPersistentRulesStore(
+  filePath: string,
+  options: { logger?: (msg: string, err: unknown) => void } = {},
+): ApprovalRulesStore {
+  const log = options.logger;
+  const store = loadApprovalRulesFromFile(filePath, { logger: log });
+  store.setOnChange((rules) => {
+    try {
+      saveApprovalRulesToFile(filePath, rules);
+    } catch (err) {
+      // 落盘失败不阻断内存里的生效，但必须可见——否则用户以为存上了。
+      log?.("审批规则落盘失败（改动已在内存生效）", err);
+    }
+  });
+  return store;
+}
+
+/**
+ * 把用户规则写回文件（原子写）。
+ *
+ * 直接收规则数组而不是 store：写盘的唯一时机是「刚刚改动过」，调用方手上就是规则数组，
+ * 没必要为了拿它先构造一个 store。
+ */
 export function saveApprovalRulesToFile(
   filePath: string,
-  store: ApprovalRulesStore,
+  userRules: readonly ApprovalRule[],
 ): void {
   mkdirSync(dirname(filePath), { recursive: true });
+  const payload = { userRules: sanitizeUserRules(userRules) };
   const tmp = join(dirname(filePath), `.${basename(filePath)}.${process.pid}.tmp`);
-  writeFileSync(tmp, `${JSON.stringify(store.toJSON(), null, 2)}\n`, "utf8");
+  writeFileSync(tmp, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
   renameSync(tmp, filePath);
+}
+
+/** 写盘前再过一次校验：落盘的内容必须是能被读回来的合法规则。 */
+function sanitizeUserRules(rules: readonly ApprovalRule[]): ApprovalRule[] {
+  const out: ApprovalRule[] = [];
+  for (const rule of rules.slice(0, MAX_USER_RULES)) {
+    try {
+      out.push(validateApprovalRule(rule));
+    } catch {
+      // 静默丢弃非法项：内存里可能已被绕过校验塞进畸形规则，写盘时不放行它。
+    }
+  }
+  return out;
 }
 
 /**
@@ -410,22 +503,67 @@ export function saveApprovalRulesToFile(
  *   - `{kind:"regex"}` 缺 value → `new RegExp(undefined)` 匹配字面量 "undefined"，
  *     **静默错配**，比崩更糟。
  */
-function isApprovalRule(value: unknown): value is ApprovalRule {
-  if (!value || typeof value !== "object") return false;
-  const r = value as Record<string, unknown>;
-  if (typeof r.id !== "string" || r.id === "") return false;
-  if (typeof r.description !== "string") return false;
-  if (!(Array.isArray(r.tools) && r.tools.every((t) => typeof t === "string")) && r.tools !== "*") {
-    return false;
+export function validateApprovalRule(value: unknown): ApprovalRule {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw validationFailed("规则必须是对象");
   }
-  if (!["command", "path", "params"].includes(String(r.field))) return false;
-  if (!["allow", "deny", "ask"].includes(String(r.action))) return false;
+  const r = value as Record<string, unknown>;
+  if (typeof r.id !== "string" || r.id.trim() === "") {
+    throw validationFailed("规则缺少 id");
+  }
+  if (typeof r.description !== "string" || r.description.trim() === "") {
+    throw validationFailed(`规则 ${r.id} 缺少 description`);
+  }
+  if (!(Array.isArray(r.tools) && r.tools.every((t) => typeof t === "string" && t !== "")) && r.tools !== "*") {
+    throw validationFailed(`规则 ${r.id} 的 tools 必须是字符串数组或 "*"`);
+  }
+  if (!["command", "path", "params"].includes(String(r.field))) {
+    throw validationFailed(`规则 ${r.id} 的 field 必须是 command / path / params 之一`);
+  }
+  if (!["allow", "deny", "ask"].includes(String(r.action))) {
+    throw validationFailed(`规则 ${r.id} 的 action 必须是 allow / deny / ask 之一`);
+  }
   const m = r.match;
-  if (!m || typeof m !== "object") return false;
+  if (!m || typeof m !== "object") throw validationFailed(`规则 ${r.id} 缺少 match`);
   const match = m as Record<string, unknown>;
   const kind = match.kind;
-  // outside_workspace 不需要 value；其余五种都必须是非空字符串。
-  if (kind === "outside_workspace") return match.value === undefined;
-  if (!["regex", "glob", "contains", "prefix", "capability"].includes(String(kind))) return false;
-  return typeof match.value === "string" && match.value !== "";
+  // builtin 必须原样保留：它是「系统预置」的标记，丢了会让调用方的
+  // 「内置规则不可经此写入」检查变成永远不触发的死代码。
+  const builtin = r.builtin === true ? true : undefined;
+  if (kind === "outside_workspace") {
+    return {
+      id: r.id,
+      description: r.description,
+      tools: r.tools as string[] | "*",
+      field: r.field as ApprovalField,
+      match: { kind: "outside_workspace" },
+      action: r.action as ApprovalAction,
+      ...(builtin ? { builtin } : {}),
+    };
+  }
+  if (!["regex", "glob", "contains", "prefix", "capability"].includes(String(kind))) {
+    throw validationFailed(`规则 ${r.id} 的 match.kind 非法：${String(kind)}`);
+  }
+  if (typeof match.value !== "string" || match.value === "") {
+    throw validationFailed(`规则 ${r.id} 的 match.value 必须是非空字符串`);
+  }
+  return {
+    id: r.id,
+    description: r.description,
+    tools: r.tools as string[] | "*",
+    field: r.field as ApprovalField,
+    match: { kind, value: match.value } as ApprovalMatch,
+    action: r.action as ApprovalAction,
+    ...(builtin ? { builtin } : {}),
+  };
+}
+
+/** 判断是否是一条结构合法的规则（不抛错，供调用方需要布尔结果的场合）。 */
+export function isApprovalRule(value: unknown): value is ApprovalRule {
+  try {
+    validateApprovalRule(value);
+    return true;
+  } catch {
+    return false;
+  }
 }
