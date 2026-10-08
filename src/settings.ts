@@ -104,18 +104,29 @@ export function memorySettingsPort(initial?: Record<string, unknown>): SettingsP
  *   2. **读失败不致命**——文件不存在返回 undefined（走默认值）；文件损坏则**告警并回落默认**，
  *      而不是让整个服务起不来。配置坏了应该能被用户改回来，而不是变成死局。
  */
-export function fileSettingsPort(filePath: string, options: { logger?: (msg: string, err: unknown) => void } = {}): SettingsPort {
+export function fileSettingsPort(
+  filePath: string,
+  options: {
+    logger?: (msg: string, err: unknown) => void;
+    /**
+     * 可选的清洗函数。提供时，返回内容先经它过滤再交给 SettingsService，
+     * 于是「文件里有非法字段」也只会被剔除+告警，而不会让服务起不来。
+     */
+    sanitize?: (raw: Record<string, unknown>) => Record<string, unknown>;
+  } = {},
+): SettingsPort {
   const log = options.logger;
+  const clean = options.sanitize ?? ((raw: Record<string, unknown>) => raw);
   return {
     load: () => {
       if (!existsSync(filePath)) return undefined;
       try {
         const parsed: unknown = JSON.parse(readFileSync(filePath, "utf8"));
-        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-          return parsed as Record<string, unknown>;
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+          log?.("设置文件不是对象，已回落默认值", parsed);
+          return undefined;
         }
-        log?.("设置文件不是对象，已回落默认值", parsed);
-        return undefined;
+        return clean(parsed as Record<string, unknown>);
       } catch (err) {
         log?.("设置文件无法解析，已回落默认值", err);
         return undefined;
@@ -130,6 +141,39 @@ export function fileSettingsPort(filePath: string, options: { logger?: (msg: str
       renameSync(tmp, filePath);
     },
   };
+}
+
+/**
+ * 把落盘内容里不合法的字段剔除，返回可安全加载的部分。
+ *
+ * 为什么 API 路径严格拒绝、落盘路径却要容错：
+ *   - `PATCH /settings` 来自客户端，**必须**拒绝未知字段（否则 `set_settings` 退化成
+ *     任意 JSON 注入）；
+ *   - 配置文件是**用户自己早先**写下的，里面可能有旧版本遗留字段或手改错的内容。
+ *     让它把整个服务卡在起不来的状态是最差结果——用户改不回来，只能手工删文件。
+ *   所以这里剔除并报告，而不是抛错；`dropped` 让调用方可以明确告知用户。
+ */
+export function sanitizeSettings(
+  raw: Record<string, unknown> | undefined,
+  schema: SettingsSchema = SETTINGS_SCHEMA,
+): { clean: Record<string, unknown>; dropped: string[] } {
+  const clean: Record<string, unknown> = {};
+  const dropped: string[] = [];
+  if (!raw) return { clean, dropped };
+  for (const [key, value] of Object.entries(raw)) {
+    const validator = schema[key];
+    if (!validator) {
+      dropped.push(key);
+      continue;
+    }
+    try {
+      clean[key] = validator(value);
+    } catch {
+      // 值非法：同样剔除，而不是让构造抛错。
+      dropped.push(key);
+    }
+  }
+  return { clean, dropped };
 }
 
 /** 默认设置文件路径：`~/.pi/agent/pi-starter-settings.json`（与SDK 配置同处）。 */

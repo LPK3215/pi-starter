@@ -105,6 +105,9 @@ export class FileService {
 
   constructor(options: FileServiceOptions) {
     this.root = resolve(options.root);
+    // Fail fast and loudly: a root we cannot resolve is a deployment mistake, and every
+    // later path check would be unreliable anyway.
+    this.realRoot = realpathSync.native(this.root);
     this.maxPreviewBytes = options.maxPreviewBytes ?? DEFAULT_MAX_PREVIEW_BYTES;
     this.maxWriteBytes = options.maxWriteBytes ?? DEFAULT_MAX_WRITE_BYTES;
     this.maxEntries = options.maxEntries ?? DEFAULT_MAX_ENTRIES;
@@ -130,7 +133,13 @@ export class FileService {
     return target;
   }
 
-  /** 真实路径也必须在 root 内——拦符号链接逃逸。 */
+  /**
+   * 真实路径也必须在 root 内——拦符号链接逃逸。**Fail-closed**。
+   *
+   * 拿不到真实路径时一律拒绝，而不是放行：字面路径在 root 内并不等于真实路径在root 内
+   * （符号链接正是把两者分开的机制）。realpath 失败（权限、异常链接、与删除竞争）恰好是
+   * 这道检查失效的时刻，此时放行等于把校验交给运气。服务不可用比放行一个文件更可接受。
+   */
   private assertRealpathInside(target: string): void {
     let probe = target;
     for (let depth = 0; depth < 64; depth += 1) {
@@ -139,20 +148,23 @@ export class FileService {
       if (parent === probe) return;
       probe = parent;
     }
+    // 整条路径都不存在：没有实体可逃逸，字面校验已足够（新建/删除场景）。
     if (!existsSync(probe)) return;
+
     let real: string;
-    let realRoot: string;
     try {
       real = realpathSync.native(probe);
-      realRoot = realpathSync.native(this.root);
-    } catch {
-      return; // 拿不到真实路径时不阻塞，字面路径校验已通过
+    } catch (err) {
+      throw badRequest(`无法校验真实路径，已拒绝（可能是权限问题或链接异常）：${(err as Error).message}`);
     }
-    const rel = relative(realRoot, real);
+    const rel = relative(this.realRoot, real);
     if (rel.startsWith("..") || isAbsolute(rel)) {
       throw badRequest("路径经符号链接越出工作目录");
     }
   }
+
+  /** root 自身的真实路径，构造时解析一次。 */
+  private readonly realRoot: string;
 
   /** 绝对路径 → 相对 root 的 POSIX 风格路径。 */
   toRelPath(abs: string): string {

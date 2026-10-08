@@ -216,6 +216,7 @@ export {
   type SettingsSchema,
   defaultSettingsFile,
   fileSettingsPort,
+  sanitizeSettings,
 } from "./settings.js";
 
 export {

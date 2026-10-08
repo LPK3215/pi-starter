@@ -172,6 +172,38 @@ test("文件服务：不存在与类型不符的路径给出可操作原因", ()
   assert.equal(expectAppError(() => fs_.list("f.txt")).httpStatus, 400);
 });
 
+/**
+ * 回归：realpath 校验曾fail-open（失败即放行）。
+ *
+ * 「字面路径在 root 内」并不等于「真实路径在 root 内」——符号链接正是把两者分开的机制。
+ * realpath 失败（权限、异常链接、与删除竞争）恰好是这道检查失效的时刻，
+ * 此时放行等于把安全校验交给运气。正确做法是 fail-closed：证明不了安全就拒绝。
+ */
+test("文件服务：无法校验真实路径时拒绝而非放行（fail-closed）", () => {
+  const root = tmpRoot();
+  const fs_ = new FileService({ root });
+  const outside = tmpRoot();
+  writeFileSync(join(outside, "secret.txt"), "top secret");
+
+  // 指向根外的符号链接：正常情况下第二道校验会拦住。
+  const link = join(root, "escape.txt");
+  try {
+    symlinkSync(join(outside, "secret.txt"), link, "file");
+  } catch {
+    return; // 环境不支持符号链接，跳过
+  }
+  assert.equal(expectAppError(() => fs_.read("escape.txt")).httpStatus, 400);
+
+  // 关键：root 自身无法 realpath 时，服务必须拒绝一切路径，而不是全盘放行。
+  const bogusRoot = join(tmpRoot(), "does-not-exist-root");
+  try {
+    new FileService({ root: bogusRoot });
+    assert.fail("a root that cannot be resolved must fail fast, not silently degrade");
+  } catch {
+    // 构造期就失败——早失败好排查，胜过之后每次调用都不可靠。
+  }
+});
+
 test("文件服务：对二进制扩展名拒绝文本写入", () => {
   const fs_ = new FileService({ root: tmpRoot() });
   // 否则会产出损坏的假图片，比直接拒绝更糟。

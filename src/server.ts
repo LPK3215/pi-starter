@@ -24,9 +24,8 @@ import {
 import { createSessionHub } from "./session-hub.js";
 import { BUILTIN_TOOL_NAMES, createToolRegistry, defineToolSpec, type ToolRegistry } from "./tools/registry.js";
 import { allTools } from "./tools/index.js";
-import { SettingsService, fileSettingsPort, defaultSettingsFile } from "./settings.js";
+import { SettingsService, fileSettingsPort, defaultSettingsFile, sanitizeSettings } from "./settings.js";
 import {
-  ApprovalRulesStore,
   loadApprovalRulesFromFile,
   saveApprovalRulesToFile,
 } from "./approval/rules.js";
@@ -64,6 +63,14 @@ logger.info("正在组装 agent...");
 const settings = new SettingsService(
   fileSettingsPort(defaultSettingsFile(), {
     logger: (msg, err) => logger.warn(msg, { detail: err instanceof Error ? err.message : String(err) }),
+    // 配置文件里的非法字段（旧版本遗留 / 手改错）只剔除并告警，不让服务起不来。
+    sanitize: (raw) => {
+      const { clean, dropped } = sanitizeSettings(raw);
+      if (dropped.length > 0) {
+        logger.warn("设置文件中的非法字段已忽略", { dropped });
+      }
+      return clean;
+    },
   }),
 );
 const rulesFile = join(getAgentDir(), "pi-starter-approval-rules.json");

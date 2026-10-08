@@ -401,20 +401,31 @@ export function saveApprovalRulesToFile(
   renameSync(tmp, filePath);
 }
 
-/** 结构校验：宁少勿错——一条畸形规则绝不能被当成"无规则"从而放行高危命令。 */
+/**
+ * 结构校验：宁少勿错——一条畸形规则绝不能被当成「无规则」从而放行高危命令。
+ *
+ * `value` 的存在性必须一起校验。只查 `kind` 是不够的：
+ *   - `{kind:"glob"}` 缺 value → `globToRegExp(undefined)` 在**匹配时**才抛
+ *     （加载时不炸，跑到审批路径上崩，等于规则库把审批机制带崩）；
+ *   - `{kind:"regex"}` 缺 value → `new RegExp(undefined)` 匹配字面量 "undefined"，
+ *     **静默错配**，比崩更糟。
+ */
 function isApprovalRule(value: unknown): value is ApprovalRule {
   if (!value || typeof value !== "object") return false;
   const r = value as Record<string, unknown>;
   if (typeof r.id !== "string" || r.id === "") return false;
   if (typeof r.description !== "string") return false;
-  if (!Array.isArray(r.tools) && r.tools !== "*") return false;
+  if (!(Array.isArray(r.tools) && r.tools.every((t) => typeof t === "string")) && r.tools !== "*") {
+    return false;
+  }
   if (!["command", "path", "params"].includes(String(r.field))) return false;
   if (!["allow", "deny", "ask"].includes(String(r.action))) return false;
   const m = r.match;
   if (!m || typeof m !== "object") return false;
-  const kind = (m as { kind?: unknown }).kind;
-  return (
-    kind === "regex" || kind === "glob" || kind === "contains" ||
-    kind === "prefix" || kind === "outside_workspace" || kind === "capability"
-  );
+  const match = m as Record<string, unknown>;
+  const kind = match.kind;
+  // outside_workspace 不需要 value；其余五种都必须是非空字符串。
+  if (kind === "outside_workspace") return match.value === undefined;
+  if (!["regex", "glob", "contains", "prefix", "capability"].includes(String(kind))) return false;
+  return typeof match.value === "string" && match.value !== "";
 }
