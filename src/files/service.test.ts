@@ -3,7 +3,7 @@
  * 一个路径穿越或符号链接逃逸就等于把整个文件系统交出去。
  */
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, realpathSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -12,6 +12,36 @@ import { AppError } from "../http/errors.js";
 
 function tmpRoot(): string {
   return mkdtempSync(join(tmpdir(), "pi-files-"));
+}
+
+/**
+ * 在 `root` 里建一个指向 `outside` 目录的链接，返回链接的相对名；建不出来返回 null。
+ *
+ * 为什么用目录链接而不是文件符号链接：Windows 上创建符号链接需要开发者模式或管理员
+ * 权限（实测 `EPERM`），于是这类测试在本机只能悄悄return —— 看着通过，实际从没跑过，
+ * 正是最坏的一种状态。而 **junction 是 NTFS reparse point，普通用户就能建**，且
+ * `realpath` 同样会穿过它（已实测），所以「符号链接逃逸」这道校验在 Windows 上
+ * 也能被真正覆盖到。
+ *
+ * 降级顺序：junction（Windows免特权）→ symlink(dir)（macOS/Linux）→ symlink(file)。
+ * 都失败才返回 null，由调用方显式 skip —— 不再静默假装通过。
+ */
+function linkToOutsideDir(root: string, outside: string): string | null {
+  const attempts: Array<[string, string, "junction" | "dir" | "file"]> = [
+    ["escape-dir", outside, "junction"],
+    ["escape-dir", outside, "dir"],
+    ["escape-file", join(outside, "secret.txt"), "file"],
+  ];
+  for (const [name, target, type] of attempts) {
+    const linkPath = join(root, name);
+    try {
+      symlinkSync(target, linkPath, type);
+      return name === "escape-file" ? name : `${name}/`;
+    } catch {
+      // 试下一种
+    }
+  }
+  return null;
 }
 
 /** 断言某个操作抛出 AppError，并返回它以便检查状态码。 */
@@ -73,21 +103,25 @@ test("文件服务：绝对路径被拒（避免绕过 root 语义）", () => {
   expectAppError(() => fs_.write(join(root, "x.txt"), "x"));
 });
 
-test("文件服务：符号链接逃逸被拒（resolve 拦不住这一类）", () => {
+test("文件服务：符号链接逃逸被拒（resolve 拦不住这一类）", (t) => {
   const root = tmpRoot();
   const outside = tmpRoot();
   writeFileSync(join(outside, "secret.txt"), "top secret");
-  try {
-    symlinkSync(join(outside, "secret.txt"), join(root, "escape.txt"), "file");
-  } catch {
-    return; // 环境不支持创建符号链接（Windows 未开开发者模式）——跳过而非误报通过
+  const link = linkToOutsideDir(root, outside);
+  if (!link) {
+    t.skip("当前平台无法创建链接（既不支持 junction 也不支持 symlink）");
+    return;
   }
   const fs_ = new FileService({ root });
 
-  const err = expectAppError(() => fs_.read("escape.txt"));
+  // 读穿链接要能拿到根外的文件——先确认这个链接确实构成威胁，否则下面的拒绝是空转
+  assert.ok(realpathSync(join(root, link, "secret.txt")).startsWith(realpathSync(outside)),
+    "前提：这个链接必须真的指向根外");
+
+  const err = expectAppError(() => fs_.read(`${link}/secret.txt`));
   assert.equal(err.httpStatus, 400);
   assert.match(err.message, /符号链接/);
-  expectAppError(() => fs_.write("escape.txt", "pwned"));
+  expectAppError(() => fs_.write(`${link}/secret.txt`, "pwned"));
 });
 
 test("文件服务：读大文件按预览上限截断并标记", () => {
@@ -179,20 +213,19 @@ test("文件服务：不存在与类型不符的路径给出可操作原因", ()
  * realpath 失败（权限、异常链接、与删除竞争）恰好是这道检查失效的时刻，
  * 此时放行等于把安全校验交给运气。正确做法是 fail-closed：证明不了安全就拒绝。
  */
-test("文件服务：无法校验真实路径时拒绝而非放行（fail-closed）", () => {
+test("文件服务：无法校验真实路径时拒绝而非放行（fail-closed）", (t) => {
   const root = tmpRoot();
   const fs_ = new FileService({ root });
   const outside = tmpRoot();
   writeFileSync(join(outside, "secret.txt"), "top secret");
 
-  // 指向根外的符号链接：正常情况下第二道校验会拦住。
-  const link = join(root, "escape.txt");
-  try {
-    symlinkSync(join(outside, "secret.txt"), link, "file");
-  } catch {
-    return; // 环境不支持符号链接，跳过
+  // 指向根外的链接：正常情况下第二道校验会拦住。
+  const link = linkToOutsideDir(root, outside);
+  if (!link) {
+    t.skip("当前平台无法创建链接（既不支持 junction 也不支持 symlink）");
+    return;
   }
-  assert.equal(expectAppError(() => fs_.read("escape.txt")).httpStatus, 400);
+  assert.equal(expectAppError(() => fs_.read(`${link}/secret.txt`)).httpStatus, 400);
 
   // 关键：root 自身无法 realpath 时，服务必须拒绝一切路径，而不是全盘放行。
   const bogusRoot = join(tmpRoot(), "does-not-exist-root");
