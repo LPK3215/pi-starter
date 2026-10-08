@@ -35,7 +35,7 @@ import {
   registerProbeRoutes,
   registerResourceRoutes,
 } from "./http/routes.js";
-import { AppError, badRequest, busy as busyError } from "./http/errors.js";
+import { AppError, badRequest, busy as busyError, toAppError } from "./http/errors.js";
 import { registerFileRoutes } from "./http/file-routes.js";
 import { registerApprovalRoutes } from "./http/approval-routes.js";
 import { registerProviderKeyRoutes } from "./http/provider-key-routes.js";
@@ -319,9 +319,17 @@ export function createApp(options: CreateAppOptions): CreateAppResult {
     try {
       await session.prompt(message);
     } catch (err: unknown) {
-      const messageText = err instanceof Error ? err.message : "agent error";
+      // Status code is already committed (stream started), so the typed error handler can
+      // never see this — it has to be translated here, by the same rules.
+      //
+      // Two things were wrong before: the raw `err.message` went straight to the client
+      // (paths, SQL, SDK internals), and nothing was logged, so a failed turn was invisible
+      // server-side. `code` is added for the caller to branch on; the message only passes
+      // through for codes we intentionally write for the caller (see ALWAYS_EXPOSED).
+      const appErr = toAppError(err);
+      getLogger().child({ component: "http" }).error("SSE 对话轮次失败", appErr.toLogFields());
       try {
-        res.write(sse("error", { message: messageText }));
+        res.write(sse("error", { message: appErr.clientMessage(), code: appErr.code }));
       } catch {
         /* response already broken */
       }

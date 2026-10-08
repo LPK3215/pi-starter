@@ -25,8 +25,16 @@ import { PROTOCOL_VERSION } from "../src/protocol.ts";
 const REPO = resolve(fileURLToPath(import.meta.url), "..", "..");
 const results = [];
 function check(name, cond, detail = "") {
-  results.push({ name, ok: !!cond, detail });
+  results.push({ name, ok: !!cond, skipped: false, detail });
   console.log(`${cond ? "PASS" : "FAIL"}  ${name}${detail ? ` — ${detail}` : ""}`);
+}
+/**
+ * 显式跳过。**不要用「条件不成立就 return」冒充通过**——那看着全绿、实际没跑，
+ * 比没有测试更危险（本仓库的符号链接用例就栽在这上面）。跳过必须被打印出来并被统计。
+ */
+function skip(name, reason) {
+  results.push({ name, ok: true, skipped: true, detail: reason });
+  console.log(`SKIP  ${name} — ${reason}`);
 }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -127,20 +135,16 @@ writeFileSync(
 );
 
 /* ── 3. 拉起真实 server 进程 ── */
-// 固定端口在 CI 并行时会互相抢占，所以先向OS 要一个当前空闲的端口再传给 --port。
-const PORT = await new Promise((resolvePort, reject) => {
-  const probe = createServer();
-  probe.on("error", reject);
-  probe.listen(0, "127.0.0.1", () => {
-    const { port } = probe.address();
-    probe.close(() => resolvePort(port));
-  });
-});
+// 端口用 `--port 0` 让 OS 分配，再从启动日志里读**实际**绑定的端口。
+//
+// 旧做法是「先探一个空闲端口、关掉、再把它传给子进程」——探测与子进程真正 listen 之间
+// 存在窗口，CI 并行时会被别的进程抢走，表现为偶发 EADDRINUSE（本轮就撞到过一次）。
+// 让内核自己分配则没有这个窗口。server.ts 为此改成打印实际端口而非请求值。
 function startServer(tag) {
   const child = spawn(
     process.execPath,
     [join(REPO, "node_modules", "tsx", "dist", "cli.mjs"), join(REPO, "src", "server.ts"),
-     "--provider", "e2e", "--model", "fake-model", "--port", String(PORT)],
+     "--provider", "e2e", "--model", "fake-model", "--port", "0"],
     {
       cwd: workspace,
       env: {
@@ -163,12 +167,19 @@ function startServer(tag) {
   return { child, log };
 }
 
+/** 当前活跃进程的实际端口，由 waitReady 填好后再给 connect / fetch 用。 */
+let PORT = null;
+
 async function waitReady(tag, log) {
   const deadline = Date.now() + 90_000;
   while (Date.now() < deadline) {
     const text = log.join("");
-    // server.ts 启动完成的标志是打出 ws 地址（"已启动" 那行）
-    if (/已启动|"ws":"ws:\/\//.test(text)) return true;
+    // server.ts 启动完成的标志是打出 ws 地址（"已启动" 那行），里面是**实际**端口
+    const m = text.match(/"ws":"ws:\/\/[^:"]+:(\d+)/);
+    if (m) {
+      PORT = Number(m[1]);
+      return PORT;
+    }
     if (/Error|error:|ELIFECYCLE/.test(text)) {
       throw new Error(`[${tag}] 启动失败：\n${text}`);
     }
@@ -198,6 +209,15 @@ function describeLastSnapshot(frames) {
     `streamingMessage=${s.streamingMessage ? "有" : "无"}`,
     `消息角色=[${(s.messages ?? []).map((m) => m.role).join(",")}]`,
   ].join(" ");
+}
+
+/** 端口是否已释放（没人监听）。用来证明停机真的关掉了 listener，而不只是进程退出。 */
+async function portFree(port) {
+  return new Promise((resolve) => {
+    const probe = createServer();
+    probe.once("error", () => resolve(false));
+    probe.listen(port, "127.0.0.1", () => probe.close(() => resolve(true)));
+  });
 }
 
 let conversationId = null;
@@ -366,10 +386,65 @@ console.log("\n── 设置：改 → 落盘 → 重启后生效 ──");
   await new Promise((r) => { second.child.once("exit", () => r(true)); second.child.kill("SIGKILL"); });
 }
 
+/* ── 8. 优雅停机 ──
+ * `shutdown()` 负责按序拆掉审批闸门 → WS → 会话 → 扩展，并回收 MCP 子进程。
+ * 这条链路此前**零覆盖**：E2E 全程用 SIGKILL，直接绕过它；而没被跑过的清理代码
+ * 等于没有清理——「声明了但没接线」在这个项目里反复出现过。
+ *
+ * 两个断言方向：进程必须**自己**退出（不是被杀），且不是靠 1s 兜底强退的
+ * （走了兜底说明 socket 没关干净，只是被超时掩盖了）。 */
+console.log("\n── 优雅停机：真进程 + 真信号 ──");
+{
+  const started = startServer("shutdown");
+  await waitReady("shutdown", started.log);
+
+  // 制造两类活跃连接：HTTP keep-alive（fetch 会复用）与 WS。关闭时都要被收拾掉。
+  const info = await fetch(`http://127.0.0.1:${PORT}/info`);
+  await info.json();
+  const { frames, socket } = connect();
+  await once(socket, "open");
+  socket.send(JSON.stringify({ type: "hello", protocolVersion: PROTOCOL_VERSION }));
+  await waitFrame(frames, "ready", "shutdown");
+
+  const exited = new Promise((r) => started.child.once("exit", (code) => r(code)));
+  started.child.kill("SIGTERM");
+  const code = await Promise.race([exited, sleep(20_000).then(() => "timeout")]);
+
+  const text = started.log.join("");
+  const sawHandler = text.includes("开始优雅停机");
+
+  // Windows 上 Node **不投递**可供子进程捕获的 SIGTERM：`child.kill("SIGTERM")` 走的是
+  // TerminateProcess（实测退出码为 null、handler 从不运行）。所以真信号路径只在 POSIX
+  // 上能测，这里**显式报告跳过**——让它假通过比没有这条测试更糟（之前那条
+  // 「不是兜底强退」的断言就在 handler 未运行时也通过了，是纯粹的假阳性）。
+  // 编排逻辑本身（顺序 / 失败隔离 / 幂等 / 兜底）已由 `src/graceful.test.ts` 全平台覆盖。
+  if (!sawHandler) {
+    skip("停机: SIGTERM 优雅停机全链路",
+      `${process.platform} 不投递可捕获的 SIGTERM —— 逻辑已由 graceful.test.ts 覆盖`);
+  } else {
+    check("停机: SIGTERM 触发了 shutdown（不只是被内核杀死）", sawHandler, "日志有「开始优雅停机」");
+    check("停机: 进程自行退出且退出码为 0", code === 0, `退出码=${code}`);
+    // 这条只有在 handler 真的跑过时才有意义——否则「没有超时日志」只是因为压根没停机。
+    check("停机: 走的是正常关闭而非 1s 兜底强退", text.includes("已停机") && !text.includes("优雅停机超时"),
+      text.includes("优雅停机超时") ? "走了兜底 —— socket 没关干净，被超时掩盖了" : "日志有「已停机」");
+    check("停机: 有活跃 HTTP/WS 连接时也能干净退出（keep-alive 不卡住 close）", code === 0,
+      "停机前已建立 fetch keep-alive + WS 连接");
+  }
+  check("停机: 进程结束后端口已释放", await portFree(PORT), `port=${PORT}`);
+}
+
 const failed = results.filter((r) => !r.ok);
-console.log(`\n${results.length - failed.length}/${results.length} 项通过`);
+const skippedCount = results.filter((r) => r.skipped).length;
+const passed = results.length - failed.length - skippedCount;
+console.log(
+  `\n${passed} 通过 / ${skippedCount} 跳过 / ${failed.length} 失败（共 ${results.length}）`,
+);
 if (failed.length) {
   console.log("失败项：");
   for (const f of failed) console.log(`  - ${f.name}${f.detail ? ` — ${f.detail}` : ""}`);
+}
+if (skippedCount) {
+  console.log("跳过项（必须显式列出，避免假绿）：");
+  for (const s of results.filter((r) => r.skipped)) console.log(`  - ${s.name} — ${s.detail}`);
 }
 process.exit(failed.length ? 1 : 0);

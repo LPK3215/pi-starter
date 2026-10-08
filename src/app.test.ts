@@ -9,6 +9,7 @@ import type { BuiltAgent } from "./agent.js";
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import type { Model } from "@earendil-works/pi-ai";
 import { openDatabase } from "./db/index.js";
+import { AppError } from "./http/errors.js";
 import { loadKnowledgeFromDirs } from "./knowledge/index.js";
 import { loadSkillsFromDirs } from "./skills/index.js";
 
@@ -321,5 +322,68 @@ test("POST /chat 缺 message 400，忙时 429", async () => {
   } finally {
     await close();
     dispose();
+  }
+});
+
+/**
+ * 流式错误路径此前**零覆盖**，而且它绕过了统一错误处理：状态码已提交，`errorHandler`
+ * 再也看不到这个异常，于是 `err.message` 原样写进 SSE —— 数据库绝对路径、SQL、SDK
+ * 内部信息全都会到客户端。同时它**不记日志**，失败在服务端完全不可见。
+ *
+ * 这里两个方向都要验：不该露的必须藏住，该露的必须放行（模型靠它自我纠正）。
+ */
+test("POST /chat 流式失败：internal 细节不泄漏，但面向调用方的码照常放行", async () => {
+  const SECRET = String.raw`C:\Users\real\private\db.sqlite 密码 hunter2`;
+  const leaky = createApp({
+    agent: fakeAgent({
+      prompt: async () => {
+        throw new Error(`SQLITE_ERROR: unable to open ${SECRET}`);
+      },
+    }),
+    staticDir: false,
+  });
+  const a = await listen(leaky.app);
+  try {
+    const res = await fetch(`${a.url}/chat`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ message: "hi" }),
+    });
+    const text = await res.text();
+    assert.ok(!text.includes("hunter2"), `path/secret must not leak: ${text}`);
+    assert.ok(!text.includes("SQLITE_ERROR"), "driver internals must not leak");
+    assert.ok(!text.includes("db.sqlite"), "absolute path must not leak");
+    assert.match(text, /"code":"internal"/, "the caller still needs a machine-readable category");
+    assert.match(text, /服务器内部错误/, "and a generic, non-revealing message");
+    // The stream contract must survive a failed turn: `done` still closes it.
+    assert.match(text, /"type":"done"/, "the stream must still terminate cleanly");
+  } finally {
+    await a.close();
+    leaky.dispose();
+  }
+
+  // A code we write *for* the caller must pass through verbatim — suppressing it would
+  // leave a model retrying a query it could have corrected.
+  const explicit = createApp({
+    agent: fakeAgent({
+      prompt: async () => {
+        throw new AppError("read_only_sql", "检测到非只读关键字：DELETE", { expose: true });
+      },
+    }),
+    staticDir: false,
+  });
+  const b = await listen(explicit.app);
+  try {
+    const res = await fetch(`${b.url}/chat`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ message: "hi" }),
+    });
+    const text = await res.text();
+    assert.match(text, /"code":"read_only_sql"/);
+    assert.match(text, /检测到非只读关键字/, "an intentionally exposed reason must reach the caller");
+  } finally {
+    await b.close();
+    explicit.dispose();
   }
 });

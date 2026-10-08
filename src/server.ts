@@ -34,6 +34,7 @@ import { ApprovalGate, approvalExtension } from "./approval/gate.js";
 import { attachWebSocket, type WsServer } from "./transport/ws.js";
 import { applyServerTimeouts } from "./http/hardening.js";
 import { getLogger } from "./log.js";
+import { createGracefulShutdown } from "./graceful.js";
 import type { UiApproval } from "./protocol.js";
 import { McpBridge } from "./mcp/bridge.js";
 import { PlanModeController, planModeExtension } from "./modes/plan-mode.js";
@@ -336,9 +337,15 @@ approvalSink.handler = (key, request) => {
 };
 
 server.listen(PORT, runtime.host, () => {
+  // Log the **actual** bound port, not the requested one. They differ whenever `--port 0`
+  // is used (let the OS pick), and the requested value is then literally 0 — a log line
+  // that tells you "ws://127.0.0.1:0/ws" is worse than useless, and callers that pass 0
+  // (the E2E harness, container schedulers) have no other way to learn the real port.
+  const addr = server.address();
+  const boundPort = typeof addr === "object" && addr ? addr.port : PORT;
   logger.info("pi-starter web 已启动", {
-    http: `http://${runtime.host}:${PORT}`,
-    ws: `ws://${runtime.host}:${PORT}${runtime.wsPath}`,
+    http: `http://${runtime.host}:${boundPort}`,
+    ws: `ws://${runtime.host}:${boundPort}${runtime.wsPath}`,
     model: `${agent.model.provider}/${agent.model.id}`,
   });
   // Connect configured MCP servers after listen, so a slow or broken third-party server
@@ -349,29 +356,26 @@ server.listen(PORT, runtime.host, () => {
   });
 });
 
-let shuttingDown = false;
-async function shutdown(): Promise<void> {
-  if (shuttingDown) return;
-  shuttingDown = true;
-  logger.info("开始优雅停机");
-  // Ordered teardown: stop accepting new approvals first (gate.dispose denies in-flight
-  // requests so no tool call is left hanging), then close sockets, then drop sessions.
-  gate.dispose();
-  await ws.close();
-  hub.dispose();
-  dispose();
-  // Hard exit fallback: if a socket refuses to close, do not hang the process forever.
-  const bail = setTimeout(() => {
-    logger.warn("优雅停机超时，强制退出");
-    process.exit(0);
-  }, 1000);
-  bail.unref();
-  server.close(() => {
-    clearTimeout(bail);
-    logger.info("已停机");
-    process.exit(0);
-  });
-}
+// Ordered teardown: stop accepting new approvals first (gate.dispose denies in-flight
+// requests so no tool call is left hanging), then close sockets, then drop sessions.
+// The ordering and the bail-timer placement live in `graceful.ts` (unit-tested there);
+// a step that throws must not prevent the remaining cleanup or the exit.
+const shutdown = createGracefulShutdown({
+  steps: [
+    { name: "approval-gate", run: () => gate.dispose() },
+    { name: "websocket", run: () => ws.close() },
+    { name: "session-hub", run: () => hub.dispose() },
+    { name: "app", run: () => dispose() },
+  ],
+  closeServer: () =>
+    new Promise<void>((resolve) => {
+      server.close(() => resolve());
+      // Keep-alive connections from pooled HTTP clients would otherwise hold the listener
+      // open. Idle ones are safe to drop now; the request in flight (if any) still finishes.
+      server.closeIdleConnections?.();
+    }),
+  logger,
+});
 
 process.on("SIGINT", () => void shutdown());
 process.on("SIGTERM", () => void shutdown());

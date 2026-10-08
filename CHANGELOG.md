@@ -23,6 +23,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **优雅停机的兜底定时器位置是错的（会导致进程永久挂死）**：`shutdown()` 把 `gate.dispose()` / `ws.close()` / `hub.dispose()` / `dispose()` 全部排在 `setTimeout(bail)` **之前**。任何一步抛错，`shutdown()` 就 reject，而信号处理器是 `void shutdown()` —— 变成未捕获拒绝，兜底定时器压根没建、`server.close()` 永不调用，**进程挂死只能等 SIGKILL**。也就是说这个「硬退出兜底」恰好保护不了最可能发生的失败。拆解逻辑抽到 `src/graceful.ts`：兜底**先建**、每步单独 try/catch（一步失败不影响其余）、关闭与兜底**竞速**（原来直接 `await closeServer()`，socket 拒绝关闭时本函数永不 resolve——这条坑实际踩到过，测试挂死并堆出孤儿进程）。新增 6 项单测，且做反向验证。
+- **停机时打印的是请求端口而非实际绑定端口**：`--port 0`（让 OS 分配，E2E 与容器调度常用）会记出 `ws://127.0.0.1:0/ws`——调用方无法得知真实端口。改为读 `server.address().port`。这也顺带消除了 E2E 的端口竞态：旧做法是「探一个空闲端口→关掉→传给子进程」，探测与真正 listen 之间有窗口，CI 并行时表现为偶发 `EADDRINUSE`（本轮实际撞到）。
+- **`POST /chat` 流式失败泄漏内部细节且不记日志**：状态码已提交，`errorHandler` 再也看不到这个异常，于是 `err.message` 原样写进 SSE——数据库绝对路径、SQL、SDK 内部信息全都会到客户端。实测反向验证时确实返回了 `unable to open C:\Users\real\private\db.sqlite 密码 hunter2`。改为复用 `toAppError`：`internal` 只回通用文案 + `code`，面向调用方的码（如 `read_only_sql`）照常放行以便模型自我纠正；同时**补上服务端 error 级日志**，此前失败在服务端完全不可见。此前该路径零测试覆盖。
+- **E2E 里「不是兜底强退」的断言是假阳性**：它在停机 handler 根本没运行时也通过（因为没有超时日志只是因为压根没停机）。现在加了前提，且 Windows 上因 Node 不投递可捕获的 SIGTERM 而**显式报告 SKIP 与原因**，不再冒充通过。
 - **三个依赖漏洞清零**（`npm audit` 从high 降为 0）：`brace-expansion` 5.0.7 → 5.0.12、`undici` 8.5.0 → 8.11.2、`proxy-addr` 2.0.7 → 2.0.8。前两者位于 `@earendil-works/pi-coding-agent` 的**嵌套依赖**里，顶层 override 不生效——必须删除 lockfile 让 npm 从零解析才会应用（`npm install` 与 `--package-lock-only` 都会因「lockfile 已满足」而跳过重算）。
 - **`package.json` 自依赖**（`"pi-starter": "file:pi-starter-0.1.0.tgz"`）会让 CI 的 `npm ci` 直接失败（该 tarball尚未构建）。已移除。
 - **符号链接逃逸测试在 Windows 上从未真正运行**：两个用例在 `symlinkSync` 抛 `EPERM`（未开开发者模式）时直接 `return`，看着通过、实际没跑——比显式 skip 更糟。改用 **junction**（NTFS reparse point，普通用户即可创建，且 `realpath` 同样穿过它），两个用例现在在 Windows 上真跑，并加了「这个链接确实指向根外」的前提断言。
