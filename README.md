@@ -143,10 +143,10 @@ The SDK still reads these two files at runtime; `PI_API_KEY` in `.env` is only c
 The default model in `.env` can be written two ways:
 
 ```bash
-PI_MODEL=modelscope/Qwen/Qwen3-Next-80B-A3B-Instruct
+PI_MODEL=modelscope/deepseek-ai/DeepSeek-V4-Flash-0731
 # or split (when the model id itself contains a slash, it is kept as-is and not parsed as a provider)
 PI_PROVIDER=modelscope
-PI_MODEL=Qwen/Qwen3-Next-80B-A3B-Instruct
+PI_MODEL=deepseek-ai/DeepSeek-V4-Flash-0731
 ```
 
 If missing, startup throws — it does **not** fall back to the SDK's built-in huggingface.
@@ -154,7 +154,7 @@ If missing, startup throws — it does **not** fall back to the SDK's built-in h
 For multiple models, write `PI_MODELS`: one provider per entry, models comma-separated, display names colon-separated:
 
 ```bash
-PI_MODELS=modelscope|https://api-inference.modelscope.cn/v1|openai-completions|Qwen/Qwen3-Next-80B-A3B-Instruct:Qwen3-Next-80B,Qwen/Qwen2.5-72B-Instruct;zhipu|https://open.bigmodel.cn/api/paas/v4|openai-completions|glm-4.5-air:GLM-4.5-Air
+PI_MODELS=modelscope|https://api-inference.modelscope.cn/v1|openai-completions|deepseek-ai/DeepSeek-V4-Flash-0731:DeepSeek-V4-Flash,Qwen/Qwen2.5-72B-Instruct;zhipu|https://open.bigmodel.cn/api/paas/v4|openai-completions|glm-4.5-air:GLM-4.5-Air
 ```
 
 Without `PI_MODELS`, setup uses only the single default entry, with the base URL from `PI_BASE_URL`.
@@ -172,7 +172,7 @@ Hand-writing `~/.pi/agent/` also works, format:
       "baseUrl": "https://api-inference.modelscope.cn/v1",
       "api": "openai-completions",
       "models": [
-        { "id": "Qwen/Qwen3-Next-80B-A3B-Instruct", "name": "Qwen3-Next-80B" }
+        { "id": "deepseek-ai/DeepSeek-V4-Flash-0731", "name": "DeepSeek-V4-Flash" }
       ]
     }
   }

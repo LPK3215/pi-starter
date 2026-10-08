@@ -69,7 +69,11 @@ test("mergeModelsJson 一次写入多个 provider，同 provider 追加不覆盖
       models: [{ id: "glm-4.5-air" }],
     },
   });
-  assert.equal(merged.providers?.modelscope?.models?.[0]?.name, "Qwen3-Next-80B-A3B-Instruct");
+  // 无 name 的条目由 modelDisplayName 取名（斜杠后最后一段）；从常量推导，不写死默认模型名。
+  assert.equal(
+    merged.providers?.modelscope?.models?.[0]?.name,
+    DEFAULT_MODEL_ID.slice(DEFAULT_MODEL_ID.lastIndexOf("/") + 1),
+  );
   assert.equal(merged.providers?.modelscope?.models?.[1]?.name, "Qwen2.5-72B");
   assert.equal(merged.providers?.zhipu?.models?.[0]?.id, "glm-4.5-air");
 });

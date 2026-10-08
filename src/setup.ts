@@ -24,8 +24,8 @@ import { loadEnvFile, resolveCatalog, resolveDefaultModel, SETUP_HINT } from "./
 import { modelDisplayName, type ModelCatalog, type ModelCatalogEntry } from "./models.js";
 
 export const DEFAULT_PROVIDER = "modelscope";
-export const DEFAULT_MODEL_ID = "Qwen/Qwen3-Next-80B-A3B-Instruct";
-export const DEFAULT_MODEL_NAME = "Qwen3-Next-80B";
+export const DEFAULT_MODEL_ID = "deepseek-ai/DeepSeek-V4-Flash-0731";
+export const DEFAULT_MODEL_NAME = "DeepSeek-V4-Flash";
 export const DEFAULT_BASE_URL = "https://api-inference.modelscope.cn/v1";
 export const DEFAULT_API = "openai-completions";
 

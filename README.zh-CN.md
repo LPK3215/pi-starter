@@ -137,10 +137,10 @@ npm run setup -- --force
 `.env` 里要有默认模型，两种写法：
 
 ```bash
-PI_MODEL=modelscope/Qwen/Qwen3-Next-80B-A3B-Instruct
+PI_MODEL=modelscope/deepseek-ai/DeepSeek-V4-Flash-0731
 # 或分开写（模型 id 自带斜杠时，斜杠原样保留，不会被当成 provider）
 PI_PROVIDER=modelscope
-PI_MODEL=Qwen/Qwen3-Next-80B-A3B-Instruct
+PI_MODEL=deepseek-ai/DeepSeek-V4-Flash-0731
 ```
 
 缺了会直接抛，**不会**落到 SDK 内置 huggingface。
@@ -148,7 +148,7 @@ PI_MODEL=Qwen/Qwen3-Next-80B-A3B-Instruct
 多个模型写 `PI_MODELS`，一条一个 provider，模型用逗号，显示名用冒号：
 
 ```bash
-PI_MODELS=modelscope|https://api-inference.modelscope.cn/v1|openai-completions|Qwen/Qwen3-Next-80B-A3B-Instruct:Qwen3-Next-80B,Qwen/Qwen2.5-72B-Instruct;zhipu|https://open.bigmodel.cn/api/paas/v4|openai-completions|glm-4.5-air:GLM-4.5-Air
+PI_MODELS=modelscope|https://api-inference.modelscope.cn/v1|openai-completions|deepseek-ai/DeepSeek-V4-Flash-0731:DeepSeek-V4-Flash,Qwen/Qwen2.5-72B-Instruct;zhipu|https://open.bigmodel.cn/api/paas/v4|openai-completions|glm-4.5-air:GLM-4.5-Air
 ```
 
 不写 `PI_MODELS` 时，setup 只用上面那一条，地址走 `PI_BASE_URL`。
@@ -166,7 +166,7 @@ PI_MODELS=modelscope|https://api-inference.modelscope.cn/v1|openai-completions|Q
       "baseUrl": "https://api-inference.modelscope.cn/v1",
       "api": "openai-completions",
       "models": [
-        { "id": "Qwen/Qwen3-Next-80B-A3B-Instruct", "name": "Qwen3-Next-80B" }
+        { "id": "deepseek-ai/DeepSeek-V4-Flash-0731", "name": "DeepSeek-V4-Flash" }
       ]
     }
   }

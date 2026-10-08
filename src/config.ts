@@ -175,7 +175,7 @@ export function requireConfiguredModel<T extends { provider?: string; modelId?: 
     throw new Error(
       `未指定模型。${SETUP_HINT}\n` +
         "  .env：PI_MODEL=<provider>/<modelId>（或 PI_PROVIDER + PI_MODEL）\n" +
-        "  命令行：npm run dev -- --model modelscope/Qwen/Qwen3-Next-80B-A3B-Instruct",
+        "  命令行：npm run dev -- --model <provider>/<modelId>",
     );
   }
 }

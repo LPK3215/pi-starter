@@ -10,14 +10,14 @@ Because there is deliberately **no third tier of fallback** beyond CLI > `.env`.
 
 ### Can I put provider + model in one variable?
 
-Yes. `PI_MODEL=modelscope/Qwen/Qwen3-Next-80B-A3B-Instruct` (recommended, one variable says it all) or split as `PI_PROVIDER` + `PI_MODEL`. Slashes inside the model id (e.g. `Qwen/Qwen3-…`) are preserved and are **not** reparsed as a provider.
+Yes. `PI_MODEL=modelscope/deepseek-ai/DeepSeek-V4-Flash-0731` (recommended, one variable says it all) or split as `PI_PROVIDER` + `PI_MODEL`. Slashes inside the model id (e.g. `deepseek-ai/…`, `Qwen/…`) are preserved and are **not** reparsed as a provider.
 
 ### How do I add a second provider (e.g. zhipu alongside modelscope)?
 
 Use `PI_MODELS`. Format: one entry per provider, fields separated by `|`, models comma-separated, optional `:displayName` per model, entries separated by `;`. Then add the key as `PI_API_KEY_<PROVIDER>` (uppercase):
 
 ```bash
-PI_MODELS=modelscope|https://api-inference.modelscope.cn/v1|openai-completions|Qwen/Qwen3-Next-80B-A3B-Instruct:Qwen3-Next-80B;zhipu|https://open.bigmodel.cn/api/paas/v4|openai-completions|glm-4.5-air:GLM-4.5-Air
+PI_MODELS=modelscope|https://api-inference.modelscope.cn/v1|openai-completions|deepseek-ai/DeepSeek-V4-Flash-0731:DeepSeek-V4-Flash;zhipu|https://open.bigmodel.cn/api/paas/v4|openai-completions|glm-4.5-air:GLM-4.5-Air
 PI_API_KEY=ms-...
 PI_API_KEY_ZHIPU=...
 ```
