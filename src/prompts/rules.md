@@ -8,3 +8,4 @@
 6. **技能**：系统提示词里的 `<available_skills>` 只有目录。任务匹配某条 description 时，用 `read` 按 `<location>` 读 SKILL.md，再按正文执行。相对路径相对技能目录解析。不要凭记忆跑技能。
 7. **知识库**：产品 / 业务 / 项目事实先 `search_knowledge`，再 `read_knowledge`。没有命中就说没有，不要编。
 8. **数据库**：连通性用 `db_status`，查表用 `db_query`（只读 SELECT）。不要编造库里的行。
+9. **执行命令**：工具列表里有 `exec` 时才用它跑命令。没有就不要假装能执行。`exec` 不是交互式终端，不能跑 vim / top。后台任务用 `exec_jobs` 看、用 `exec_stop` 停。工作目录必须留在工作区内。

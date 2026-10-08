@@ -70,6 +70,18 @@ export function findDangerousBash(command: string): BashDangerMatch | undefined 
 }
 
 /**
+ * bash 与 exec 共用同一套硬拦截。其它工具名直接放行，避免 exec_jobs 的查询被当成命令。
+ */
+export function dangerousShellCommand(
+  toolName: string,
+  input: { command?: unknown },
+): BashDangerMatch | undefined {
+  if (toolName !== "bash" && toolName !== "exec") return undefined;
+  if (typeof input.command !== "string") return undefined;
+  return findDangerousBash(input.command);
+}
+
+/**
  * 判断目标路径是否落在 cwd 内（含 cwd 自身）。
  * 用 path.resolve + relative，Windows 跨盘符会得到绝对路径，isAbsolute 能拦住。
  * 不处理 symlink 逃逸——要沙箱请用容器，不要只靠这一层。
@@ -100,10 +112,19 @@ function pathFromEvent(event: ToolCallEvent): string | undefined {
 
 export function guardExtension(pi: ExtensionAPI) {
   pi.on("tool_call", (event, ctx) => {
-    if (isToolCallEventType("bash", event)) {
-      const hit = findDangerousBash(event.input.command);
-      if (hit) {
-        return block(`bash：${hit.description}`, { ruleId: hit.id });
+    const shellHit = dangerousShellCommand(event.toolName, event.input as { command?: unknown });
+    if (shellHit) {
+      return block(`${event.toolName}：${shellHit.description}`, { ruleId: shellHit.id });
+    }
+    if (isToolCallEventType("bash", event)) return undefined;
+    if (event.toolName === "exec") {
+      const cwd = (event.input as { cwd?: unknown }).cwd;
+      if (typeof cwd === "string" && cwd.trim() && !isPathInsideCwd(cwd, ctx.cwd)) {
+        return block(`exec：工作目录越出工作区（${cwd}）`, {
+          toolName: event.toolName,
+          targetPath: cwd,
+          cwd: ctx.cwd,
+        });
       }
       return undefined;
     }

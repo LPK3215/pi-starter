@@ -92,6 +92,28 @@ export { sse, toolResultPreview, translateEvent } from "./sse.js";
 export { allTools } from "./tools/index.js";
 export { createReadKnowledgeTool, createSearchKnowledgeTool } from "./tools/knowledge.js";
 export { createDbQueryTool, createDbStatusTool } from "./tools/database.js";
+export {
+  EXEC_TOOL_NAMES,
+  createExecTools,
+  execRegistrySpecs,
+  execToolsForMode,
+} from "./tools/exec.js";
+export {
+  DEFAULT_BACKGROUND_TIMEOUT_MS,
+  DEFAULT_TIMEOUT_MS,
+  ExecEnvironment,
+  ExecError,
+  MAX_COMMAND_CHARS,
+  MAX_FINISHED,
+  MAX_JOBS,
+  MAX_OUTPUT_BYTES,
+  MAX_TIMEOUT_MS,
+  killProcessTree,
+  type ExecEnvironmentOptions,
+  type ExecJobStatus,
+  type ExecJobView,
+  type ExecRequest,
+} from "./exec/runner.js";
 
 /* ─────────────── 后端功能体系（协议 / 会话 / 能力 / 上下文 / 传输） ─────────────── */
 
@@ -127,6 +149,18 @@ export {
   type ClientSessionOptions,
   type ConversationOptions,
 } from "./session-hub.js";
+export {
+  MAX_TITLE_CHARS,
+  TREE_MARKER_TYPE,
+  editUserMessage,
+  forkSessionFile,
+  forkedConversationTitle,
+  normalizeConversationTitle,
+  rollbackSession,
+  type EditResult,
+  type ForkResult,
+  type TreeMarker,
+} from "./sessions/edit.js";
 
 export {
   BUILTIN_TOOL_NAMES,

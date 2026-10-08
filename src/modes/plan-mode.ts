@@ -27,6 +27,8 @@ const WRITE_LIKE_TOOLS: ReadonlySet<string> = new Set([
   "write",
   "edit",
   "bash",
+  "exec",
+  "exec_stop",
   "multi_edit",
   "apply_patch",
   "delete_file",

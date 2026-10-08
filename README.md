@@ -84,9 +84,11 @@ The scaffold is a **vertical-agent starting point**, not another coding-assistan
 | `guard` intercepting dangerous bash and paths outside cwd (`read SKILL.md` excepted) | Full sandboxing / container isolation |
 | `audit` printing tool durations | Login, multi-user sessions, public-internet exposure |
 | Snapshot-driven WebSocket (restart/reconnect self-healing, backpressure drops, slow-client disconnect) | Cross-client conversation takeover |
+| Rename, roll back, edit a user message, and fork a path (SDK session tree; survives restart) | Goal-review loop. The SDK does not provide that workflow |
 | Multi-conversation concurrency (cap 8 + LRU); sessions / settings / rules persisted | Goal-review loop, delegation, SCM, background-task tracking |
 | Tool watchdog (a hung tool can't block forever), approval rule engine (six matchers + editing API) | Plugin marketplace |
-| Plan mode (plan-only per conversation), subagents, MCP bridge (stdio + hot reload) | Full PTY terminals, attachments and vision bridge |
+| Plan mode (plan-only per conversation), subagents, MCP bridge (stdio + hot reload) | Interactive PTY (vim / top), attachments and vision bridge |
+| Process execution in `coding` only: `exec` / `exec_jobs` / `exec_stop` (timeout, process tree, workspace realpath) | Shell on by default. `off` and `readonly` do not get `exec` |
 | Multiple API keys (raw values never leave the server), typed errors, rate limits, metrics, redacted logs | OAuth, multi-user, payments |
 
 > **No built-in authentication — this is deliberate.** The scaffold binds `127.0.0.1` and warns loudly if `PI_HOST` is set to anything else, but nothing authenticates callers. Exposing it beyond loopback means exposing the agent *and its tools* to the network: put it behind your own auth proxy. Long-lived deployments should also note that settings are currently in-memory only, so `promptTemplate` / `disabledTools` reset on restart.
@@ -97,7 +99,7 @@ Enable built-in tools (priority: CLI flags > `.env` > default `off`):
 # .env
 PI_BUILTIN_TOOLS=off        # default: custom tools + read (for skills)
 # PI_BUILTIN_TOOLS=readonly # plus grep / find / ls
-# PI_BUILTIN_TOOLS=coding   # plus bash / edit / write
+# PI_BUILTIN_TOOLS=coding   # plus bash / edit / write and exec / exec_jobs / exec_stop
 
 # or a temporary override
 npm run dev -- --builtin-tools coding
@@ -105,7 +107,7 @@ npm run dev -- --builtin-tools coding
 
 `readonly` / `coding` go through the SDK allowlist, and custom tool names are merged into it automatically. Tools must appear in `src/tools/index.ts` or `buildAgent({ extraTools })`; names registered only inside extensions are not allowlisted automatically.
 
-With `coding` on, `guard` actually intercepts bash / write: dangerous commands (e.g. `rm -rf`) and paths outside the working directory are blocked with `{ block: true }`. Edit rules in `src/extensions/guard.ts`.
+With `coding` on, `guard` actually intercepts bash / exec / write: dangerous commands (e.g. `rm -rf`) and paths outside the working directory are blocked with `{ block: true }`. `exec` is process execution (capture output, background jobs), not an interactive terminal. Edit rules in `src/extensions/guard.ts`.
 
 ## Quick Start
 
@@ -525,7 +527,7 @@ Why local extensions and skills are not loaded: pi extensions/skills on your mac
 
 - **Login**: local desktop / CLI usage can live without it. When attaching to an existing backend, mount auth on the **parent** app (see `server.use("/agent", auth, agentApp)` above) — adding middleware after `createApp()`, or in `configure`, does not cover the kernel routes.
 - **Multi-user**: one `buildAgent()` + independent session per user; do not reuse the current single `busy` flag.
-- **Enable coding tools**: `PI_BUILTIN_TOOLS=coding` or `--builtin-tools coding`. Even then, `guard` still blocks dangerous bash and paths escaping cwd.
+- **Enable coding tools**: `PI_BUILTIN_TOOLS=coding` or `--builtin-tools coding`. That also turns on `exec` / `exec_jobs` / `exec_stop`. Even then, `guard` still blocks dangerous bash / exec and paths escaping cwd. It is not an interactive PTY.
 - **Model switching**: at startup `--model provider/modelId`; in CLI `/model`; over HTTP `POST /model`. Only models with configured keys are accepted, via `session.setModel`, no session rebuild.
 - **Skills / knowledge / database**: skills into `src/skills/`; knowledge into `src/knowledge/`; the DB is in-memory by default, or set `PI_DATABASE_PATH` / pass `buildAgent({ database })`. For vector stores or remote SQL, write a tool and pass it through `extraTools`.
 - **Turning off the built-in example content**: `buildAgent({ builtinKnowledge: false, builtinSkills: false })`. The bundled `about.md` (a document describing the scaffold itself) and the `summarize` skill land in the system prompt, and `extraKnowledgeDirs` / `extraSkillPaths` are **additive, not replacing** — so this is the only way to exclude them. Worth doing when embedding into someone else's service.

@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **会话编辑**：`rename_conversation` / `rollback_conversation` / `edit_message` / `fork_conversation`。调用 SDK 的会话树，不另写存储。回退和编辑会追加一条不进模型上下文的 `pi-starter.tree` 标记，重启后叶子不会回到被丢掉的后半段。编辑把原文经 `edit_ready` 交回，不自动再发一轮。分叉用一次性打开的 `SessionManager`，不改正在对话的那个会话的 id。没打开的对话可以改名，不能回退或编辑。客户端只传会话 id 和记录 id。
+- **进程执行**（仅 `PI_BUILTIN_TOOLS=coding`）：`exec` / `exec_jobs` / `exec_stop`。前台等到退出或超时，后台立刻返回 id，可列出、读已捕获输出、停止。超时和中止杀掉进程树。工作目录先做字面路径检查，再 `realpath`，解析失败即拒绝。Windows 用 cmd.exe，其它平台用 `/bin/sh`，不依赖 Git Bash。不是交互式 PTY（没有 vim / top，没有终端尺寸）。`off` / `readonly` 不挂这些工具；审批里原先只匹配 `bash` 的内置高危规则同时匹配 `exec`；计划模式拒绝 `exec` / `exec_stop`，放行只读的 `exec_jobs`。
 - **真端到端测试**（`npm run e2e`，已并入 CI）：起**真实 server 进程** → 跑一次真实对话 → `SIGKILL` → 重启 → 验证会话从磁盘恢复 → 恢复后还能继续对话；**恢复后带工具调用**（假 LLM 发 `ls` 工具调用 → 真执行 → 重启恢复 → 断言出站请求里每个 `tool_call` 都有对应 tool 结果、且无孤立结果——这正是真实 provider 会校验的配对，断了会报「消息格式非法」而极难反推）；索引指向已删文件时不出现幽灵条目、陈旧 id 明确报错。不需要真实 API Key：把 `PI_CODING_AGENT_DIR` 指向临时目录并写一份指向本地假 OpenAI 兼容端点的 `models.json`，启动期不联网探测。此前 `resume.test.ts` 只在同进程里重读一遍索引，**从未真重启过**——而落盘时机、会话目录推导、索引与 jsonl 的对应关系，同进程测试全都测不到。
 - **上下文主动压缩**：WS `compact_context { instructions? }` + `POST /context/compact`（REST 侧汇总所有连接，串行执行并报出每个结果）。此前只有 SDK 自动触发时的被动 notice，客户端看得见压缩发生了却无法主动发起，而「该保留什么」只有用户知道。三条前置条件都给出**明确中文理由**而非静默无效：正在流式 / 上下文太小（低于 `MIN_COMPACTABLE_TOKENS`，压了也省不下什么）/ SDK 不支持。压缩后**作废投影与 token 缓存**——若SDK 原地改写消息对象，WeakMap 键不变会命中压缩前的值，快照会继续显示被压掉的旧内容。
 - **后端体系加固（两轮）**：工具看门狗、慢客户端断连、类型化错误 `AppError`、速率限制、结构化脱敏日志、指标端点、审批规则引擎（六种匹配器 + 编辑接口）、未使用符号门禁、CI 六道关卡。

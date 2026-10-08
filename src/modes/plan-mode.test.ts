@@ -56,6 +56,9 @@ test("计划模式：写类工具被拒、只读工具放行，原因可操作",
   assert.ok(planModeDenyReason("write"), "write must be blocked");
   assert.ok(planModeDenyReason("edit"), "edit must be blocked");
   assert.ok(planModeDenyReason("bash"), "bash must be blocked");
+  assert.ok(planModeDenyReason("exec"), "exec must be blocked");
+  assert.ok(planModeDenyReason("exec_stop"), "exec_stop must be blocked");
+  assert.equal(planModeDenyReason("exec_jobs"), undefined);
 
   const denied = planModeDenyReason("mcp__srv__deploy", ["mcp", "net", "fs.write"])!;
   assert.match(denied, /只读工具/, "the reason must tell the model what to do instead");

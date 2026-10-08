@@ -80,9 +80,11 @@
 | `guard` 拦截危险 bash、路径越出 cwd（`read SKILL.md` 例外） | 完整沙箱 / 容器隔离 |
 | `audit` 打印工具耗时 | 登录、多用户会话、公网暴露 |
 | 快照驱动的 WebSocket（重启 / 重连自愈、背压丢快照、超慢客户端断开） | 跨客户端对话过户 |
+| 会话可改名、回退、编辑用户消息、按路径分叉（调用 SDK 会话树，重启后仍在） | 目标审查循环。SDK 没有这个工作流 |
 | 多对话并发（上限 8 + LRU）、会话 / 设置 / 规则落盘 | 目标审查循环、审查委派、SCM、后台任务跟踪 |
 | 工具看门狗（挂死工具不永久阻塞）、审批规则引擎（六种匹配器 + 编辑接口） | 插件市场 |
-| 计划模式（会话级只规划不实施）、子代理、MCP 桥（stdio + 热生效） | 完整 PTY 终端、附件与视觉桥 |
+| 计划模式（会话级只规划不实施）、子代理、MCP 桥（stdio + 热生效） | 交互式 PTY（vim / top）、附件与视觉桥 |
+| `coding` 档的进程执行：`exec` / `exec_jobs` / `exec_stop`（超时、进程树、工作区 realpath） | 默认就开 shell。`off` / `readonly` 没有 `exec` |
 | 多把 API 密钥（原始值永不出服务端）、类型化错误、限流、指标、脱敏日志 | OAuth、多用户、支付 |
 
 打开内置工具（优先级：命令行 > `.env` > 默认 `off`）：
@@ -91,7 +93,7 @@
 # .env
 PI_BUILTIN_TOOLS=off        # 默认：自定义工具 + read（技能加载）
 # PI_BUILTIN_TOOLS=readonly # 再加上 grep / find / ls
-# PI_BUILTIN_TOOLS=coding   # 再加上 bash / edit / write
+# PI_BUILTIN_TOOLS=coding   # 再加上 bash / edit / write，以及 exec / exec_jobs / exec_stop
 
 # 或临时覆盖
 npm run dev -- --builtin-tools coding
@@ -99,7 +101,7 @@ npm run dev -- --builtin-tools coding
 
 `readonly` / `coding` 走 SDK allowlist，自定义工具名会自动并进去。工具必须出现在 `src/tools/index.ts` 或 `buildAgent({ extraTools })` 里；只在扩展里 `pi.registerTool` 的名字不会自动放行。
 
-打开 `coding` 之后，`guard` 才会真正拦到 bash / write：危险命令（如 `rm -rf`）和越出工作目录的路径会被 `{ block: true }`。改规则去 `src/extensions/guard.ts`。
+打开 `coding` 之后，`guard` 才会真正拦到 bash / exec / write：危险命令（如 `rm -rf`）和越出工作目录的路径会被 `{ block: true }`。`exec` 是进程执行（拿输出、后台任务），不是交互式终端。改规则去 `src/extensions/guard.ts`。
 
 ## 快速开始
 
@@ -493,7 +495,7 @@ server.listen(3000);
 
 - **登录**：本地桌面 / 本机 CLI 可以没有。接到已有后台时**在父应用上挂**鉴权（见上面「接进现有模块」的 `server.use("/agent", auth, agentApp)`）——不要用 `createApp()` 之后加中间件或 `configure`，那两种都挡不住内核路由。
 - **多用户**：每个用户一个 `buildAgent()` + 独立 session；不要共用现在这个 `busy` 标志。
-- **打开编码工具**：`PI_BUILTIN_TOOLS=coding` 或 `--builtin-tools coding`。打开后 `guard` 仍会拦截危险 bash 和越出 cwd 的路径。
+- **打开编码工具**：`PI_BUILTIN_TOOLS=coding` 或 `--builtin-tools coding`。这一档同时打开 `exec` / `exec_jobs` / `exec_stop`。打开后 `guard` 仍会拦截危险 bash / exec 和越出 cwd 的路径。不是交互式 PTY。
 - **模型切换**：启动时 `--model provider/modelId`；CLI `/model`；HTTP `POST /model`。只接受已配好 Key 的模型，走 `session.setModel`，不重建会话。
 - **技能 / 知识库 / 数据库**：技能丢进 `src/skills/`；知识库丢进 `src/knowledge/`；数据库默认内存，或 `PI_DATABASE_PATH` / `buildAgent({ database })`。要接向量库或远程 SQL，写成工具从 `extraTools` 进来。
 - **关掉内置示例内容**：`buildAgent({ builtinKnowledge: false, builtinSkills: false })`。内置的 `about.md`（一份介绍脚手架自己的文档）和 `summarize` 技能会进系统提示词，而 `extraKnowledgeDirs` / `extraSkillPaths` 是**叠加不是替换**、内置同名优先——所以这是唯一的关闭入口。当库嵌入别人服务时通常该关掉。

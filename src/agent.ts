@@ -35,7 +35,9 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { Model } from "@earendil-works/pi-ai";
+import { ExecEnvironment } from "./exec/runner.js";
 import { allTools } from "./tools/index.js";
+import { execToolsForMode } from "./tools/exec.js";
 import { allExtensions, type ExtensionFactory } from "./extensions/index.js";
 import { loadScaffoldSkills, resolveSkillPaths, type LoadedSkill } from "./skills/index.js";
 import { badRequest } from "./http/errors.js";
@@ -312,9 +314,15 @@ export async function buildAgent(options: BuildAgentOptions = {}): Promise<Built
    * `allowedToolNames` 硬白名单，构造之后无法增补。所以运行期新增的工具（MCP）
    * 只能从下一次建会话起生效——白名单必须按会话重算，不能在build 的时候算一次存起来。
    */
+  // shell 只在 coding 档出现。环境是进程级的一份：后台任务不跟某一次会话一起死，
+  // 但整个 Agent dispose 时要一起杀掉，否则停机后还留着子进程。
+  const execEnv =
+    cfg.builtinTools === "coding" ? new ExecEnvironment({ workspace: process.cwd() }) : undefined;
+
   const resolveToolList = (): ToolDefinition[] => {
     const live = options.dynamicTools?.() ?? [];
-    return [...allTools, ...dynamicTools, ...live, ...(options.extraTools ?? [])];
+    const execTools = execToolsForMode(cfg.builtinTools, execEnv);
+    return [...allTools, ...dynamicTools, ...execTools, ...live, ...(options.extraTools ?? [])];
   };
 
   /** Build a fresh resource loader (one per session, so conversations stay isolated). */
@@ -413,6 +421,7 @@ export async function buildAgent(options: BuildAgentOptions = {}): Promise<Built
     },
     dispose: () => {
       session.dispose();
+      execEnv?.dispose();
       database.close();
     },
   };

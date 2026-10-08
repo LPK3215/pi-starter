@@ -371,7 +371,7 @@ export function describeBuiltinToolMode(mode: BuiltinToolMode): string {
     case "readonly":
       return "只读：read/grep/find/ls + 自定义工具";
     case "coding":
-      return "编码：read/bash/edit/write/grep/find/ls + 自定义工具";
+      return "编码：read/bash/edit/write/grep/find/ls + exec/exec_jobs/exec_stop + 自定义工具";
   }
 }
 

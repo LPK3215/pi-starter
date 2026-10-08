@@ -385,6 +385,47 @@ class ClientConn {
         case "list_conversations":
           this.send({ type: "conversations", items: this.cs?.listConversations() ?? [] });
           break;
+        case "rename_conversation":
+        case "rollback_conversation":
+        case "edit_message":
+        case "fork_conversation": {
+          if (!this.cs || !this.clientId) {
+            this.send({ type: "error", message: "not attached" });
+            break;
+          }
+          if (!msg.conversationId?.trim()) {
+            this.send({ type: "error", message: "conversationId is required" });
+            break;
+          }
+          try {
+            if (msg.type === "rename_conversation") {
+              if (typeof msg.title !== "string") {
+                this.send({ type: "error", message: "title is required" });
+                break;
+              }
+              runtime.hub.renameConversation(this.clientId, msg.conversationId, msg.title);
+              this.send({ type: "conversations", items: this.cs.listConversations() });
+            } else if (msg.type === "rollback_conversation") {
+              if (!msg.entryId?.trim()) {
+                this.send({ type: "error", message: "entryId is required" });
+                break;
+              }
+              runtime.hub.rollbackConversation(this.clientId, msg.conversationId, msg.entryId);
+            } else if (msg.type === "edit_message") {
+              if (!msg.entryId?.trim()) {
+                this.send({ type: "error", message: "entryId is required" });
+                break;
+              }
+              runtime.hub.editConversation(this.clientId, msg.conversationId, msg.entryId);
+            } else {
+              await runtime.hub.forkConversation(this.clientId, msg.conversationId, msg.entryId);
+            }
+          } catch (err) {
+            const message = err instanceof AppError ? err.clientMessage() : "无法修改该会话";
+            this.send({ type: "error", message });
+          }
+          break;
+        }
         case "list_models": {
           const models = await runtime.agent.listModels();
           this.send({

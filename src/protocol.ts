@@ -24,6 +24,11 @@ export interface UiMessage {
   role: "user" | "assistant";
   text: string;
   timestamp?: number;
+  /**
+   * 会话树上这条消息的 id。回退、编辑、分叉都用它，不传文件路径。
+   * 没有会话树的旧快照可以没有这个字段。
+   */
+  entryId?: string;
 }
 
 /** Model descriptor carried in the snapshot. */
@@ -183,6 +188,10 @@ export type ClientMessage =
   | { type: "switch_conversation"; conversationId: string }
   | { type: "close_conversation"; conversationId: string }
   | { type: "list_conversations" }
+  | { type: "rename_conversation"; conversationId: string; title: string }
+  | { type: "rollback_conversation"; conversationId: string; entryId: string }
+  | { type: "edit_message"; conversationId: string; entryId: string }
+  | { type: "fork_conversation"; conversationId: string; entryId?: string }
   // 模型与思考
   | { type: "list_models" }
   | { type: "set_model"; modelId: string }
@@ -299,6 +308,11 @@ export type ServerMessage =
       toolResults?: number;
     }
   | { type: "conversations"; items: UiConversation[] }
+  /**
+   * 编辑用户消息之后，原文交回输入框。服务端不自动再发一轮。
+   * 这条消息和它后面的内容已经离开当前路径。
+   */
+  | { type: "edit_ready"; conversationId: string; entryId: string; text: string }
   | { type: "models"; models: UiModel[]; current: string }
   | { type: "capabilities"; capabilities: UiCapabilities }
   | { type: "settings_state"; settings: Record<string, unknown> }
@@ -353,6 +367,10 @@ export const CLIENT_MESSAGE_TYPES = [
   "switch_conversation",
   "close_conversation",
   "list_conversations",
+  "rename_conversation",
+  "rollback_conversation",
+  "edit_message",
+  "fork_conversation",
   "list_models",
   "set_model",
   "set_thinking",

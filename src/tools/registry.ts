@@ -57,7 +57,11 @@ export function inferCapabilities(name: string): string[] {
     case "find":
       return ["fs.read"];
     case "bash":
+    case "exec":
+    case "exec_stop":
       return ["shell"];
+    case "exec_jobs":
+      return ["shell.observe"];
     default:
       return ["custom"];
   }

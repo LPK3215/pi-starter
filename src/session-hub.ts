@@ -17,7 +17,7 @@
 
 import { existsSync } from "node:fs";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
+import type { AgentSessionEvent, SessionManager } from "@earendil-works/pi-coding-agent";
 import type { Model } from "@earendil-works/pi-ai";
 import type { BuiltAgent } from "./agent.js";
 import type { RuntimeConfig } from "./config.js";
@@ -26,6 +26,13 @@ import { computeSoftCap, contextUsageRatio, estimateTokens, planContextTrim, typ
 import { getLogger } from "./log.js";
 import { AppError, badRequest } from "./http/errors.js";
 import { assertSessionFileAllowed, type SessionCatalog, type StoredConversation } from "./sessions/store.js";
+import {
+  editUserMessage,
+  forkSessionFile,
+  forkedConversationTitle,
+  normalizeConversationTitle,
+  rollbackSession,
+} from "./sessions/edit.js";
 import type { PlanModeController } from "./modes/plan-mode.js";
 import { ToolWatchdog } from "./approval/watchdog.js";
 import { metrics } from "./metrics.js";
@@ -64,15 +71,28 @@ function extractText(content: unknown): string {
 }
 
 /** Project an SDK AgentMessage to a UI message, or null when it is not a chat message. */
-function projectMessage(message: AgentMessage, cache: ProjectionCache): UiMessage | null {
+function projectMessage(
+  message: AgentMessage,
+  cache: ProjectionCache,
+  entryId?: string,
+): UiMessage | null {
   const role = (message as { role?: string }).role;
   if (role !== "user" && role !== "assistant") return null;
   const hit = cache.get(message);
-  if (hit !== undefined) return hit;
+  if (hit !== undefined) {
+    // 第一条快照可能早于会话条目落盘。补上 id 时换一个对象，避免增量快照一直拿着没有 id 的旧投影。
+    if (hit && entryId && hit.entryId !== entryId) {
+      const next = { ...hit, entryId };
+      cache.set(message, next);
+      return next;
+    }
+    return hit;
+  }
   const ui: UiMessage = {
     role,
     text: extractText((message as { content?: unknown }).content),
     timestamp: (message as { timestamp?: number }).timestamp,
+    ...(entryId ? { entryId } : {}),
   };
   cache.set(message, ui);
   return ui;
@@ -177,6 +197,11 @@ export class Conversation {
   readonly id: string;
   readonly clientId: string;
   title = "New conversation";
+  /**
+   * 用户或索引已经给定标题。为真时不再从第一条用户消息推导，
+   * 否则标题恰好是占位符 "New conversation" 时会被下一条消息盖掉。
+   */
+  private titleLocked = false;
   deltaSeq = 0;
   streamingText = "";
   lastActiveAt = Date.now();
@@ -443,7 +468,7 @@ export class Conversation {
   }
 
   private refreshTitleFromSession(): void {
-    if (this.title !== "New conversation") return;
+    if (this.titleLocked || this.title !== "New conversation") return;
     for (const message of this.session.messages) {
       const role = (message as { role?: string }).role;
       if (role !== "user") continue;
@@ -476,11 +501,46 @@ export class Conversation {
 
   /* ─────────────── 快照构建（C 类） ─────────────── */
 
+  /** 当前路径上，消息对象 → 会话条目 id。没有会话树时为空。 */
+  private entryIds(): Map<AgentMessage, string> {
+    const map = new Map<AgentMessage, string>();
+    const manager = this.sessionManager();
+    if (!manager) return map;
+    for (const entry of manager.buildContextEntries()) {
+      if (entry.type === "message") map.set(entry.message, entry.id);
+    }
+    return map;
+  }
+
+  private sessionManager(): SessionManager | undefined {
+    const manager = (this.session as { sessionManager?: SessionManager }).sessionManager;
+    if (!manager || typeof manager.buildContextEntries !== "function") return undefined;
+    return manager;
+  }
+
+  private requireManager(): SessionManager {
+    const manager = this.sessionManager();
+    if (!manager) throw badRequest("当前会话不能编辑历史");
+    return manager;
+  }
+
+  /** 树变了之后，让模型看到的消息和快照跟着走。只 branch() 而不换这份数组，界面还是旧的后半段。 */
+  private adoptTree(manager: SessionManager): void {
+    const state = (this.session as { agent?: { state?: { messages: AgentMessage[] } } }).agent?.state;
+    if (!state) throw new AppError("internal", "当前会话不能同步消息");
+    state.messages = manager.buildSessionContext().messages;
+    this.cache = new WeakMap();
+    this.tokenCache = new WeakMap();
+    this.streamingText = "";
+    this.getState();
+  }
+
   /** Projected chat messages, using the stable-reference projection cache. */
   private currentMessages(): UiMessage[] {
     const messages: UiMessage[] = [];
+    const ids = this.entryIds();
     for (const message of this.session.messages) {
-      const ui = projectMessage(message, this.cache);
+      const ui = projectMessage(message, this.cache, ids.get(message));
       if (ui) messages.push(ui);
     }
     return messages;
@@ -730,8 +790,68 @@ export class Conversation {
    * 已经有真实标题时不再被「New conversation」逻辑改掉。
    */
   adoptSavedTitle(saved: string | undefined): void {
-    if (saved && saved !== "New conversation") this.title = saved;
+    if (saved && saved !== "New conversation") {
+      this.title = saved;
+      this.titleLocked = true;
+    }
     this.refreshTitleFromSession();
+  }
+
+  /** 正在生成时不能改树，也不能改名。 */
+  streaming(): boolean {
+    return this.session.isStreaming;
+  }
+
+  /**
+   * 改展示名。已打开的对话写进 SDK 的 session_info；调用方负责休眠对话只改索引。
+   * 不调模型。
+   */
+  rename(title: string): string {
+    if (this.session.isStreaming) {
+      throw new AppError("conflict", "对话正在生成，先停掉再改名");
+    }
+    const next = normalizeConversationTitle(title);
+    const session = this.session as Session & {
+      setSessionName?: (name: string) => void;
+      sessionManager?: SessionManager;
+    };
+    if (typeof session.setSessionName === "function") session.setSessionName(next);
+    else session.sessionManager?.appendSessionInfo(next);
+    this.title = next;
+    this.titleLocked = true;
+    this.lastActiveAt = Date.now();
+    this.getState();
+    return next;
+  }
+
+  /** 叶子留在这条记录上，后半段离开当前路径。标记写入文件，重启后还在。 */
+  rollbackTo(entryId: string): void {
+    if (this.session.isStreaming) {
+      throw new AppError("conflict", "对话正在生成，先停掉再回退");
+    }
+    const manager = this.requireManager();
+    rollbackSession(manager, entryId);
+    this.adoptTree(manager);
+  }
+
+  /**
+   * 把一条用户消息移出当前路径，原文交回。不自动 prompt。
+   * 助手消息不能走这里——那是回退，叶子要留在那条记录上。
+   */
+  editMessage(entryId: string): { entryId: string; text: string } {
+    if (this.session.isStreaming) {
+      throw new AppError("conflict", "对话正在生成，先停掉再编辑");
+    }
+    const manager = this.requireManager();
+    const edited = editUserMessage(manager, entryId);
+    this.adoptTree(manager);
+    this.push({
+      type: "edit_ready",
+      conversationId: this.id,
+      entryId: edited.entryId,
+      text: edited.text,
+    });
+    return { entryId: edited.entryId, text: edited.text };
   }
 
   /**
@@ -1302,6 +1422,79 @@ export class SessionHub {
       reason: compacted === 0 ? results[0]?.reason ?? "没有可压缩的对话" : undefined,
       results,
     };
+  }
+
+  private requireClient(clientId: string): ClientSession {
+    const owner = this.sessions.get(clientId);
+    if (!owner) throw badRequest("连接尚未建立");
+    return owner;
+  }
+
+  /**
+   * 已打开的对话改名会写进会话文件。还没打开的只改索引，
+   * 之后 open 会留下这个标题，不会被第一条消息重新推导盖掉。
+   */
+  renameConversation(clientId: string, conversationId: string, title: string): string {
+    const next = normalizeConversationTitle(title);
+    if (!conversationId.trim()) throw badRequest("会话 id 不能为空");
+    const owner = this.requireClient(clientId);
+    const live = owner.get(conversationId);
+    if (live) {
+      const applied = live.rename(next);
+      this.remember(live);
+      return applied;
+    }
+    const entry = this.catalog?.get(conversationId);
+    if (!entry) throw new AppError("not_found", "没有这条对话");
+    this.catalog?.upsert({ ...entry, title: next, updatedAt: Date.now() });
+    return next;
+  }
+
+  /** 没打开的对话不静默加载。回退会改模型接下来看到的上下文，必须是用户正在看的那条。 */
+  rollbackConversation(clientId: string, conversationId: string, entryId: string): void {
+    const conv = this.requireLoaded(clientId, conversationId);
+    conv.rollbackTo(entryId);
+    this.remember(conv);
+  }
+
+  editConversation(clientId: string, conversationId: string, entryId: string): { entryId: string; text: string } {
+    const conv = this.requireLoaded(clientId, conversationId);
+    const edited = conv.editMessage(entryId);
+    this.remember(conv);
+    return edited;
+  }
+
+  /**
+   * 分叉写一个新文件，再按现有的打开流程加载。
+   * 路径来自索引或已打开对话的会话文件，不接受客户端传来的路径。
+   */
+  async forkConversation(clientId: string, conversationId: string, entryId?: string): Promise<Conversation> {
+    if (!conversationId.trim()) throw badRequest("会话 id 不能为空");
+    const owner = this.requireClient(clientId);
+    const live = owner.get(conversationId);
+    if (live?.streaming()) {
+      throw new AppError("conflict", "对话正在生成，先停掉再分叉");
+    }
+    const stored = live?.toStored() ?? this.catalog?.get(conversationId);
+    if (!stored) throw new AppError("not_found", "没有这条对话，或它还没落盘");
+    if (!this.catalog) throw badRequest("没有会话索引，无法登记分叉");
+    const forked = forkSessionFile(stored.sessionFile, entryId, this.allowedSessionRoots);
+    this.catalog.upsert({
+      sessionId: forked.sessionId,
+      sessionFile: forked.sessionFile,
+      title: forkedConversationTitle(live?.title ?? stored.title),
+      updatedAt: Date.now(),
+      messageCount: forked.messageCount,
+    });
+    return this.openConversation(clientId, forked.sessionId);
+  }
+
+  private requireLoaded(clientId: string, conversationId: string): Conversation {
+    if (!conversationId.trim()) throw badRequest("会话 id 不能为空");
+    const owner = this.requireClient(clientId);
+    const conv = owner.get(conversationId);
+    if (!conv) throw badRequest("这条对话还没打开，先发 open_conversation");
+    return conv;
   }
 
   private remember(conv: Conversation): void {

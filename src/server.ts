@@ -25,6 +25,7 @@ import { createSessionHub, type SessionHub } from "./session-hub.js";
 import { defaultSessionIndexFile, scaffoldSessionDir, sessionCatalog } from "./sessions/store.js";
 import { BUILTIN_TOOL_NAMES, createToolRegistry, defineToolSpec, type ToolRegistry } from "./tools/registry.js";
 import { allTools } from "./tools/index.js";
+import { execRegistrySpecs } from "./tools/exec.js";
 import { SettingsService, fileSettingsPort, defaultSettingsFile, sanitizeSettings } from "./settings.js";
 import { createPersistentRulesStore } from "./approval/rules.js";
 import { join } from "node:path";
@@ -226,6 +227,11 @@ registry.register(
     origin: "subagent",
   }),
 );
+// coding 档的 exec 不在 allTools 里（否则 off 也会放行）。注册表必须有它们：
+// 客户端 hello 时会用 enabledNames() 覆盖会话的激活集，漏登记等于工具被当场关掉。
+if (agent.builtinTools === "coding") {
+  registry.registerAll(execRegistrySpecs());
+}
 registryRef = registry;
 
 /** MCP 桥：配置改动即生效（新增连接 / 断开移除 / 命令变更重连），无需重启。 */
