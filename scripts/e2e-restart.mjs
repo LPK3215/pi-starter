@@ -15,7 +15,7 @@
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { mkdtempSync, writeFileSync, rmSync, readdirSync, readFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync, rmSync, readdirSync, readFileSync, existsSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -431,6 +431,87 @@ console.log("\n── 优雅停机：真进程 + 真信号 ──");
       "停机前已建立 fetch keep-alive + WS 连接");
   }
   check("停机: 进程结束后端口已释放", await portFree(PORT), `port=${PORT}`);
+}
+
+/* ── 9. 索引指向一个已被删掉的文件 ──
+ * 这个场景真实存在：用户手工清理 `sessions/`、备份不完整、或外部删了 jsonl。
+ * 此时索引里那条记录**是脏的**——重启后若列表照旧显示它、或打开时抛 500 而不是
+ * 干净地把它摘掉，用户就会面对一个永远打不开的幽灵条目。
+ *
+ * `catalog.remove()` 全项目只有一个调用点（`session-hub.ts`，打开历史会话失败且
+ * 文件确实不在时），且只在 `code === "forbidden"` 时触发——这条判断到底成不成立，
+ * 同进程测试测不出来，必须真重启。 */
+console.log("\n── 索引与磁盘不一致：文件被外部删掉后重启 ──");
+{
+  // 9a. 先起一个进程，拿到索引里的会话
+  const first = startServer("stale1");
+  await waitReady("stale1", first.log);
+  const { frames, socket } = connect();
+  await once(socket, "open");
+  socket.send(JSON.stringify({ type: "hello", protocolVersion: PROTOCOL_VERSION }));
+  await waitFrame(frames, "ready", "stale1");
+  socket.send(JSON.stringify({ type: "list_conversations" }));
+  const listed = await waitFrame(frames, "conversations", "stale1");
+  const entries = listed.items ?? listed.conversations ?? [];
+  check("脏索引: 重启前列表里有历史会话", entries.length > 0, `共 ${entries.length} 条`);
+  socket.terminate();
+  await new Promise((r) => { first.child.once("exit", () => r(true)); first.child.kill("SIGKILL"); });
+
+  // 9b. 在**没有进程运行**时删掉 jsonl（模拟外部清理）——索引文件保持不动，于是它变脏
+  const jsonl = findFiles(agentDir, ".jsonl");
+  check("脏索引: 磁盘上存在 jsonl 可供删除", jsonl.length > 0, `${jsonl.length} 个`);
+  for (const f of jsonl) unlinkSync(f);
+  check("脏索引: jsonl 已从磁盘移除（索引仍是脏的）", findFiles(agentDir, ".jsonl").length === 0);
+
+  // 9c. 重启：入口不能挂，列表要么干净、要么至少能自愈
+  const second = startServer("stale2");
+  await waitReady("stale2", second.log);
+  const c2 = connect();
+  await once(c2.socket, "open");
+  c2.socket.send(JSON.stringify({ type: "hello", protocolVersion: PROTOCOL_VERSION }));
+  await waitFrame(c2.frames, "ready", "stale2");
+  c2.socket.send(JSON.stringify({ type: "list_conversations" }));
+  const after = await waitFrame(c2.frames, "conversations", "stale2");
+  const afterEntries = after.items ?? after.conversations ?? [];
+
+  // 索引文件本身**没有被清理**——这正是关键：脏数据还在盘上，靠的是每次加载时过滤
+  // （`sanitizeIndexEntries` → `assertSessionFileAllowed`，`realpath` 对已删文件失败）。
+  // 断言索引里确实还留着那个死条目，否则「列表干净」可能只是因为索引被重写了。
+  const indexFiles = findFiles(agentDir, "index.json");
+  const indexed = indexFiles.length
+    ? JSON.parse(readFileSync(indexFiles[0], "utf8")).conversations ?? []
+    : [];
+  check("脏索引: 索引文件里确实还留着已删除文件的条目", indexed.length > 0,
+    `索引条目 ${indexed.length} 个（用于证明过滤真的发生了）`);
+
+  // 列表里不能出现它——否则用户会看到一个永远打不开的幽灵。
+  const listedIds = new Set(afterEntries.map((c) => c.id));
+  const ghosts = indexed.filter((e) => listedIds.has(e.sessionId));
+  check("脏索引: 列表里不出现幽灵条目（加载时 fail-closed 过滤）", ghosts.length === 0,
+    `列表 ${afterEntries.length} 条，索引 ${indexed.length} 条，交集 ${ghosts.length}`);
+
+  // 9d. 真正的风险：客户端手里有旧 id（缓存列表 / 重连前的会话）时来打开它。
+  // 必须给出明确错误，**不能静默造一个空会话**——那会让用户以为历史被清空了。
+  if (indexed.length > 0) {
+    const staleId = indexed[0].sessionId;
+    c2.frames.length = 0;
+    c2.socket.send(JSON.stringify({ type: "open_conversation", conversationId: staleId }));
+    const outcome = await waitFor("stale2 打开已删除会话有结果", () =>
+      c2.frames.find((f) => f.type === "error" || f.type === "snapshot"), 15_000,
+    ).catch(() => null);
+    check("脏索引: 打开已删除的会话 id 给出错误而非假装成功", outcome?.type === "error",
+      outcome ? `收到 ${outcome.type}${outcome.type === "error" ? `：${outcome.message}` : ""}`
+              : "15s 内无任何响应 —— 前端会一直等");
+    if (outcome?.type === "snapshot") {
+      const snapshotId = outcome.state?.conversationId;
+      check("脏索引: 若返回快照，至少不能是那个已删除的 id（静默假成功）",
+        snapshotId !== staleId,
+        `请求 ${staleId}，返回 ${snapshotId} —— 若相同即为「打开不存在的会话却成功」`);
+    }
+  }
+
+  c2.socket.terminate();
+  await new Promise((r) => { second.child.once("exit", () => r(true)); second.child.kill("SIGKILL"); });
 }
 
 const failed = results.filter((r) => !r.ok);
