@@ -1,0 +1,78 @@
+name: "publish"
+
+# 打 v* tag（或手动触发）→ 构建 → 打包 tarball → 挂到该 tag 的正式 Release。
+# 要同时发 npm，打开文件末尾注释里的 publish-npm job。
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run build
+
+      - run: npm pack
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tarball
+          path: "*.tgz"
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: tarball
+          path: dist
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # release notes 优先取 CHANGELOG.md 里对应版本的那一段；抽不到再退回自动生成
+          VERSION="${GITHUB_REF_NAME#v}"
+          NOTES_ARGS=(--generate-notes)
+          if [ -f CHANGELOG.md ]; then
+            awk "/^## \[?${VERSION}\]?/{f=1;next}/^## /{f=0}f" CHANGELOG.md > .release-notes.md || true
+            if [ -s .release-notes.md ]; then NOTES_ARGS=(--notes-file .release-notes.md); fi
+          fi
+          gh release create "${GITHUB_REF_NAME}" dist/*.tgz \
+            --title "${GITHUB_REF_NAME}" \
+            "${NOTES_ARGS[@]}" \
+            --latest
+
+# 要同时发布到 npm（先在 Settings → Secrets 配好 NPM_TOKEN，且 package.json 不能是 "private": true）时打开本 job：
+#
+#  publish-npm:
+#    needs: build
+#    runs-on: ubuntu-latest
+#    permissions:
+#      contents: read
+#      id-token: write   # npm provenance 用它签名，证明包确实由本仓库构建
+#    steps:
+#      - uses: actions/checkout@v4
+#      - uses: actions/setup-node@v4
+#        with:
+#          node-version: 22
+#          registry-url: https://registry.npmjs.org
+#      - run: npm ci
+#      - run: npm run build
+#      - run: npm publish --provenance --access public
+#        env:
+#          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

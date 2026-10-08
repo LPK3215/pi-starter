@@ -1,0 +1,36 @@
+{
+  "_说明": "发布运维流水线的配置（由 scripts/verify.mjs 与 scripts/release.mjs 读取）。换技术栈只改这里，不改脚本。",
+  "_profile": "node-pkg —— 产物是 npm 包；CI 出包见 .github/workflows/publish.yml。",
+  "_versionFiles说明": "发版时按顺序回写这些位置。npm 项目的 version 真源是 package.json；下面是该项目里另外两处**必须同步**的运行时常量（漏改会导致 /version 与 MCP 上报版本滞后）。",
+
+  "productName": "pi-starter",
+  "tagPrefix": "v",
+  "remote": "origin",
+
+  "versionFiles": [
+    { "path": "package.json", "type": "json" },
+    {
+      "path": "src/server.ts",
+      "type": "regex",
+      "pattern": "const SERVER_VERSION = \"[0-9.]+\";",
+      "replace": "const SERVER_VERSION = \"$VERSION\";"
+    },
+    {
+      "path": "src/mcp/client.ts",
+      "type": "regex",
+      "pattern": "clientInfo: \\{ name: \"pi-starter\", version: \"[0-9.]+\" \\}",
+      "replace": "clientInfo: { name: \"pi-starter\", version: \"$VERSION\" }"
+    }
+  ],
+
+  "_verify说明": "发布门禁。这里直接复用项目自己的 verify 链（typecheck + test + smoke + build + verify:embed），不重复定义命令。",
+  "verify": [
+    { "name": "project verify", "cmd": "npm run verify" }
+  ],
+
+  "_precommit说明": "可选：提交前由 hooks/pre-commit 跑的快速门禁（几秒级）。没有这个数组时钩子会自动跳过。",
+  "precommit": [
+    { "name": "typecheck", "cmd": "npm run typecheck" },
+    { "name": "unused symbols", "cmd": "npm run lint:unused" }
+  ]
+}

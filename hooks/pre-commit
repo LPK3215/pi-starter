@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+# ============================================================================
+# 本地 pre-commit 钩子 —— 管「提交前」这一段（发版由 scripts/release.mjs 管）
+#
+# 做四件事：
+#   1. 纯文档改动直接放行（只改 md / 图片 / LICENSE 之类，不必跑代码检查）
+#   2. 跑「快速门禁」：读 pipeline.config.json 的 precommit 数组
+#      （没配这个数组就跳过 —— 它管"提交要快"，全量门禁在 verify 数组与 CI 里）
+#   3. 把已暂存的文件重新加入索引 —— 防 worktree/index 漂移
+#      （第 2 步里如果有自动格式化改写了文件，这一步保证提交的是格式化后的内容）
+#   4. 任何一步失败即中断提交（非 0 退出）
+#
+# 启用（每个 clone 执行一次）：
+#   git config core.hooksPath hooks
+# 应急绕过：
+#   SKIP_PRECOMMIT=1 git commit ...
+#   git commit --no-verify
+# 说明见同目录 README.md
+# ============================================================================
+set -euo pipefail
+
+if [[ "${SKIP_PRECOMMIT:-}" == "1" ]]; then
+  echo "[pre-commit] SKIP_PRECOMMIT=1，跳过检查"
+  exit 0
+fi
+
+ROOT="$(git rev-parse --show-toplevel)"
+cd "$ROOT"
+
+# ---- 1) 纯文档改动放行 -----------------------------------------------------
+DOC_ONLY=1
+HAS_CHANGES=0
+while IFS= read -r -d '' path; do
+  HAS_CHANGES=1
+  case "$path" in
+    *.md|*.txt|*.png|*.jpg|*.jpeg|*.gif|*.svg|*.webp|*.ico|*.pdf|*.po|*.pot|LICENSE|LICENSE.*|AUTHORS|NOTICE|CHANGELOG.md) ;;
+    *) DOC_ONLY=0 ;;
+  esac
+done < <(git diff --cached --name-only --no-renames -z)
+
+if [[ "$HAS_CHANGES" == "1" && "$DOC_ONLY" == "1" ]]; then
+  echo "[pre-commit] 纯文档改动，跳过代码检查"
+  exit 0
+fi
+
+# ---- 2) 记住已暂存文件（第 3 步要用；bash 3.2 兼容，不用 mapfile）-----------
+STAGED=()
+while IFS= read -r line; do
+  [[ -n "$line" ]] && STAGED+=("$line")
+done < <(git diff --cached --name-only --diff-filter=ACMR || true)
+
+# ---- 3) 快速门禁（可选）----------------------------------------------------
+if [[ -f pipeline.config.json ]] && command -v node >/dev/null 2>&1; then
+  if node -e 'const c=require("./pipeline.config.json");process.exit(Array.isArray(c.precommit)&&c.precommit.length?0:1)' 2>/dev/null; then
+    echo "[pre-commit] 跑快速门禁（pipeline.config.json → precommit）"
+    node scripts/verify.mjs --key precommit
+  else
+    echo "[pre-commit] 未配置 precommit 门禁，跳过（全量门禁在 CI 与发版时跑）"
+  fi
+else
+  echo "[pre-commit] 缺 pipeline.config.json 或 node，跳过门禁"
+fi
+
+# ---- 4) 防漂移：把已暂存文件重新加入索引 -----------------------------------
+if (( ${#STAGED[@]} > 0 )); then
+  existing=()
+  for f in "${STAGED[@]}"; do
+    if [[ -e "$f" || -L "$f" ]]; then
+      existing+=("$f")
+    fi
+  done
+  if (( ${#existing[@]} > 0 )); then
+    git add -- "${existing[@]}"
+  fi
+fi
+
+echo "[pre-commit] 通过"

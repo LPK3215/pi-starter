@@ -49,7 +49,8 @@
     "verify:embed": "node scripts/verify-embed.mjs",
     "verify": "npm run typecheck && npm test && npm run smoke && npm run build && npm run verify:embed",
     "verify:all": "npm run verify && npm run e2e",
-    "lint:unused": "tsc --noEmit --noUnusedLocals --noUnusedParameters"
+    "lint:unused": "tsc --noEmit --noUnusedLocals --noUnusedParameters",
+    "release": "node scripts/release.mjs"
   },
   "engines": {
     "node": ">=22.19"

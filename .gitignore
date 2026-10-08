@@ -10,6 +10,7 @@ npm-debug.log*
 # AI assistant local state (session memory, not project artifacts)
 .workbuddy/
 .workbuddy-ai/
+.codebuddy/
 
 # SQLite / local data
 *.db
