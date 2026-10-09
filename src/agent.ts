@@ -43,11 +43,15 @@ import {
   getAgentDir,
   ModelRuntime,
   SessionManager,
+  SettingsManager,
+  type CompactionSettings,
+  type ImageSettings,
+  type RetrySettings,
   type CreateAgentSessionRuntimeFactory,
   type EventBus,
 } from "@earendil-works/pi-coding-agent";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
-import type { ExtensionAPI, ProviderConfig, RegisteredCommand } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionUIContext, ProviderConfig, RegisteredCommand } from "@earendil-works/pi-coding-agent";
 import type { Model } from "@earendil-works/pi-ai";
 import { ExecEnvironment } from "./exec/runner.js";
 import { allTools } from "./tools/index.js";
@@ -257,9 +261,52 @@ export interface BuildAgentOptions {
   embeddings?: EmbeddingProvider;
   /** 向量存储。默认 InMemoryVectorStore（零依赖）；外部向量库实现 VectorStore 后传入即可。 */
   vectorStore?: VectorStore;
+  /**
+   * HITL 反问桥（官方 `ExtensionUIContext`）。不传时 `ctx.hasUI` 为假、工具走优雅降级；
+   * 传入时在每个 session 建好后绑到其 `extensionRunner`，让 `ctx.ui.input()` 能把问题推到外部通道等人回答。
+   */
+  extensionUi?: ExtensionUIContext;
+  /**
+   * 官方扩展文件路径装载（`DefaultResourceLoader.additionalExtensionPaths`）。
+   * 与 `extraExtensions`（内联工厂）并列的官方第二条路：给一批 `.ts`/`.js` 扩展文件路径动态装载。
+   * `noExtensions:true` 只关 `~/.pi` 自动扫描，不影响这些显式路径（与 skills 同规则）。默认空。
+   */
+  extensionPaths?: string[];
+  /**
+   * SDK 侧设置透传（compaction/retry/images/enabledModels）。默认不传则行为不变；
+   * 传非空时建一个 `SettingsManager` 并 `applyOverrides`，把官方这些一等能力真正启用。
+   */
+  sdkSettings?: SdkSettings;
 }
 
 type AgentSession = Awaited<ReturnType<typeof createAgentSession>>["session"];
+
+/**
+ * 脚手架侧的 SDK 设置透传（官方 `Settings` 里与服务层相关的一组字段）。
+ *
+ * 官方 `Settings` 类型本身未从主入口导出（只导出 `SettingsManager` 与各子类型），故用子类型拼装。
+ * 这些字段交给 SDK 的 `SettingsManager`，从而真正驱动：**自动压缩触发阈值**（compaction）、
+ * **LLM 重试退避**（retry）、**图像自动降采/屏蔽**（images）、**模型白名单**（enabledModels）。
+ * 默认不传则不建 `SettingsManager`、行为与以往逐字一致（不静默改变任何现有语义）。
+ */
+export interface SdkSettings {
+  compaction?: CompactionSettings;
+  retry?: RetrySettings;
+  images?: ImageSettings;
+  enabledModels?: string[];
+  /** 出站 provider HTTP 空闲超时（毫秒）——与入站服务器超时不同。 */
+  httpIdleTimeoutMs?: number;
+  /** WebSocket 连接超时（毫秒）。 */
+  websocketConnectTimeoutMs?: number;
+  /** 插队队列消费策略。 */
+  steeringMode?: "all" | "one-at-a-time";
+  /** 追问队列消费策略。 */
+  followUpMode?: "all" | "one-at-a-time";
+  /** 各思考档的 token 预算（官方 ThinkingBudgetsSettings，未从主入口导出，故内联）。 */
+  thinkingBudgets?: { minimal?: number; low?: number; medium?: number; high?: number };
+  /** 分支摘要预算（官方 BranchSummarySettings，未从主入口导出，故内联）。 */
+  branchSummary?: { reserveTokens?: number; skipPrompt?: boolean };
+}
 
 /**
  * 选一个 SessionManager：内存 / 新建落盘 / 打开已有文件。
@@ -515,6 +562,7 @@ export async function buildAgent(options: BuildAgentOptions = {}): Promise<Built
     noPromptTemplates: true,
     additionalSkillPaths: skillPaths,
     additionalPromptTemplatePaths: promptTemplatePaths,
+    additionalExtensionPaths: options.extensionPaths ?? [],
     eventBus,
     systemPromptOverride: () => systemPrompt,
     appendSystemPromptOverride: () => [],
@@ -546,10 +594,14 @@ export async function buildAgent(options: BuildAgentOptions = {}): Promise<Built
   });
 
   /** Build a fresh resource loader (one per session, so conversations stay isolated). */
-  const buildLoader = async (toolList: readonly ToolDefinition[]): Promise<DefaultResourceLoader> => {
+  const buildLoader = async (
+    toolList: readonly ToolDefinition[],
+    settingsManager?: SettingsManager,
+  ): Promise<DefaultResourceLoader> => {
     const loader = new DefaultResourceLoader({
       cwd: process.cwd(),
       agentDir: getAgentDir(),
+      ...(settingsManager ? { settingsManager } : {}),
       ...resourceLoaderOptions(toolList),
     });
     await loader.reload();
@@ -601,7 +653,14 @@ export async function buildAgent(options: BuildAgentOptions = {}): Promise<Built
       cfg.builtinTools,
       toolList.map((tool) => tool.name),
     );
-    const loader = await buildLoader(toolList);
+    // SDK 设置：仅当有覆盖时才建 SettingsManager（默认不传→行为逐字不变）。
+    const sdkOverrides = options.sdkSettings ?? {};
+    let settingsManager: SettingsManager | undefined;
+    if (Object.keys(sdkOverrides).length > 0) {
+      settingsManager = SettingsManager.create(process.cwd(), getAgentDir());
+      settingsManager.applyOverrides(sdkOverrides);
+    }
+    const loader = await buildLoader(toolList, settingsManager);
     const sessionManager = resolveSessionManager(
       options.inMemory,
       options.sessionDir,
@@ -615,9 +674,17 @@ export async function buildAgent(options: BuildAgentOptions = {}): Promise<Built
       resourceLoader: loader,
       sessionManager,
       scopedModels,
+      ...(settingsManager ? { settingsManager } : {}),
       ...toolPolicy,
       ...(options.excludeTools?.length ? { excludeTools: options.excludeTools } : {}),
     });
+    // HITL 反问桥：把官方 ExtensionUIContext 绑到本 session 的扩展 runner。
+    // 用 `extensionRunner.setUIContext` 而非 `session.bindExtensions`——后者每次会重放
+    // session_start 并跑 resources_discover，给审计/守卫/审批扩展重复触发启动逻辑；前者只
+    // 更新 ctx.ui/mode，是纯增量注入。不传 extensionUi 时行为与以往逐字一致。
+    if (options.extensionUi) {
+      session.extensionRunner?.setUIContext(options.extensionUi, "rpc");
+    }
     return session;
   };
 

@@ -6,6 +6,8 @@ import {
   parseScopedModelRefs,
   requireConfiguredModel,
   resolveRetrievalConfig,
+  resolveSdkSettings,
+  resolveExtensionPaths,
   sessionToolPolicy,
 } from "./config.js";
 
@@ -115,4 +117,59 @@ test("resolveRetrievalConfig：默认 keyword；vector 需配 base+model 才给 
     resolveRetrievalConfig({ PI_KNOWLEDGE_RETRIEVAL: "vector", PI_KNOWLEDGE_VECTOR_STORE: "sqlite", PI_KNOWLEDGE_VECTOR_DB_PATH: "./v.db" }),
     { mode: "vector", vectorStore: { backend: "sqlite", path: "./v.db" } },
   );
+});
+
+test("resolveSdkSettings：无任何 env → 空对象（不建 SettingsManager，行为不变）", () => {
+  assert.deepEqual(resolveSdkSettings({}), {});
+});
+
+test("resolveSdkSettings：compaction/retry/images/enabledModels 逐组解析", () => {
+  assert.deepEqual(
+    resolveSdkSettings({
+      PI_COMPACTION_ENABLED: "true",
+      PI_COMPACTION_RESERVE_TOKENS: "8000",
+      PI_RETRY_BASE_DELAY_MS: "500",
+      PI_IMAGES_BLOCK: "on",
+      PI_ENABLED_MODELS: "openai/gpt-4o, anthropic/claude",
+    }),
+    {
+      compaction: { enabled: true, reserveTokens: 8000 },
+      retry: { baseDelayMs: 500 },
+      images: { blockImages: true },
+      enabledModels: ["openai/gpt-4o", "anthropic/claude"],
+    },
+  );
+});
+
+test("resolveSdkSettings：非法整数值被丢弃（不静默传 NaN）", () => {
+  assert.deepEqual(resolveSdkSettings({ PI_COMPACTION_RESERVE_TOKENS: "abc" }), {});
+});
+
+test("resolveExtensionPaths：逗号拆分 + 去空；未设→空数组", () => {
+  assert.deepEqual(resolveExtensionPaths({ PI_EXTENSION_PATHS: "a.ts, b.ts ,, c.js" }), ["a.ts", "b.ts", "c.js"]);
+  assert.deepEqual(resolveExtensionPaths({}), []);
+});
+
+test("resolveSdkSettings：新增的出站超时/队列模式/思考预算/分支摘要透传", () => {
+  assert.deepEqual(
+    resolveSdkSettings({
+      PI_HTTP_IDLE_TIMEOUT_MS: "300000",
+      PI_STEERING_MODE: "one-at-a-time",
+      PI_THINKING_BUDGET_HIGH: "2048",
+      PI_BRANCH_SUMMARY_SKIP: "true",
+    }),
+    {
+      httpIdleTimeoutMs: 300000,
+      steeringMode: "one-at-a-time",
+      thinkingBudgets: { high: 2048 },
+      branchSummary: { skipPrompt: true },
+    },
+  );
+});
+
+test("resolveSdkSettings：非法枚举值被丢弃（不静默传给 SDK）", () => {
+  // 两个都是非法值 → 全丢。
+  assert.deepEqual(resolveSdkSettings({ PI_STEERING_MODE: "bogus", PI_FOLLOW_UP_MODE: "nope" }), {});
+  // ALL 大写 → 小写化后 = all，合法。
+  assert.deepEqual(resolveSdkSettings({ PI_FOLLOW_UP_MODE: "ALL" }), { followUpMode: "all" });
 });

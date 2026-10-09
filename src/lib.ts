@@ -7,7 +7,14 @@ export {
   listModels,
   type BuildAgentOptions,
   type BuiltAgent,
+  type SdkSettings,
 } from "./agent.js";
+export {
+  createExtensionUiBridge,
+  type ExtensionUiBridge,
+  type ExtensionUiBridgeOptions,
+} from "./extension-ui-bridge.js";
+export { type UiExtensionRequest, type UiExtensionResponse } from "./protocol.js";
 export { createApp, type CreateAppOptions, type CreateAppResult } from "./app.js";
 export { parseCliFlags, type CliFlags } from "./cli-args.js";
 export {
@@ -27,6 +34,8 @@ export {
   resolveDefaultModel,
   resolveRetrievalConfig,
   resolveRuntimeConfig,
+  resolveSdkSettings,
+  resolveExtensionPaths,
   sessionToolPolicy,
   SETUP_HINT,
   type BuiltinToolMode,

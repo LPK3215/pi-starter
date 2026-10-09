@@ -6,6 +6,7 @@ import { createServer } from "node:http";
 import { once } from "node:events";
 import { WebSocket } from "ws";
 import { attachWebSocket, originAllowed } from "../src/transport/ws.ts";
+import { createExtensionUiBridge } from "../src/extension-ui-bridge.ts";
 import { PROTOCOL_VERSION } from "../src/protocol.ts";
 import { resolveRuntimeConfig } from "../src/config.ts";
 import { Metrics } from "../src/metrics.ts";
@@ -86,7 +87,11 @@ const registry = {
 const settings = { get: () => ({ toolApprovalEnabled: false, approvalMode: "off", disabledTools: [], thinkingLevel: "default", promptTemplate: "", contextKeepRecent: 6 }), patch: (p) => ({ ...settings.get(), ...p }) };
 
 const server = createServer((_req, res) => { res.writeHead(404); res.end(); });
-const ws = attachWebSocket(server, { agent, hub, cfg, registry, settings, serverVersion: "test" });
+// HITL 反问桥：emit 经 ws 广播给已连接客户端（延迟绑定，ws 建好后再把 sink 接上）。
+let uiSink = () => {};
+const uiBridge = createExtensionUiBridge((request) => uiSink(request));
+const ws = attachWebSocket(server, { agent, hub, cfg, registry, settings, uiBridge, serverVersion: "test" });
+uiSink = (request) => ws.notifyUiRequest(request);
 await new Promise((r) => server.listen(0, "127.0.0.1", r));
 const port = server.address().port;
 
@@ -124,6 +129,32 @@ frames.length = 0;
 socket.send("not json");
 await new Promise((r) => setTimeout(r, 120));
 check("invalid JSON returns error frame", frames.some((f) => f.type === "error" && /invalid JSON/.test(f.message)));
+
+/* ── 5.5 HITL 反问真闭环：ctx.ui.input 经真 socket 广播 → 应答 → 唤醒 ── */
+frames.length = 0;
+const question = uiBridge.uiContext.input("您今年多大了？", "请输入年龄");
+await new Promise((r) => setTimeout(r, 120));
+const reqFrame = frames.find((f) => f.type === "extension_ui_request");
+check("ctx.ui.input 广播出 extension_ui_request 帧", reqFrame?.request?.method === "input",
+  reqFrame ? `method=${reqFrame.request.method}` : "no frame");
+if (reqFrame) {
+  socket.send(JSON.stringify({ type: "extension_ui_response", response: { id: reqFrame.request.id, value: "28" } }));
+}
+const answer = await Promise.race([question, new Promise((r) => setTimeout(() => r("__hang__"), 500))]);
+check("客户端应答唤醒 input()，拿到用户输入", answer === "28", `got ${String(answer)}`);
+
+// 超时 fail-safe：不回应时到点返回默认值 undefined，不永久阻塞。
+const timed = await Promise.race([
+  uiBridge.uiContext.input("等不到回答", undefined, { timeout: 40 }).then((v) => v === undefined),
+  new Promise((r) => setTimeout(() => r("__hang__"), 400)),
+]);
+check("反问超时返回默认值（不挂死）", timed === true, `got ${String(timed)}`);
+
+// 未知 id 的应答被拒：回一帧提示，不动任何挂起请求。
+frames.length = 0;
+socket.send(JSON.stringify({ type: "extension_ui_response", response: { id: "ghost", value: "x" } }));
+await new Promise((r) => setTimeout(r, 120));
+check("未知 id 的 extension_ui_response 回提示帧", frames.some((f) => f.type === "notice" && /no pending ui request/.test(f.text ?? "")));
 
 /* ── 6. 跨站 WS 升级被拒 ── */
 const evil = new WebSocket(`ws://127.0.0.1:${port}/ws`, { origin: "http://evil.example" });

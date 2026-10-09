@@ -22,6 +22,7 @@ import {
   type ProviderCatalogEntry,
   type ScopedModelRef,
 } from "./models.js";
+import type { SdkSettings } from "./agent.js";
 
 /** 内置工具三档：只开自定义 / 只读 / 完整编码 */
 export const BUILTIN_TOOL_MODES = ["off", "readonly", "coding"] as const;
@@ -117,6 +118,126 @@ export function resolveRuntimeConfig(
       RUNTIME_DEFAULTS.maxConsecutiveSnapshotDrops,
     ),
   };
+}
+
+/** 可选布尔：认 1/true/yes/on 与 0/false/no/off，其它/未设 → undefined（= 不覆盖）。 */
+function boolFromEnv(raw: string | undefined): boolean | undefined {
+  const value = clean(raw)?.toLowerCase();
+  if (!value) return undefined;
+  if (["1", "true", "yes", "on"].includes(value)) return true;
+  if (["0", "false", "no", "off"].includes(value)) return false;
+  return undefined;
+}
+
+/** 可选非负整数：未设或非法 → undefined（= 不覆盖 SDK 默认）。 */
+function intOptFromEnv(raw: string | undefined): number | undefined {
+  const value = clean(raw);
+  if (value === undefined) return undefined;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : undefined;
+}
+
+/** 逗号分隔列表：未设或空 → undefined。 */
+function listFromEnv(raw: string | undefined): string[] | undefined {
+  const value = clean(raw);
+  if (!value) return undefined;
+  const items = value.split(",").map((item) => item.trim()).filter(Boolean);
+  return items.length > 0 ? items : undefined;
+}
+
+/** 只接受白名单内的枚举值（小写），其它丢弃→ undefined。 */
+function enumFromEnv(raw: string | undefined, allowed: readonly string[]): string | undefined {
+  const value = clean(raw)?.toLowerCase();
+  return value && allowed.includes(value) ? value : undefined;
+}
+
+/**
+ * 把环境变量解析为 SDK 设置（compaction/retry/images/enabledModels）。全无则返回 `{}`，
+ * 此时 `buildAgent` 不建 SettingsManager → 行为与以往一致（不静默改现有语义）。
+ */
+export function resolveSdkSettings(
+  env: Record<string, string | undefined> = process.env,
+): SdkSettings {
+  const settings: SdkSettings = {};
+
+  const compactionEnabled = boolFromEnv(env.PI_COMPACTION_ENABLED);
+  const reserveTokens = intOptFromEnv(env.PI_COMPACTION_RESERVE_TOKENS);
+  const keepRecentTokens = intOptFromEnv(env.PI_COMPACTION_KEEP_RECENT_TOKENS);
+  if (compactionEnabled !== undefined || reserveTokens !== undefined || keepRecentTokens !== undefined) {
+    settings.compaction = {
+      ...(compactionEnabled !== undefined ? { enabled: compactionEnabled } : {}),
+      ...(reserveTokens !== undefined ? { reserveTokens } : {}),
+      ...(keepRecentTokens !== undefined ? { keepRecentTokens } : {}),
+    };
+  }
+
+  const retryEnabled = boolFromEnv(env.PI_RETRY_ENABLED);
+  const maxRetries = intOptFromEnv(env.PI_RETRY_MAX_RETRIES);
+  const baseDelayMs = intOptFromEnv(env.PI_RETRY_BASE_DELAY_MS);
+  if (retryEnabled !== undefined || maxRetries !== undefined || baseDelayMs !== undefined) {
+    settings.retry = {
+      ...(retryEnabled !== undefined ? { enabled: retryEnabled } : {}),
+      ...(maxRetries !== undefined ? { maxRetries } : {}),
+      ...(baseDelayMs !== undefined ? { baseDelayMs } : {}),
+    };
+  }
+
+  const autoResize = boolFromEnv(env.PI_IMAGES_AUTO_RESIZE);
+  const blockImages = boolFromEnv(env.PI_IMAGES_BLOCK);
+  if (autoResize !== undefined || blockImages !== undefined) {
+    settings.images = {
+      ...(autoResize !== undefined ? { autoResize } : {}),
+      ...(blockImages !== undefined ? { blockImages } : {}),
+    };
+  }
+
+  const enabledModels = listFromEnv(env.PI_ENABLED_MODELS);
+  if (enabledModels) settings.enabledModels = enabledModels;
+
+  // 出站超时（与入站服务器超时不同）。
+  const httpIdleTimeoutMs = intOptFromEnv(env.PI_HTTP_IDLE_TIMEOUT_MS);
+  if (httpIdleTimeoutMs !== undefined) settings.httpIdleTimeoutMs = httpIdleTimeoutMs;
+  const websocketConnectTimeoutMs = intOptFromEnv(env.PI_WS_CONNECT_TIMEOUT_MS);
+  if (websocketConnectTimeoutMs !== undefined) settings.websocketConnectTimeoutMs = websocketConnectTimeoutMs;
+
+  // 队列消费策略：只接受官方枚举值，其它值丢弃（不静默传给 SDK）。
+  const steeringMode = enumFromEnv(env.PI_STEERING_MODE, ["all", "one-at-a-time"]);
+  if (steeringMode) settings.steeringMode = steeringMode as "all" | "one-at-a-time";
+  const followUpMode = enumFromEnv(env.PI_FOLLOW_UP_MODE, ["all", "one-at-a-time"]);
+  if (followUpMode) settings.followUpMode = followUpMode as "all" | "one-at-a-time";
+
+  // 各思考档 token 预算。
+  const minimal = intOptFromEnv(env.PI_THINKING_BUDGET_MINIMAL);
+  const low = intOptFromEnv(env.PI_THINKING_BUDGET_LOW);
+  const medium = intOptFromEnv(env.PI_THINKING_BUDGET_MEDIUM);
+  const high = intOptFromEnv(env.PI_THINKING_BUDGET_HIGH);
+  if (minimal !== undefined || low !== undefined || medium !== undefined || high !== undefined) {
+    settings.thinkingBudgets = {
+      ...(minimal !== undefined ? { minimal } : {}),
+      ...(low !== undefined ? { low } : {}),
+      ...(medium !== undefined ? { medium } : {}),
+      ...(high !== undefined ? { high } : {}),
+    };
+  }
+
+  // 分支摘要预算。
+  const branchReserve = intOptFromEnv(env.PI_BRANCH_SUMMARY_RESERVE_TOKENS);
+  const branchSkip = boolFromEnv(env.PI_BRANCH_SUMMARY_SKIP);
+  if (branchReserve !== undefined || branchSkip !== undefined) {
+    settings.branchSummary = {
+      ...(branchReserve !== undefined ? { reserveTokens: branchReserve } : {}),
+      ...(branchSkip !== undefined ? { skipPrompt: branchSkip } : {}),
+    };
+  }
+
+  return settings;
+}
+
+/** PI_EXTENSION_PATHS → 官方扩展文件路径数组（逗号分隔）。 */
+export function resolveExtensionPaths(
+  env: Record<string, string | undefined> = process.env,
+): string[] {
+  return listFromEnv(env.PI_EXTENSION_PATHS) ?? [];
 }
 
 /** .env / 命令行合并后的配置 */

@@ -42,6 +42,7 @@ import { registerProviderKeyRoutes } from "./http/provider-key-routes.js";
 import type { ApprovalRulesStore } from "./approval/rules.js";
 import type { FileService } from "./files/service.js";
 import type { CompactionOutcome } from "./session-hub.js";
+import type { StoredConversation } from "./sessions/store.js";
 import type { ProviderKeyStore } from "./provider-keys.js";
 import { createRateLimiter, DEFAULT_RATE_RULES, type RateLimitRule } from "./http/rate-limit.js";
 import { getLogger } from "./log.js";
@@ -83,6 +84,8 @@ export interface CreateAppOptions {
     setModel(ref: string): Promise<Model<any>>;
     cycleModel?(direction?: "forward" | "backward"): Promise<Model<any> | undefined>;
     compactAcrossClients(instructions?: string): Promise<CompactionOutcome & { compacted: number }>;
+    /** 导入外部 .jsonl 会话（官方 SessionManager.forkFrom）。不传则端点不挂载。 */
+    importConversation?(sourcePath: string, title?: string): StoredConversation;
   };
   /**
    * Rate limits for expensive routes. `true` uses DEFAULT_RATE_RULES; pass a rule map to

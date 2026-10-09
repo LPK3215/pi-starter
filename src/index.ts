@@ -15,7 +15,7 @@ import { stdin, stdout } from "node:process";
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import { buildAgent } from "./agent.js";
 import { parseCliFlags } from "./cli-args.js";
-import { describeBuiltinToolMode } from "./config.js";
+import { describeBuiltinToolMode, resolveSdkSettings, resolveExtensionPaths } from "./config.js";
 import { toolResultPreview } from "./sse.js";
 
 const flags = parseCliFlags(process.argv.slice(2));
@@ -49,6 +49,9 @@ const {
   modelId: flags.model,
   builtinTools: flags.builtinTools,
   inMemory: false, // CLI 场景允许落盘，多轮对话可持久化
+  // SDK 设置透传 + 官方扩展路径装载（与 server 同源，均来自 env）。
+  sdkSettings: resolveSdkSettings(),
+  extensionPaths: resolveExtensionPaths(),
 });
 let currentModel = model;
 console.log(`✅ 就绪。模型：${currentModel.provider}/${currentModel.id}`);

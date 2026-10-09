@@ -62,6 +62,9 @@ export function inferCapabilities(name: string): string[] {
       return ["shell"];
     case "exec_jobs":
       return ["shell.observe"];
+    case "ask_user_question":
+      // 反问人类是安全交互（不改数据、不跑命令），单列能力便于 UI 分组与策略豁免。
+      return ["human.input"];
     default:
       return ["custom"];
   }

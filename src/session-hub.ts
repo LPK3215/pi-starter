@@ -16,8 +16,10 @@
  */
 
 import { existsSync } from "node:fs";
+import { resolve as resolveAbsPath } from "node:path";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import type { AgentSessionEvent, SessionManager } from "@earendil-works/pi-coding-agent";
+import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
 import type { Model, ImageContent } from "@earendil-works/pi-ai";
 import type { BuiltAgent } from "./agent.js";
 import type { RuntimeConfig } from "./config.js";
@@ -420,6 +422,17 @@ export class Conversation {
           type: "notice",
           level: "warn",
           text: `Retrying (${event.attempt}/${event.maxAttempts}) in ${event.delayMs}ms`,
+        });
+        break;
+      }
+      case "auto_retry_end": {
+        // 官方事件：重试结算。之前被 default 吞掉，前端只看到「Retrying」看不到「恢复了/最终失败」。
+        this.push({
+          type: "notice",
+          level: event.success ? "info" : "error",
+          text: event.success
+            ? `重试成功（第 ${event.attempt} 次恢复）`
+            : `重试失败（第 ${event.attempt} 次）${event.finalError ? `：${event.finalError}` : ""}`,
         });
         break;
       }
@@ -1425,6 +1438,41 @@ export class SessionHub {
      */
     private readonly options: { planMode?: PlanModeController } = {},
   ) {}
+
+  /**
+   * 导入一个外部 `.jsonl` 会话到本工作区（官方 `SessionManager.forkFrom`）。
+   *
+   * 官方 CLI/RPC 的 `importFromJsonl` 底层就是同一个 forkFrom 原语。这里把它接到脚手架的
+   * 会话目录与索引：源文件被完整复制进本脚手架的会话目录（而非直接引用外部路径），
+   * 登记进 catalog 后，走既有的 `openConversation` 即可打开。**不改正在对话的会话。**
+   *
+   * 安全：导入会读任意外部路径（管理员动作），非 loopback 部署仍须前置鉴权代理；
+   * 复制出的目标文件同样过 `assertSessionFileAllowed`（fail-closed，与恢复同一道闸）。
+   */
+  importConversation(sourcePath: string, title?: string): StoredConversation {
+    const dir = this.allowedSessionRoots[0];
+    if (!dir) throw new AppError("forbidden", "会话目录未启用，无法导入");
+    if (!this.catalog) throw badRequest("没有会话索引，无法登记导入的会话");
+    const abs = resolveAbsPath(sourcePath);
+    if (!abs.toLowerCase().endsWith(".jsonl")) throw badRequest("导入源必须是 .jsonl 会话文件");
+    if (!existsSync(abs)) throw new AppError("not_found", "导入源文件不存在");
+
+    // 官方原语：把源会话的完整历史 fork 到 targetCwd 的会话目录，生成一个全新 session id。
+    const forked = SessionManager.forkFrom(abs, this.cwd, dir);
+    const sessionFile = forked.getSessionFile();
+    if (!sessionFile) throw new AppError("internal", "导入未能生成会话文件");
+    assertSessionFileAllowed(sessionFile, this.allowedSessionRoots);
+
+    const entry: StoredConversation = {
+      sessionId: forked.getSessionId(),
+      sessionFile,
+      title: normalizeConversationTitle(title ?? "Imported conversation"),
+      updatedAt: Date.now(),
+      messageCount: forked.getBranch().length,
+    };
+    this.catalog.upsert(entry);
+    return entry;
+  }
 
   /**
    * 按索引里的会话 id 打开历史对话。客户端不提供路径。

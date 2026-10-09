@@ -23,6 +23,7 @@ import type { SettingsService } from "../settings.js";
 // Type-only: routes.ts is imported by app.ts, which also imports session-hub.ts. A value
 // import would create a runtime cycle for no benefit — the hub is only used as a type here.
 import type { CompactionOutcome } from "../session-hub.js";
+import type { StoredConversation } from "../sessions/store.js";
 
 /** Narrow a request body field, throwing a typed error instead of hand-writing 400s. */
 function requireString(value: unknown, field: string): string {
@@ -253,7 +254,10 @@ export function registerControlRoutes(
   options: {
     registry?: ToolRegistry;
     settings?: SettingsService;
-    hub?: { compactAcrossClients(instructions?: string): Promise<CompactionOutcome & { compacted: number }> };
+    hub?: {
+      compactAcrossClients(instructions?: string): Promise<CompactionOutcome & { compacted: number }>;
+      importConversation?(sourcePath: string, title?: string): StoredConversation;
+    };
   },
 ): void {
   const { registry, settings, hub } = options;
@@ -275,6 +279,18 @@ export function registerControlRoutes(
       }
       res.json(await hub.compactAcrossClients(instructions));
     }));
+
+    /**
+     * 导入外部 `.jsonl` 会话（官方 SessionManager.forkFrom）。复制进本工作区会话目录并登记索引，
+     * 返回可直接用作 `open_conversation` 的会话描述。未传 hub.importConversation 时不挂载。
+     */
+    if (hub.importConversation) {
+      app.post("/sessions/import", (req, res) => {
+        const path = requireString(req.body?.path, "path");
+        const title = typeof req.body?.title === "string" ? req.body.title : undefined;
+        res.json({ ok: true, conversation: hub.importConversation!(path, title) });
+      });
+    }
   }
 
   if (registry) {

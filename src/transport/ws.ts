@@ -25,6 +25,8 @@ import {
   type ServerMessage,
   type UiApproval,
   type UiCapabilities,
+  type UiExtensionRequest,
+  type UiExtensionResponse,
 } from "../protocol.js";
 import type { RuntimeConfig } from "../config.js";
 import type { BuiltAgent } from "../agent.js";
@@ -52,6 +54,13 @@ export interface WsRuntime {
     ): boolean;
     /** Conversation key that owns a pending request, so the response clears the right one. */
     conversationOf?(requestId: string): string | undefined;
+  };
+  /**
+   * HITL 反问桥的应答入口（可选；不装时收到 extension_ui_response 回提示帧）。
+   * 与 gate 同形：官方 `ctx.ui` 发出的请求按 id 挂起，客户端应答时由这里唤醒。
+   */
+  uiBridge?: {
+    resolve(id: string, response: UiExtensionResponse): boolean;
   };
   serverVersion: string;
   /** 指标注册表，缺省用全局单例。 */
@@ -130,6 +139,8 @@ export function customCommandNames(commands: WsCommandRegistry | undefined): str
 export interface WsServer {
   /** Broadcast an approval request to every connected client. */
   notifyApproval(request: UiApproval): void;
+  /** Broadcast a HITL question (official extension_ui_request) to every connected client. */
+  notifyUiRequest(request: UiExtensionRequest): void;
   /** Number of live connections. */
   readonly connectionCount: number;
   /**
@@ -570,6 +581,14 @@ class ClientConn {
           else this.cs?.active?.clearApproval();
           break;
         }
+        case "extension_ui_response": {
+          // 按 id 唤醒官方 ctx.ui 挂起的对话框。未知 id = 已超时/已被其它标签页答过/伪造。
+          const handled = runtime.uiBridge?.resolve(msg.response.id, msg.response);
+          if (!handled) {
+            this.send({ type: "notice", level: "warn", text: "no pending ui request for that id" });
+          }
+          break;
+        }
         case "get_settings":
           this.send({ type: "settings_state", settings: runtime.settings.get() });
           break;
@@ -783,6 +802,9 @@ export function attachWebSocket(server: HttpServer, runtime: WsRuntime): WsServe
   return {
     notifyApproval(request: UiApproval): void {
       for (const conn of conns) conn.send({ type: "approval_request", request });
+    },
+    notifyUiRequest(request: UiExtensionRequest): void {
+      for (const conn of conns) conn.send({ type: "extension_ui_request", request });
     },
     get connectionCount(): number {
       return conns.size;

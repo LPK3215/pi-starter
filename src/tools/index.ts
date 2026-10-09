@@ -14,8 +14,10 @@
 
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { currentTimeTool } from "./current-time.js";
+import { askUserQuestionTool } from "./ask-user-question.js";
 
 /** 脚手架静态工具清单：新工具往这里加 */
 export const allTools: ToolDefinition[] = [
   currentTimeTool,
+  askUserQuestionTool,
 ];

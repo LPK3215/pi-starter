@@ -20,6 +20,8 @@ import {
   READONLY_BUILTIN_TOOLS,
   describeBuiltinToolMode,
   resolveRuntimeConfig,
+  resolveSdkSettings,
+  resolveExtensionPaths,
 } from "./config.js";
 import { createSessionHub, type SessionHub } from "./session-hub.js";
 import { defaultSessionIndexFile, scaffoldSessionDir, sessionCatalog } from "./sessions/store.js";
@@ -32,11 +34,12 @@ import { join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { FileService } from "./files/service.js";
 import { ApprovalGate, approvalExtension } from "./approval/gate.js";
+import { createExtensionUiBridge } from "./extension-ui-bridge.js";
 import { attachWebSocket, type WsServer } from "./transport/ws.js";
 import { applyServerTimeouts } from "./http/hardening.js";
 import { getLogger } from "./log.js";
 import { createGracefulShutdown } from "./graceful.js";
-import type { UiApproval } from "./protocol.js";
+import type { UiApproval, UiExtensionRequest } from "./protocol.js";
 import { McpBridge } from "./mcp/bridge.js";
 import { PlanModeController, planModeExtension } from "./modes/plan-mode.js";
 import { createProviderKeyStore, defaultProviderKeysFile } from "./provider-keys.js";
@@ -102,6 +105,16 @@ const gate = new ApprovalGate({
   onRequest: (key, request) => approvalSink.handler(key, request),
 });
 
+// HITL 反问桥（官方 ctx.ui 的 WS 实现）。与 approvalSink 同样延迟绑定：ws 尚未 attach 时
+// 先占位，attach 后把 emit 接成 ws.notifyUiRequest 广播。桥实例在 buildAgent 前建好，
+// 以便把 uiContext 传进去绑到每个 session 的 extensionRunner。
+const uiSink: { handler: (request: UiExtensionRequest) => void } = {
+  handler: () => {
+    /* replaced once the WS server is attached */
+  },
+};
+const uiBridge = createExtensionUiBridge((request) => uiSink.handler(request));
+
 // The registry is built after the agent; expose it to the approval extension via a holder.
 let registryRef: ToolRegistry | undefined;
 // 同理：子代理工具要往每个连接推失败通知，MCP 工具要现取现用。
@@ -164,6 +177,11 @@ const agent = await buildAgent({
   allowedSessionRoots,
   // Honour settings.promptTemplate (empty → default order, identical to before).
   promptTemplate: settings.get().promptTemplate,
+  // HITL 反问：把官方 ctx.ui 桥到 WS（ask_user_question 工具靠它把问题推给人并等回答）。
+  extensionUi: uiBridge.uiContext,
+  // SDK 设置透传（compaction/retry/images/enabledModels）+ 官方扩展路径装载，均来自 env。
+  sdkSettings: resolveSdkSettings(),
+  extensionPaths: resolveExtensionPaths(),
   // MCP 工具在建会话的那一刻求值（见 agent.ts 的 resolveToolList）：SDK 的工具白名单在
   // 构造时固定，传静态数组会把开机那一刻连上的服务器 forever 冻住，之后改配置一律无效。
   dynamicTools: () => mcpRef?.toolDefinitions() ?? [],
@@ -331,9 +349,14 @@ const ws: WsServer = attachWebSocket(server, {
   registry,
   settings,
   gate,
+  uiBridge,
   serverVersion: SERVER_VERSION,
 });
 wsRef = ws;
+uiSink.handler = (request) => {
+  // 广播给已连接的客户端（与审批同形：官方协议无快照持久化，重连后由超时/断开兜底）。
+  ws.notifyUiRequest(request);
+};
 approvalSink.handler = (key, request) => {
   // Surface the request on the owning conversation so the authoritative snapshot carries it
   // (a reconnecting client must be able to recover the card from `pendingApproval`), then
@@ -369,6 +392,7 @@ server.listen(PORT, runtime.host, () => {
 const shutdown = createGracefulShutdown({
   steps: [
     { name: "approval-gate", run: () => gate.dispose() },
+    { name: "hitl-ui", run: () => uiBridge.dispose() },
     { name: "websocket", run: () => ws.close() },
     { name: "session-hub", run: () => hub.dispose() },
     { name: "app", run: () => dispose() },

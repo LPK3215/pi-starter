@@ -96,6 +96,33 @@ export interface UiApproval {
   preview: string;
 }
 
+/**
+ * HITL 反问请求：服务端 → 客户端推送。
+ *
+ * **逐字对齐官方 SDK 的 `RpcExtensionUIRequest`（`extension_ui_request`）**，只是把
+ * 传输从 stdin/stdout 换成 WS 帧。SDK 只给 TUI 和 RPC 子进程两种模式配了「谁来回答」，
+ * 本项目跑进程内 + WS，属于官方没附带实现的模式，所以由我们实现官方 `ExtensionUIContext`
+ * 接口、把弹窗按官方线形推到 WS。工具调 `ctx.ui.input()` 时走的就是这条通道。
+ *
+ * 只搬运脚手架真正需要的子集（四类对话框 + notify）；官方 `setStatus/setWidget/setTitle`
+ * 等 fire-and-forget 与 TUI 专属方法在桥里降级为 no-op（见 extension-ui-bridge.ts）。
+ */
+export type UiExtensionRequest =
+  | { id: string; method: "select"; title: string; options: string[]; timeout?: number }
+  | { id: string; method: "confirm"; title: string; message: string; timeout?: number }
+  | { id: string; method: "input"; title: string; placeholder?: string; timeout?: number }
+  | { id: string; method: "editor"; title: string; prefill?: string }
+  | { id: string; method: "notify"; message: string; notifyType?: "info" | "warning" | "error" };
+
+/**
+ * 客户端对某个对话框的应答（对齐官方 `extension_ui_response`）。
+ * `id` 必须与请求一致；`cancelled: true` 表示用户取消，对话框方法据此返回默认值。
+ */
+export type UiExtensionResponse =
+  | { id: string; value: string }
+  | { id: string; confirmed: boolean }
+  | { id: string; cancelled: true };
+
 /** Conversation summary for the cross-conversation list. */
 export interface UiConversation {
   id: string;
@@ -226,6 +253,8 @@ export type ClientMessage =
       /** decision = modify 时改写后的工具入参（JSON）。 */
       modifiedArgs?: Record<string, unknown>;
     }
+  // HITL 反问应答（对 extension_ui_request 的回复，按 id 匹配）
+  | { type: "extension_ui_response"; response: UiExtensionResponse }
   // 对话进行中的干预（idle 时会被拒绝，改用 prompt）
   | { type: "steer"; text: string; images?: { mimeType: string; data: string }[] }
   | { type: "follow_up"; text: string; images?: { mimeType: string; data: string }[] }
@@ -339,6 +368,8 @@ export type ServerMessage =
   | { type: "settings_state"; settings: Record<string, unknown> }
   | { type: "knowledge_hits"; query: string; hits: UiKnowledgeHit[] }
   | { type: "approval_request"; request: UiApproval }
+  /** HITL 反问：把官方 extension_ui_request 推到 WS，阻塞等 extension_ui_response。 */
+  | { type: "extension_ui_request"; request: UiExtensionRequest }
   | { type: "notice"; level: "info" | "warn" | "error"; text: string }
   | { type: "pong" }
   | { type: "error"; message: string };
@@ -403,6 +434,7 @@ export const CLIENT_MESSAGE_TYPES = [
   "set_tool_enabled",
   "search_knowledge",
   "approval_response",
+  "extension_ui_response",
   "set_plan_mode",
   "steer",
   "follow_up",

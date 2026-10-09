@@ -312,3 +312,34 @@ test("恢复：打开结果的 id 和索引不一致时丢掉这次会话", asyn
   assert.ok(catalog.get("real12345"), "id 对不上不是文件坏了，索引要留着");
   hub.dispose();
 });
+
+test("导入：外部 .jsonl 会话被复制进本工作区并登记，可被 openConversation 接回", async () => {
+  const { cwd, dir, catalog } = workspace();
+  const { agent } = makeAgent(dir, cwd);
+  const hub = new SessionHub(agent, resolveRuntimeConfig(), cwd, () => 6, 8, () => 0, [dir], catalog);
+  // 源文件在会话目录之外（模拟从别的项目导入）。
+  const source = writeSession(cwd, "src0000001", cwd);
+  const entry = hub.importConversation(source, "导入的对话");
+  assert.ok(entry.sessionFile.startsWith(dir), "导入产物必须落在本脚手架会话目录内");
+  assert.notEqual(entry.sessionId, "src0000001", "导入生成全新 session id，不复用源 id");
+  assert.equal(catalog.get(entry.sessionId)?.title, "导入的对话");
+
+  // 走既有恢复链路能打开（路径只从索引查，不接客户端递的路径）。
+  await hub.attach("c1", () => {});
+  const opened = await hub.openConversation("c1", entry.sessionId);
+  assert.equal(opened.id, entry.sessionId);
+  hub.dispose();
+});
+
+test("导入：非 .jsonl / 不存在的源被拒；未启会话目录时禁止", () => {
+  const { cwd, dir, catalog } = workspace();
+  const { agent } = makeAgent(dir, cwd);
+  const hub = new SessionHub(agent, resolveRuntimeConfig(), cwd, () => 6, 8, () => 0, [dir], catalog);
+  assert.equal(expectAppError(() => hub.importConversation(join(cwd, "a.txt"))).httpStatus, 400);
+  assert.equal(expectAppError(() => hub.importConversation(join(dir, "missing.jsonl"))).httpStatus, 404);
+  hub.dispose();
+
+  const noDir = new SessionHub(agent, resolveRuntimeConfig(), cwd, () => 6, 8, () => 0, [], catalog);
+  assert.equal(expectAppError(() => noDir.importConversation(join(cwd, "x.jsonl"))).httpStatus, 403);
+  noDir.dispose();
+});

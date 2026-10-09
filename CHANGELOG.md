@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **HITL 反问（`ask_user_question`，走官方 `ctx.ui`）**：补齐"智能体在回合中途向人类发问、阻塞等输入再继续"的能力。**不自己造等待/回收机制**——官方 SDK 原生提供 `ExtensionUIContext`（`ctx.ui.input/select/confirm/editor`，带 `timeout`/`AbortSignal`），但只给 TUI 与 RPC 子进程两种模式配了"谁来回答"；本项目跑进程内 + WS，属官方未附带实现的模式，故补一个 WS 版实现。
+  - **桥**：`src/extension-ui-bridge.ts` 逐字复刻官方 `rpc-mode` 的 `createDialogPromise` 语义（`id`→resolver 挂起表、超时/断开/取消一律回官方默认值 undefined/false，**fail-safe 不挂死**，定时器刻意不 unref）；只搬运四类对话框 + notify，其余 TUI 专属方法按官方 RPC 模式降级为 no-op。
+  - **协议**：`protocol.ts` 新增 `extension_ui_request`（服务端→客户端）/ `extension_ui_response`（客户端→服务端）两帧，线形逐字对齐官方 `RpcExtensionUIRequest/Response`；同步进内置命令完备性断言。
+  - **工具**：`src/tools/ask-user-question.ts` 用 `defineTool` 调 `ctx.ui.*`，`ctx.hasUI` 为假时优雅降级（提示模型改用正常回复收尾），取消/超时返回"未作答"。登记进 `allTools`（三档白名单自动放行 + `human.input` 能力）；`session-hub.ts` 里早已存在的 `ask_user_question` 看门狗豁免占位，至此有了真身。
+  - **接线**：`buildAgent({ extensionUi })` 在建会话后用 `extensionRunner.setUIContext(uiContext, "rpc")` 注入（**不用 `session.bindExtensions`——后者每次重放 `session_start` 并跑 `resources_discover`，会给审计/守卫/审批重复触发启动逻辑**）；`server.ts` 建桥 + 延迟广播（同 `approvalSink`）+ 停机 `dispose`；`ws.ts` 加 `notifyUiRequest` 广播 + `case "extension_ui_response"` 路由到 `uiBridge.resolve`。**审批链路一行未动**，二者共用同一等待范式但互不依赖。
+  - **验证**：`extension-ui-bridge.test.ts` 10 项单测（应答/id 匹配/取消/超时/断开/回收/notify，改回缺陷即变红）；`smoke` 加 4 项真 WS 闭环（`ctx.ui.input`→广播 `extension_ui_request`→客户端应答→唤醒拿到输入 / 超时回默认 / 未知 id 回提示帧），17→21。`npm run verify` 全绿。
+  - **边界（诚实标注）**：前端未接（本项目当前只完善后端）——协议与后端能力已完备，任何 WS 客户端发 `extension_ui_response` 即可应答，但 `public/index.html` 的 SSE 版尚不吃这套 WS 帧，无可视化弹窗。UI 反问**未做快照持久化**（不像审批把待决卡片存进 `pendingApproval`）：断线重连期间的未答问题靠超时/断开兜底。
+- **官方 SDK 能力面补齐（第二轮对照，按 `官方SDK接口文档.md` 逐节实证核对）**：把官方提供、脚手架未接的能力全部补齐。字段名一律以 `dist/*.d.ts` 为准（文档正文的 Settings 字段名与真源有出入，已按真实定义实现）。
+  - **SDK 设置透传（A）**：`buildAgent({ sdkSettings })` 把官方 `Settings` 的 `compaction{enabled,reserveTokens,keepRecentTokens}`/`retry{enabled,maxRetries,baseDelayMs}`/`images{autoResize,blockImages}`/`enabledModels` 交给官方 `SettingsManager`（`create`+`applyOverrides`）并注入 `createAgentSession` 与 resource loader，从而真正驱动自动压缩阈值/LLM 重试退避/图像降采屏蔽/模型白名单。**默认不配则不建 SettingsManager、行为逐字不变**。`config.ts` 新增 `resolveSdkSettings`/`resolveExtensionPaths`，由 `PI_COMPACTION_*`/`PI_RETRY_*`/`PI_IMAGES_*`/`PI_ENABLED_MODELS`/`PI_EXTENSION_PATHS` 驱动，server 与 CLI 同源接入。
+  - **导入外部会话（B）**：`SessionHub.importConversation()` 用官方 `SessionManager.forkFrom` 把外部 `.jsonl` 完整复制进本脚手架会话目录（生成全新 id）并登记索引，随后走既有 `openConversation` 接回——即官方 CLI/RPC `importFromJsonl` 的底层原语。新增 `POST /sessions/import`。复制出的目标文件同样过 `assertSessionFileAllowed`（fail-closed，与恢复同一道闸）。
+  - **官方扩展路径装载（C）**：`buildAgent({ extensionPaths })` → 官方 `additionalExtensionPaths`，与 `extraExtensions` 内联工厂并列的第二条官方路（`noExtensions` 只关 `~/.pi` 扫描，不影响显式路径）。
+  - **官方扩展钩子接缝（D/E）**：`src/extensions/provider-hooks.example.ts` 演示 `before_provider_headers`（原地注入头）/ `before_provider_request`（返回替换 payload）；`src/extensions/input-resources.example.ts` 演示 `input`（transform/handled）/ `resources_discover`（运行期动态贡献 skill/prompt 路径）。均默认不接线、类型对齐官方事件、附行为测试。
+  - **工具细粒度（F）**：`ask_user_question` 设官方 `executionMode: "sequential"`（HITL 阻塞等人类，不与并发工具抢答）；`renderCall/renderResult` 属 TUI 专属、无头后端不适用（官方 RPC 模式亦降级），故不接。
+  - **验证**：`config.test.ts` +4（resolveSdkSettings/resolveExtensionPaths）、`extensions/hooks.example.test.ts` +4（钩子行为）、`sessions/resume.test.ts` +2（导入正/反路径）；`npm run verify` 全链绿（328 测试 / smoke 21/21 / build / 嵌入自检）。
+- **官方能力面补齐（对照第三轮）**：
+  - **Settings 透传扩面**：`buildAgent({ sdkSettings })` 在上一轮基础上再加 `httpIdleTimeoutMs`（**出站 provider HTTP 空闲超时**，与入站 `hardening.ts` 服务器超时不同）/`websocketConnectTimeoutMs`/`steeringMode`/`followUpMode`/`thinkingBudgets{minimal,low,medium,high}`/`branchSummary{reserveTokens,skipPrompt}`；env 驱动 `PI_HTTP_IDLE_TIMEOUT_MS`/`PI_WS_CONNECT_TIMEOUT_MS`/`PI_STEERING_MODE`/`PI_FOLLOW_UP_MODE`/`PI_THINKING_BUDGET_*`/`PI_BRANCH_SUMMARY_*`；枚举值非法即丢弃。`transport` 因类型不宜校验，暂不接（默认即可）。
+  - **`tool_result` 结果脱敏接缝**：`src/extensions/tool-result-redaction.example.ts` 接官方五步管道第 5 步 `tool_result`，在工具结果**回传给模型前**按正则替掉密钥/路径回显（补 `http/errors.ts` 只护 HTTP 响应、管不到发给模型的 tool 结果这一面）。默认不接线、可限定工具白名单、附行为测试。
+  - **事件翻译补全**：`auto_retry_end`（官方重试结算事件）之前被 `onEvent` 的 `default` 吐掉，现译成 notice（"重试成功（第 N 次恢复）" / "重试失败：..."）。
+  - **文档修正**：`docs/官方SDK接口文档.md` §7 Settings 字段名按 `dist/*.d.ts` 校正（初版凭印象写的 `compaction.threshold`/`retry.maxAttempts`/`images.maxDimension` 等与真源不符，`disabledTools` 实为脚手架自设项），补全真实字段与覆盖状态。
+  - **验证**：`config.test.ts` +2（新增字段/枚举校验）、`hooks.example.test.ts` +2（tool_result 脱敏）；已跑 `npm run verify:all`（含真进程 e2e：握手→跑完一轮→SIGKILL→重启恢复→脏索引过滤→工具调用配对恢复）全链绿——**332 测试 / 0 失败 / smoke 21/21 / build / 嵌入自检**。
+
 ### Documentation
 
 - **可视化资产与 README 同步**：`generate_architecture.mjs` 补上官方 RPC 入口、检索层、新 env（`PI_SCOPED_MODELS`/`PI_KNOWLEDGE_RETRIEVAL`/`PI_EMBEDDINGS_*`）；新增 `scripts/visualization/generate_retrieval.mjs` → `docs/knowledge-retrieval.svg`（可插拔 RAG 检索管线，后端类名从源码动态读取）；中英 README 架构图注与知识库节同步引用新图，章节结构一一对齐。徽章均为 shields.io 动态端点（版本自动跟随）；SVG 资产英文单版。
