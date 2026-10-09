@@ -1,3 +1,11 @@
+/**
+ * Link targets the elements take from a model or a tool.
+ *
+ * React 19 refuses a `javascript:` href but React 18 only warns, and neither
+ * blocks `data:` or `vbscript:`, so an element passes a caller's URL through
+ * here before it becomes an `href` or a navigation target.
+ */
+
 const RELATIVE = /^(?:[/?#]|\.{1,2}\/)/;
 
 const ALLOWED_PROTOCOLS = new Set(["http:", "https:", "mailto:"]);

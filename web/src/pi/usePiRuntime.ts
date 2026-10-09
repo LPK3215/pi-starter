@@ -40,9 +40,18 @@ function toolParts(tools: ToolView[]) {
     type: "tool-call" as const,
     toolCallId: t.toolCallId,
     toolName: t.toolName,
-    // 后端不下发入参（UiMessage 里没有），argsText 留空，避免编造。
+    // 入参后端不下发，argsText 留空，避免编造。
     argsText: "",
-    result: t.output || undefined,
+    // 输出只有长工具会通过 tool_delta 流式回传；瞬时工具没有 output 时不能留空，
+    // 否则官方 ToolFallback 会停在“Waiting on tool”并渲染一个空面板（实测如此）。
+    // 这里只写确实知道的事实：完成状态与耗时，不假装是工具输出。
+    result:
+      t.output ||
+      (t.phase === "end"
+        ? typeof t.durationMs === "number"
+          ? `已完成（${t.durationMs}ms，后端未回传输出）`
+          : "已完成（后端未回传输出）"
+        : undefined),
     isError: t.isError,
   }));
 }
@@ -68,6 +77,27 @@ export function usePiRuntime(): ExternalStoreAdapter<UiMessage> {
   const snap = usePiSnapshot();
   const messages = useMemo(() => projectMessages(snap), [snap]);
 
+  /**
+   * 工具 part 该挂到哪一条消息上。
+   *
+   * 不能只挂「正在流式的尾条」：后端把工具轮存成一条**空文本的 assistant 消息**，
+   * 而 tool_status 到达时那条消息往往已经定稿（不再是流式尾条），结果官方
+   * ToolGroup / chain-of-thought 永远收不到 tool part（实测确实不渲染）。
+   * 按后端的真实形状找：优先最后一条空文本 assistant 消息，没有再退回流式尾条。
+   */
+  const toolHostIdx = useMemo(() => {
+    if (snap.tools.length === 0) return -1;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i]!;
+      if (m.role === "assistant" && !m.text) return i;
+    }
+    const streaming = snap.runActive || (snap.state?.isStreaming ?? false);
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (streaming && messages[i]!.role === "assistant") return i;
+    }
+    return -1;
+  }, [messages, snap.tools.length, snap.runActive, snap.state?.isStreaming]);
+
   const convertMessage = useCallback(
     (message: UiMessage, idx: number): ThreadMessageLike => {
       const isStreamingTail = idx === messages.length - 1 && (snap.runActive || (snap.state?.isStreaming ?? false));
@@ -76,10 +106,9 @@ export function usePiRuntime(): ExternalStoreAdapter<UiMessage> {
       // 工具有轨迹只可能挂在 assistant 消息上：runtime 硬性禁止 user/system 带 status，
       // 而发送后一轮开始时最后一条恰恰是刚发出去的用户消息（快照已含），这里不区分会直接抛错。
       const isAssistantTail = isStreamingTail && message.role === "assistant";
-      // 工具只挂在**正在流式的那条** assistant 消息上（官方 ToolGroup / Reasoning 因此生效）。
-      // 定稿后消息里不再有 tool part（后端不持久化工具历史），运行轨迹改由 App 层的
-      // ToolTrace 常驻显示，不在这里伪造“知道哪条消息调了什么”的归属。
-      const tools = isAssistantTail ? snap.tools : [];
+      // 工具 part 只给 toolHostIdx 那一条（上面的规则：后端形状里的工具轮）。
+      // 它一旦有 part，就不再用“（本轮无文本输出）”占位：官方 ToolGroup 会直接显示工具名。
+      const tools = idx === toolHostIdx ? snap.tools : [];
       if (tools.length > 0) {
         parts.push(...toolParts(tools));
       }
@@ -99,7 +128,7 @@ export function usePiRuntime(): ExternalStoreAdapter<UiMessage> {
         status: isAssistantTail ? { type: "running" } : undefined,
       };
     },
-    [messages.length, snap.runActive, snap.state?.isStreaming, snap.state?.conversationId, snap.tools, snap.streamThinking],
+    [messages.length, toolHostIdx, snap.runActive, snap.state?.isStreaming, snap.state?.conversationId, snap.tools, snap.streamThinking],
   );
 
   return useMemo<ExternalStoreAdapter<UiMessage>>(

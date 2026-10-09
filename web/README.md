@@ -32,10 +32,11 @@ npm run web        # Express 直接把应用挂在 /，同源提供 /ws（static
 | `src/pi/client.ts` | WS 客户端。`hello`→`ready` 握手、`snapshot` / `snapshot_delta` 的 `rev`/`baseRev` 修订链与断链自愈、`message_delta` 流式缓冲、`tool_status`/`tool_delta` 聚合、退避重连 |
 | `src/pi/usePiRuntime.ts` | 把后端快照翻译成 assistant-ui 的 `ExternalStoreAdapter`（含多对话 `adapters.threadList`） |
 
-其余是 UI：当前用的是 **assistant-ui 官方 registry 组件**（`shadcn add @assistant-ui/thread @assistant-ui/thread-list`，base-nova 主题），
-入口是 `src/components/assistant-ui/elements/thread.aui.tsx`；`src/components/thread.tsx` 是我最初手写的 primitives 版，
-**保留作回退与对照**（在 `App.tsx` 改一行 import 就能切回）。`pi-panels.tsx` 两种 UI 下都在用：运行轨迹条、审批卡片、
-HITL 反问弹窗、控制面、对话列表。
+其余是 UI：当前用的是 **assistant-ui 官方 registry 组件**（base-nova 主题），对话区
+`src/components/assistant-ui/elements/thread.aui.tsx`、会话列表 `thread-list.aui.tsx`（含 New / 搜索 / 分组条目）；
+`src/components/thread.tsx` 与 `pi-panels.tsx` 里的 `ConversationList` 是我最初手写的版本，
+**保留作回退与对照**（在 `App.tsx` 改 import 就能切回）。`pi-panels.tsx` 仍在用：运行轨迹条、审批卡片、
+HITL 反问弹窗、控制面。
 
 接官方组件时有两个必须知道的坑：它的落盘目录与文件内部 import 基准不一致，要按**每个文件自己的 import 行**归位（直接
 搬到一个目录会得到一批 TS2307）；Base UI 的 Tooltip 必须有 Provider 祖先，所以 `App.tsx` 里包了一层 `TooltipProvider`。
@@ -71,6 +72,19 @@ assistant-ui 接自定义后端有四条路，这里取 ExternalStore，因为**
 给 Vite 代理加 `changeOrigin: true` 会把转发 Host 改成后端地址，于是**浏览器的握手被 403 拒掉，
 而不带 `Origin` 的脚本客户端照样能连**——"脚本能连、浏览器不能连"的不对称现象就来自这里。
 `vite.config.ts` 里刻意透传原始 Host。
+
+## 与官方一致性校验（别靠眼看）
+
+官方组件是**落盘源码**，会随上游更新，也会被 CLI 改写。两个脚本把“和官方一样”变成可验证命题：
+
+```bash
+npm run check:official   # 逐字节比对本地与 registry 内容；有修改/缺失则退出码 1
+npm run sync:official    # 按 registry 声明的路径与内容原样重写
+```
+
+为什么需要：`shadcn add` 会改写 import 路径并把文件平铺到 `src/components/`，实测第一次比对出 15 处差异
+（包含一处 Base UI `render` 与官方 `asChild` 的组件风味差异）。先跑 `sync:official` 再跑 `check:official`，
+应得到“一致 17 / 内容不同 0 / 本地缺失 0”。shadcn 内置件（button/skeleton/tooltip 等）不属本 registry，不比对。
 
 ## 链路自检
 

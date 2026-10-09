@@ -1,10 +1,11 @@
 import { Component, useEffect, type ReactNode } from "react";
 import { AssistantRuntimeProvider, useExternalStoreRuntime } from "@assistant-ui/react";
 
-import { ApprovalCard, ConnectionBadge, ControlBar, ConversationList, HitlDialog, NoticeBar, ToolTrace } from "@/components/pi-panels";
+import { ApprovalCard, ConnectionBadge, ControlBar, HitlDialog, NoticeBar, ToolTrace } from "@/components/pi-panels";
 // 官方 registry 组件（shadcn add @assistant-ui/thread）。我自己的那份留在
 // @/components/thread.tsx 作为回退点，两者可单独换回来对比。
 import { Thread } from "@/components/assistant-ui/elements/thread.aui";
+import { ThreadList } from "@/components/assistant-ui/elements/thread-list.aui";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { piClient } from "@/pi/client";
 import { usePiRuntime, usePiSnapshot } from "@/pi/usePiRuntime";
@@ -69,7 +70,10 @@ function Shell() {
       <NoticeBar />
       <ControlBar />
       <div className="flex min-h-0 flex-1">
-        <ConversationList />
+        {/* 官方 ThreadList（含 New / Search / Items），不再用自研列表——保证与官方样貌一致。 */}
+        <aside className="w-64 shrink-0 overflow-y-auto border-e border-border bg-sidebar p-2">
+          <ThreadList />
+        </aside>
         <main className="flex min-w-0 flex-1 flex-col">
           <div className="min-h-0 flex-1">
             <Thread />
