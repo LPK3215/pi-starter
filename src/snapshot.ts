@@ -13,8 +13,15 @@ import type { ServerMessage, UiMessage, UiState } from "./protocol.js";
 export interface SnapshotEmitterOptions {
   /** Current conversation id, used to detect conversation switches. */
   convId: () => string;
-  /** Build the authoritative state (messages array must use stable object references). */
-  buildState: () => UiState;
+  /**
+   * Build the authoritative state (messages array must use stable object references).
+   *
+   * `rev` is deliberately excluded: the revision chain is owned by this emitter (`++this.rev`),
+   * so a builder-supplied value would only ever be overwritten — and a hard-coded `rev: 0` in
+   * the builder read like a real revision while being dead. The emitter injects it in both
+   * branches instead.
+   */
+  buildState: () => Omit<UiState, "rev">;
   /** Push a message to the transport. */
   emit: (msg: ServerMessage) => void;
   /** Normal throttle window (ms). */
@@ -114,7 +121,7 @@ export class SnapshotEmitter {
 }
 
 /** Drop messages/streamingMessage and stamp rev for the delta light-state. */
-function stripMessages(state: UiState, rev: number) {
+function stripMessages(state: Omit<UiState, "rev">, rev: number) {
   const { messages: _messages, streamingMessage: _streaming, ...rest } = state;
   return { ...rest, rev };
 }

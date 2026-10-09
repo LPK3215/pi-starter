@@ -49,6 +49,7 @@ import type { ProviderKeyStore } from "./provider-keys.js";
 import { createRateLimiter, DEFAULT_RATE_RULES, type RateLimitRule } from "./http/rate-limit.js";
 import { getLogger } from "./log.js";
 import { Metrics, metrics as defaultMetrics } from "./metrics.js";
+import { toUiModel } from "./models.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -261,9 +262,7 @@ export function createApp(options: CreateAppOptions): CreateAppResult {
       provider: active.provider,
       modelId: active.id,
       models: models.map((item) => ({
-        provider: item.provider,
-        id: item.id,
-        name: item.name,
+        ...toUiModel(item),
         current: item.provider === active.provider && item.id === active.id,
       })),
       builtinTools,

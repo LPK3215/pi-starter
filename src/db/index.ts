@@ -325,17 +325,30 @@ export function openDatabase(options: OpenDatabaseOptions = {}): DatabaseStore {
       }
       // Hard cap on returned rows. `SELECT * FROM huge_table` would otherwise pull the whole
       // table into memory and then into the LLM context in one tool result.
+      //
+      // 用 `iterate()` 边取边判，只物化前 `maxRows` 行；其余行只计数（`totalRows` 仍要报
+      // 真实总数，这是对调用方的既有承诺）。原实现 `stmt.all()` 会把整张表**全部物化**，
+      // 行数上限只限制了「返回多少行」，没限制「载入多少行」——大表直接打爆内存。
       const stmt = db.prepare(sql);
-      const raw = stmt.all(...params) as Record<string, SQLOutputValue>[];
-      const truncated = raw.length > maxRows;
-      const rows = (truncated ? raw.slice(0, maxRows) : raw).map((row) => ({ ...row }));
+      const rows: Record<string, SQLOutputValue>[] = [];
+      let totalRows = 0;
+      let truncated = false;
+      for (const row of stmt.iterate(...params) as Iterable<Record<string, SQLOutputValue>>) {
+        totalRows += 1;
+        if (rows.length < maxRows) {
+          rows.push({ ...row });
+        } else {
+          // 超出上限：不再保留，但继续数完，保证 totalRows 是真实总数。
+          truncated = true;
+        }
+      }
       const columns =
         rows[0] !== undefined
           ? Object.keys(rows[0])
           : typeof stmt.columns === "function"
             ? stmt.columns().map((col) => col.name)
             : [];
-      return { columns, rows, truncated, totalRows: raw.length };
+      return { columns, rows, truncated, totalRows };
     },
     close() {
       if (db.isOpen) db.close();

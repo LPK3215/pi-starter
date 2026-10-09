@@ -21,6 +21,7 @@
 
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { getLogger } from "../log.js";
+import { childProcessEnv } from "../child-env.js";
 
 /** 一个 MCP 工具的声明（对应 MCP 的 `tools/list` 条目）。 */
 export interface McpToolDescriptor {
@@ -40,6 +41,13 @@ export interface McpClientOptions {
   /** 启动握手超时（ms）。默认 15s。 */
   startupTimeoutMs?: number;
 }
+
+/**
+ * SIGTERM 之后等多久升级到 SIGKILL。
+ *
+ * 宽限期要够 MCP server 收尾（关连接、落盘），又不能长到把停机时间拖成秒级。
+ */
+const MCP_KILL_ESCALATION_MS = 2000;
 
 /** 注入点：测试可以塞一个假进程，不真的拉子进程。 */
 export type SpawnFn = (
@@ -68,7 +76,8 @@ export interface McpProcessHandle {
 
 const realSpawn: SpawnFn = (command, args, options) => {
   const child: ChildProcessWithoutNullStreams = spawn(command, [...args], {
-    env: options.env ? { ...process.env, ...options.env } : process.env,
+    // 只继承剔除密钥后的宿主环境；服务器自己的凭据由调用方经 options.env 显式传入。
+    env: { ...childProcessEnv(), ...(options.env ?? {}) },
     cwd: options.cwd,
     stdio: ["pipe", "pipe", "pipe"],
     windowsHide: true,
@@ -110,6 +119,8 @@ export class McpClient {
   private disposed = false;
   private ready = false;
   private exitInfo: string | undefined;
+  /** 当前子进程是否已退出（由 `onExit` / `onSpawnError` 维护，用于 SIGKILL 升级判断）。 */
+  private childExited = false;
 
   constructor(private readonly options: McpClientOptions) {}
 
@@ -146,6 +157,7 @@ export class McpClient {
       throw new Error(`无法启动 ${this.options.command}: ${err instanceof Error ? err.message : String(err)}`);
     }
     this.child = child;
+    this.childExited = false;
     child.onStdout((chunk) => this.onStdout(chunk));
     child.onStderr((chunk) => this.onStderr(chunk));
     child.onExit((code, signal) => this.onExit(code, signal));
@@ -226,11 +238,25 @@ export class McpClient {
     }
     try {
       // SIGTERM first: a well-behaved MCP server exits on it and can clean up.
-      // SIGKILL is the escalation when it does not.
       child.kill("SIGTERM");
     } catch {
-      /* already dead */
+      return; // already dead
     }
+    // SIGKILL escalation：忽略 SIGTERM 的 MCP server（自带信号处理的很常见）会变成孤儿进程
+    // ——父进程退出后它还在跑，且占着端口/文件句柄。光发 SIGTERM 不叫"升级"。
+    // 定时器 unref：不能为了等一个即将被杀的进程而拖住事件循环退出。
+    const escalation = setTimeout(() => {
+      // 已退出就什么都不做（`onExit` 会置位）。`McpProcessHandle` 刻意不暴露 exitCode，
+      // 所以退出状态由自己的 onExit 回调维护，而不是去读子进程字段。
+      if (!this.childExited) {
+        try {
+          child.kill("SIGKILL");
+        } catch {
+          /* already gone */
+        }
+      }
+    }, MCP_KILL_ESCALATION_MS);
+    escalation.unref?.();
   }
 
   private onStdout(chunk: string): void {
@@ -288,6 +314,7 @@ export class McpClient {
   private onExit(code: number | null, signal: NodeJS.Signals | null): void {
     this.ready = false;
     this.child = undefined;
+    this.childExited = true;
     this.exitInfo = signal
       ? `exited on ${signal}`
       : `exited with code ${code ?? "unknown"}`;
@@ -305,6 +332,7 @@ export class McpClient {
   private onSpawnError(err: Error): void {
     this.ready = false;
     this.child = undefined;
+    this.childExited = true;
     this.exitInfo = `failed to start: ${err.message}`;
     this.failAllPending(new Error(`MCP server ${this.exitInfo}`));
   }

@@ -227,8 +227,10 @@ export class McpBridge {
       requestTimeoutMs: this.options.requestTimeoutMs,
     });
     try {
-      if (this.options.spawn) client.start(this.options.spawn);
-      else await client.start();
+      // 必须 await：`start()` 是异步握手，漏掉 await 会让 rejection 逃出这个 catch 变成
+      // unhandled rejection，同时下面的 `listTools()` 会在子进程尚未就绪时开跑。
+      // `spawn` 省略时 `start()` 自己回落真实 spawn（默认参数在传入 undefined 时生效）。
+      await client.start(this.options.spawn);
     } catch (err) {
       client.dispose();
       throw new Error(

@@ -178,7 +178,8 @@ export function registerFileRoutes(app: Express, options: FileRoutesOptions = {}
         res.status(409).json({ error: "目标已存在，需显式指定 overwrite" });
         return;
       }
-      res.json(service.write(requirePath(path), buf.toString("utf8")));
+      // 走二进制写入路径：`write` + `toString("utf8")` 会把非 UTF-8 字节替换成 U+FFFD。
+      res.json(service.writeBinary(requirePath(path), buf));
     }),
   );
 }

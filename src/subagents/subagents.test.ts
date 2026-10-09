@@ -275,6 +275,25 @@ test("子代理：截断纯函数保留原文（未超限时零改动）", () =>
   );
 });
 
+/**
+ * 回归：截断结果曾**超过**声明的 `maxChars`。
+ *
+ * 返回值是 `half + marker + half`，marker 没算进预算，于是「上限」实际是
+ * 上限 + marker 长度。上限必须是真上限，否则它在提示词预算里就是个假数。
+ */
+test("子代理：截断结果绝不超过声明的 maxChars（marker 也算进预算）", () => {
+  const long = "头".repeat(50) + "x".repeat(5000) + "尾".repeat(50);
+  for (const max of [100, 200, 1000]) {
+    const out = truncateSubagentOutput(long, max);
+    assert.equal(out.truncated, true);
+    assert.ok(out.text.length <= max, `len=${out.text.length} 必须 <= ${max}`);
+    assert.equal(out.originalLength, long.length, "原始长度始终如实上报");
+  }
+  // 上限小到连 marker 都放不下时：硬截断优先，仍然不能超限。
+  const tiny = truncateSubagentOutput(long, 5);
+  assert.ok(tiny.text.length <= 5, `len=${tiny.text.length} 必须 <= 5`);
+});
+
 test("子代理：并发上限是排队而不是失败", async () => {
   const created: FakeSubagent[] = [];
   const tool = createDelegateTool({
@@ -292,6 +311,33 @@ test("子代理：并发上限是排队而不是失败", async () => {
   for (const result of results) assert.equal((result as TextResult).details.error, undefined);
   assert.equal(created.length, 3, "every dispatch must eventually run");
   assert.ok(created.every((sub) => sub.disposed));
+});
+
+/**
+ * 回归：等待队列曾无上限。
+ *
+ * 并发封顶后多出来的派发请求是排队（合理），但队列本身必须有界——否则模型一轮连派几十个
+ * 会堆起一串永不 resolve 的 Promise。超限必须明确回绝，而不是假装它排上了队。
+ */
+test("子代理：等待队列有上限，超出即回绝而不是无限堆积", async () => {
+  const created: FakeSubagent[] = [];
+  const tool = createDelegateTool({
+    createSession: async () => {
+      const sub = new FakeSubagent(`sub-${created.length + 1}`, "ok", { delayMs: 30 });
+      created.push(sub);
+      return sub;
+    },
+    maxConcurrent: 1,
+    maxQueued: 1,
+  });
+  // 1 个在跑 + 1 个排队 = 满；第 3 个必须被回绝。
+  const results = await Promise.all(
+    [1, 2, 3].map((i) => tool.execute(`c${i}`, { task: `t${i}` }, undefined, undefined, {} as never)),
+  );
+  const rejected = results.filter((r) => (r as TextResult).details.error === true);
+  assert.equal(rejected.length, 1, "exactly the over-cap dispatch must be refused");
+  assert.match(textOf(rejected[0] as TextResult), /队列已满/);
+  assert.equal(created.length, 2, "the refused dispatch must not have created a session");
 });
 
 test("子代理：提示词要求自包含与只回结论", () => {

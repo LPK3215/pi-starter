@@ -47,7 +47,7 @@
 | HTTP | [Express](https://expressjs.com/) | `^5.2.1` | 单进程；Web 端每连接多对话并发 |
 | Schema | [TypeBox](https://www.npmjs.com/package/typebox) | `^1.1.39` | 工具 `parameters` 定义 |
 | WebSocket | [ws](https://www.npmjs.com/package/ws) | `^8.18.0` | 快照驱动的双向传输（`transport/ws.ts`） |
-| 测试 | Node 内置 test runner，走 `tsx --test` | `^4.22.4` | 37 个测试文件 · 308 用例，不调模型 |
+| 测试 | Node 内置 test runner，走 `tsx --test` | `^4.22.4` | 42 个测试文件 · 364 用例 + 前端 7 用例，不调模型 |
 | 构建 | `tsc -p tsconfig.build.json` + `scripts/dist-assets.cjs` | `^5.6.0` | 把 `prompts/`、`skills/`、`prompt-templates/`、`knowledge/` 拷到 `dist/` |
 
 上面这张表的单一真源是 [`package.json`](package.json)。版本变更时，代码与本表同步；架构 SVG 自动刷新（`node scripts/visualization/generate_architecture.mjs`）。
@@ -103,7 +103,11 @@ npm run dev -- --builtin-tools coding
 
 `readonly` / `coding` 走 SDK allowlist，自定义工具名会自动并进去。工具必须出现在 `src/tools/index.ts` 或 `buildAgent({ extraTools })` 里；只在扩展里 `pi.registerTool` 的名字不会自动放行。
 
-打开 `coding` 之后，`guard` 才会真正拦到 bash / exec / write：危险命令（如 `rm -rf`）和越出工作目录的路径会被 `{ block: true }`。`exec` 是进程执行（拿输出、后台任务），不是交互式终端。改规则去 `src/extensions/guard.ts`。
+打开 `coding` 之后，`guard` 会拦截一份**固定列表**里的危险 shell 命令（如 `rm -rf` / `mkfs` / `dd of=`），并拦截 `read` / `write` / `edit` / `ls` / `grep` / `find` 里 **realpath** 落在工作目录之外的目标（因此符号链接逃逸也会被抓住），一律返回 `{ block: true }`。这份 shell 列表与审批规则同源于 `src/extensions/shell-rules.ts`。
+
+此外，`guard` 在**所有档位**下都拒绝 [`src/secret-files.ts`](src/secret-files.ts) 列出的敏感文件名（`.env` / `*.pem` / `id_rsa` / `auth.json` …）——只查路径是不够的，因为这些文件通常**就在**工作目录里。同一份名单也支撑 HTTP 文件服务的 `denyNames`（含目录列表预览），所以两条通道都读不到 `.env`。
+
+**这不是沙箱。** `bash` 命令体本身没有路径或命令约束，只受那份正则列表限制，且可被绕过（命令替换、编码、shell 内建）。要真隔离请用仓库自带 `Dockerfile`（非 root、只发布 `127.0.0.1`）或 `src/extensions/sandbox.example.ts` 的工具路由接缝。`exec` 是进程执行（拿输出、后台任务），不是交互式终端。改规则去 `src/extensions/guard.ts`。
 
 ## 快速开始
 
@@ -132,7 +136,7 @@ npm run setup
 npm run setup -- --force
 ```
 
-运行时仍由 SDK 读这两个文件，项目里的 `PI_API_KEY` 只给 setup 用，不会在请求路径上再套一层。
+运行时仍由 SDK 读这两个文件，同时服务端也会把 `.env` 加载进自己的 `process.env`（`loadEnvFile`），所以 `PI_API_KEY` **确实存在于服务端进程里**——模型调用就是用它鉴权的。它刻意**不会**被子进程继承：`exec` 与 MCP 的 spawn 拿到的是裁剪过的环境（`src/child-env.ts`），因此 `bash` 命令读不到这把 key。
 
 `.env` 里要有默认模型，两种写法：
 
@@ -321,7 +325,8 @@ pi-starter/
 契约类冒烟测试（不调模型、不写真实 `~/.pi/agent`）：
 
 ```bash
-npm test
+npm test            # 后端：364 个单测 / 集成测试
+npm run test:web    # 前端：7 个 WS 客户端测试（复用 tsx，零新依赖）
 npm run typecheck
 npm run build
 ```
@@ -555,7 +560,7 @@ server.listen(3000);
 
 - **登录**：本地桌面 / 本机 CLI 可以没有。接到已有后台时**在父应用上挂**鉴权（见上面「接进现有模块」的 `server.use("/agent", auth, agentApp)`）——不要用 `createApp()` 之后加中间件或 `configure`，那两种都挡不住内核路由。
 - **多用户**：每个用户一个 `buildAgent()` + 独立 session；不要共用现在这个 `busy` 标志。
-- **打开编码工具**：`PI_BUILTIN_TOOLS=coding` 或 `--builtin-tools coding`。这一档同时打开 `exec` / `exec_jobs` / `exec_stop`。打开后 `guard` 仍会拦截危险 bash / exec 和越出 cwd 的路径。不是交互式 PTY。
+- **打开编码工具**：`PI_BUILTIN_TOOLS=coding` 或 `--builtin-tools coding`。这一档同时打开 `exec` / `exec_jobs` / `exec_stop`。打开后 `guard` 仍会拦截列表内的危险 bash / exec 命令，以及 read/write/edit/ls/grep/find 里 realpath 越出 cwd 的路径——但 `bash` 命令体本身不受路径约束，仍不是沙箱。不是交互式 PTY。
 - **模型切换**：启动时 `--model provider/modelId`；CLI `/model`；HTTP `POST /model`。只接受已配 Key 的模型，走 `session.setModel`，不重建会话。列列表/切换/换 Key 都走官方 `ModelRuntime`（`getAvailable()` / `setModel()` / `setRuntimeApiKey()`）；自定义的只是一层更宽松的名称解析（`resolveModelRef`），支持带斜杠的模型 id、provider+model 拆开传、裸唯一 id、只认已配 Key 的模型——这些是官方 `resolveCliModel`（CLI 单体解析）盖不到的语义，所以这一段有意保留。
 - **自定义 provider**：`setup.ts` 把 provider 写进 `~/.pi/agent/models.json`（官方 custom-models 路径，OpenAI/Anthropic 兼容厂商够用）。要接代理网关、私有端点或自定义鉴权解析，走 SDK 的 `pi.registerProvider(name, config)`——一等参数 `buildAgent({ providers })`，或参照 `src/extensions/custom-provider.example.ts` 经 `extraExtensions` 传入。交互式 OAuth（`/login`、设备码）属 TUI，无头后端**不实现**。
 - **模型轮换**：`PI_SCOPED_MODELS`（或 `buildAgent({ scopedModels })`）喂官方 `session.cycleModel`/`cycleThinkingLevel`；由 CLI `/cycle`、`POST /model/cycle`、WS `cycle_model` 触发。缺省用所有已配 Key 的模型派生，不改初始选模。

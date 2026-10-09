@@ -38,6 +38,15 @@ export const DEFAULT_SUBAGENT_TIMEOUT_MS = 10 * 60 * 1000;
 /** 同时运行的子代理上限。防止模型一轮里连派几十个把进程打满。 */
 export const DEFAULT_MAX_CONCURRENT_SUBAGENTS = 3;
 
+/**
+ * 等待队列上限。
+ *
+ * 并发封顶之后，多出来的派发请求是**排队**而不是报错（模型一轮派 4 个、上限 3 是正常用法）。
+ * 但队列本身也必须有界：否则一轮里连派几十个会堆起一串永不 resolve 的 Promise，把内存吃掉。
+ * 超限时明确回绝，让模型改写计划，而不是假装它排上了队。
+ */
+export const DEFAULT_MAX_QUEUED_SUBAGENTS = 32;
+
 /** 子会话所需的最小契约（与 SDK AgentSession 一致，便于用替身驱动）。 */
 export interface SubagentSession {
   readonly sessionId: string;
@@ -55,6 +64,8 @@ export interface SubagentRunnerOptions {
   maxOutputChars?: number;
   timeoutMs?: number;
   maxConcurrent?: number;
+  /** 等待队列上限（排队的派发请求数）。默认 {@link DEFAULT_MAX_QUEUED_SUBAGENTS}。 */
+  maxQueued?: number;
 }
 
 /**
@@ -68,10 +79,17 @@ export function truncateSubagentOutput(
   maxChars: number = MAX_SUBAGENT_OUTPUT_CHARS,
 ): { text: string; truncated: boolean; originalLength: number } {
   if (text.length <= maxChars) return { text, truncated: false, originalLength: text.length };
-  const marker = `\n\n…[已截断：原始 ${text.length} 字符，只保留头尾各 ${Math.floor(maxChars / 2)} 字符]…\n\n`;
-  const half = Math.floor(maxChars / 2);
+  const marker = `\n\n…[已截断：原始 ${text.length} 字符]…\n\n`;
+  // marker 也要算进 maxChars：否则「上限」名不副实（返回长度 = 上限 + marker 长度）。
+  const body = maxChars - marker.length;
+  if (body <= 0) {
+    // 上限小到连 marker 都放不下时，硬截断优先——不能为了留提示而突破声明上限。
+    return { text: text.slice(0, maxChars), truncated: true, originalLength: text.length };
+  }
+  const head = Math.ceil(body / 2);
+  const tail = body - head;
   return {
-    text: `${text.slice(0, half)}${marker}${text.slice(-half)}`,
+    text: `${text.slice(0, head)}${marker}${tail > 0 ? text.slice(-tail) : ""}`,
     truncated: true,
     originalLength: text.length,
   };
@@ -142,16 +160,20 @@ export function createDelegateTool(options: SubagentRunnerOptions): ToolDefiniti
   const maxOutputChars = options.maxOutputChars ?? MAX_SUBAGENT_OUTPUT_CHARS;
   const timeoutMs = options.timeoutMs ?? DEFAULT_SUBAGENT_TIMEOUT_MS;
   const maxConcurrent = Math.max(1, options.maxConcurrent ?? DEFAULT_MAX_CONCURRENT_SUBAGENTS);
+  const maxQueued = Math.max(0, options.maxQueued ?? DEFAULT_MAX_QUEUED_SUBAGENTS);
   const waiters: Array<() => void> = [];
   let running = 0;
 
-  const acquire = async (): Promise<void> => {
+  /** 取得一个执行位；队列已满时返回 false（调用方回绝这次派发，不阻塞、不排队）。 */
+  const acquire = async (): Promise<boolean> => {
     if (running < maxConcurrent) {
       running += 1;
-      return;
+      return true;
     }
+    if (waiters.length >= maxQueued) return false;
     await new Promise<void>((resolve) => waiters.push(resolve));
     running += 1;
+    return true;
   };
   const release = (): void => {
     running -= 1;
@@ -197,7 +219,9 @@ export function createDelegateTool(options: SubagentRunnerOptions): ToolDefiniti
         return fail("派发失败：task 不能为空。");
       }
 
-      await acquire();
+      if (!(await acquire())) {
+        return fail(`子代理等待队列已满（上限 ${maxQueued}）。请减少同时派发的数量，或稍后重试。`);
+      }
       let session: SubagentSession | undefined;
       let timer: ReturnType<typeof setTimeout> | undefined;
       let onAbort: (() => void) | undefined;

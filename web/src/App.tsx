@@ -20,14 +20,28 @@ export default function App() {
   }, []);
 
   return (
-    <AssistantRuntimeProvider runtime={useExternalStoreRuntime(usePiRuntime())}>
-      {/* Base UI 的 Tooltip 必须有 Provider 祖先，官方 thread 组件里用了 TooltipIconButton。 */}
-      <TooltipProvider>
-        <ErrorBoundary>
-          <Shell />
-          <HitlDialog />
-        </ErrorBoundary>
-      </TooltipProvider>
+    /* Base UI 的 Tooltip 必须有 Provider 祖先，官方 thread 组件里用了 TooltipIconButton。 */
+    <TooltipProvider>
+      <ErrorBoundary>
+        <RuntimeShell />
+      </ErrorBoundary>
+    </TooltipProvider>
+  );
+}
+
+/**
+ * 适配层的创建放在 `ErrorBoundary` **内部**。
+ *
+ * 原先 `useExternalStoreRuntime(usePiRuntime())` 写在 `App` 自己的渲染里，而 `ErrorBoundary`
+ * 只在它的子树里——适配层一抛错（`convertMessage` 的契约很严）就绕过了边界，整页白屏。
+ * 挪进子组件后，任何适配层异常都会落到错框上（注释与实现这才一致）。
+ */
+function RuntimeShell() {
+  const runtime = useExternalStoreRuntime(usePiRuntime());
+  return (
+    <AssistantRuntimeProvider runtime={runtime}>
+      <Shell />
+      <HitlDialog />
     </AssistantRuntimeProvider>
   );
 }

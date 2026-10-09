@@ -9,6 +9,10 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Logger, isSecretKey, resolveLogLevel, sanitizeFields } from "./log.js";
 import { Metrics } from "./metrics.js";
+import { childProcessEnv, isSecretEnvName } from "./child-env.js";
+import { isClientMessage } from "./protocol.js";
+import { AppError, badRequest, clientErrorMessage } from "./http/errors.js";
+import { DEFAULT_DENY_NAMES, isDeniedName } from "./secret-files.js";
 import {
   DEFAULT_SECURITY_HEADERS,
   DEFAULT_TIMEOUTS,
@@ -191,4 +195,89 @@ test("headersTimeout 必须 <= keepAliveTimeout，否则 Node 直接销毁连接
   );
   // Long LLM turns need a generous request timeout.
   assert.ok(DEFAULT_TIMEOUTS.requestTimeoutMs >= 60_000);
+});
+
+/* ─────────────────── 指标：健壮性 ─────────────────── */
+
+test("Metrics 对未知指标名静默忽略，不抛错（拼错的指标名不能带崩请求）", () => {
+  const m = new Metrics();
+  assert.doesNotThrow(() => m.inc("no_such_metric" as never));
+  assert.doesNotThrow(() => m.addGauge("no_such_metric" as never, 1));
+  assert.doesNotThrow(() => m.setGauge("no_such_metric" as never, 2));
+  assert.equal(m.get("no_such_metric" as never), 0);
+});
+
+/* ─────────────────── 子进程环境裁剪 ─────────────────── */
+
+/**
+ * 回归：`PI_API_KEY` 被所有子进程继承。
+ *
+ * `loadEnvFile()` 把整个 .env 灌进 process.env，子进程若直接继承，那么开了 coding 档后
+ * 任何 bash / exec 命令、任何 MCP 子进程都能 `echo $PI_API_KEY` 把模型密钥读走。
+ */
+test("子进程环境剔除项目密钥，其余变量原样保留", () => {
+  assert.equal(isSecretEnvName("PI_API_KEY"), true);
+  assert.equal(isSecretEnvName("PI_API_KEY_ZHIPU"), true);
+  assert.equal(isSecretEnvName("pi_api_key_glm"), true, "大小写不敏感");
+  assert.equal(isSecretEnvName("PI_MODEL"), false);
+  assert.equal(isSecretEnvName("PATH"), false);
+
+  const env = childProcessEnv({
+    PATH: "/usr/bin",
+    HOME: "/home/x",
+    PI_API_KEY: "sk-secret",
+    PI_API_KEY_ZHIPU: "sk-secret-2",
+    PI_MODEL: "modelscope/x",
+  });
+  assert.equal(env.PI_API_KEY, undefined, "模型密钥绝不能进子进程环境");
+  assert.equal(env.PI_API_KEY_ZHIPU, undefined);
+  assert.equal(env.PATH, "/usr/bin");
+  assert.equal(env.HOME, "/home/x");
+  assert.equal(env.PI_MODEL, "modelscope/x", "非密钥的 PI_ 变量照常传递");
+});
+
+/* ─────────────────── 协议入口校验 ─────────────────── */
+
+test("isClientMessage 只放行形态合法的命令名（拒绝数组与空/空白）", () => {
+  assert.equal(isClientMessage({ type: "prompt" }), true);
+  assert.equal(isClientMessage({ type: "biz_sum" }), true, "业务方自定义命令名必须放行");
+  assert.equal(isClientMessage([{ type: "prompt" }]), false, "数组不是消息");
+  assert.equal(isClientMessage({ type: "" }), false);
+  assert.equal(isClientMessage({ type: "   " }), false);
+  assert.equal(isClientMessage({ type: 3 }), false);
+  assert.equal(isClientMessage(null), false);
+});
+
+/* ─────────────────── 客户端错误文案 ─────────────────── */
+
+/**
+ * 回归：WS 侧有 6 处直接 `err.message` 回给客户端，与 REST 的 `clientMessage()` 分叉。
+ * 未知异常（SDK / 驱动抛出）常带绝对路径、连接串、库版本，属内部信息。
+ */
+test("clientErrorMessage：未标记暴露的 AppError 与未知异常都不原样外泄", () => {
+  const internal = new AppError("internal", "ENOENT /home/u/.pi/agent/auth.json");
+  assert.equal(clientErrorMessage(internal), internal.clientMessage());
+  assert.ok(!clientErrorMessage(internal).includes("auth.json"), "内部 AppError 不得外泄原文");
+  assert.ok(!clientErrorMessage(new Error("connect ECONNREFUSED 10.0.0.5:8080")).includes("10.0.0.5"));
+  // 显式暴露的仍然是原文（4xx 类错误要能指导调用方）。
+  assert.equal(clientErrorMessage(badRequest("model is required")), "model is required");
+  // 自定义兜底文案只在「非 AppError」时生效。
+  assert.equal(clientErrorMessage(new Error("boom"), "切换模型失败"), "切换模型失败");
+  assert.equal(clientErrorMessage(badRequest("bad"), "fallback"), "bad");
+});
+
+/* ─────────────────── 敏感文件名策略（多方共用） ─────────────────── */
+
+test("isDeniedName：精确 / 前缀 / 后缀 / 两端通配与大小写", () => {
+  assert.equal(isDeniedName(".env"), true);
+  assert.equal(isDeniedName(".env.local"), true, "`.env.*` 前缀通配");
+  assert.equal(isDeniedName("MY.PEM"), true, "`*.pem` 后缀通配且大小写不敏感");
+  assert.equal(isDeniedName("id_rsa"), true);
+  assert.equal(isDeniedName("credentials.json"), true);
+  assert.equal(isDeniedName("notes.txt"), false);
+  assert.equal(isDeniedName("env"), false, "不能把 env 这种普通名误伤");
+  // 名单本身就是契约：删条目等于重新打开一条旁路。
+  for (const pattern of [".env", ".env.*", "auth.json", "*.pem", "id_rsa"]) {
+    assert.ok(DEFAULT_DENY_NAMES.includes(pattern), `默认名单必须包含 ${pattern}`);
+  }
 });

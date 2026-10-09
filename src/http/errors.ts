@@ -163,6 +163,23 @@ export const validationFailed = (msg: string, opts?: AppErrorOptions) =>
 export const busy = (msg = "agent is busy, try again shortly", opts?: AppErrorOptions) =>
   new AppError("busy", msg, { expose: true, ...opts });
 
+/**
+ * 客户端可见的错误文案。
+ *
+ * `AppError` 走 `clientMessage()`（未标记 `expose` 的一律换成通用文案）；未知异常按
+ * `internal` 处理，**绝不原样回传 `message`**——SDK 与驱动的异常文本里常带绝对路径、
+ * 连接串、库版本等内部信息。
+ *
+ * 三条客户端通道必须共用这一条：REST 中间件、SSE `/chat`、WS `dispatch`。
+ * 分叉的后果是同一类失败「REST 脱敏、WS 泄漏」——WS 侧曾有 6 处直接 `err.message`。
+ *
+ * @param fallbackMessage 未知异常时给客户端的文案；省略则用通用的「内部错误」。
+ */
+export function clientErrorMessage(err: unknown, fallbackMessage?: string): string {
+  if (err instanceof AppError) return err.clientMessage();
+  return fallbackMessage ?? toAppError(err).clientMessage();
+}
+
 /** Wrap an unknown thrown value into an AppError without losing the original. */
 export function toAppError(err: unknown, fallbackCode: AppErrorCode = "internal"): AppError {
   if (err instanceof AppError) return err;

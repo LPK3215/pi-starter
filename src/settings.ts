@@ -16,6 +16,7 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { SETTINGS_THINKING_LEVELS } from "./protocol.js";
 
 /** 字段校验器：返回规范化后的值，非法则抛错。 */
 export type FieldValidator<T> = (raw: unknown) => T;
@@ -287,7 +288,9 @@ export const SETTINGS_SCHEMA: SettingsSchema = {
   toolApprovalEnabled: bool(),
   approvalMode: enumOf(["off", "all", "category"] as const),
   disabledTools: strList({ maxItems: 256 }),
-  thinkingLevel: str({ maxLength: 32 }),
+  // 与 `set_thinking` 共用同一份枚举（`protocol.ts`）：原先这里是「任意 ≤32 字符字符串」，
+  // 于是 REST 能写入 WS 会拒绝的垃圾值，同一落盘字段两条通道两套口径。
+  thinkingLevel: enumOf(SETTINGS_THINKING_LEVELS),
   locale: str({ maxLength: 32 }),
   promptTemplate: str({ maxLength: 20000 }),
   contextKeepRecent: int({ min: 1, max: 200 }),

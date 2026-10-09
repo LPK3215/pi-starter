@@ -28,5 +28,7 @@
       "@pi/protocol": ["../src/protocol.ts"]
     }
   },
-  "include": ["src", "../src/protocol.ts"]
+  "include": ["src", "../src/protocol.ts"],
+  /* 测试归 tsconfig.test.json：它们需要 node 类型，而浏览器 app 不该引入 node 全局。 */
+  "exclude": ["src/**/*.test.ts"]
 }

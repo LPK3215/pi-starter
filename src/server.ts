@@ -23,7 +23,7 @@ import {
   resolveSdkSettings,
   resolveExtensionPaths,
 } from "./config.js";
-import { createSessionHub, type SessionHub } from "./session-hub.js";
+import { createSessionHubFromOptions, type SessionHub } from "./session-hub.js";
 import { defaultSessionIndexFile, scaffoldSessionDir, sessionCatalog } from "./sessions/store.js";
 import { BUILTIN_TOOL_NAMES, createToolRegistry, defineToolSpec, type ToolRegistry } from "./tools/registry.js";
 import { allTools } from "./tools/index.js";
@@ -313,19 +313,17 @@ logger.info("agent 就绪", {
 });
 
 // 4. Session hub + HTTP app. keepRecent / toolTimeout read lazily so settings apply live.
-const hub = createSessionHub(
-  agent,
-  runtime,
-  process.cwd(),
-  () => settings.get().contextKeepRecent,
-  undefined,
-  () => settings.get().toolTimeoutSeconds * 1000,
+// 用具名参数形式：位置参数一路传 `undefined` 占位极易错位（见 createSessionHub 的 @deprecated）。
+const hub = createSessionHubFromOptions(agent, runtime, {
+  cwd: process.cwd(),
+  keepRecent: () => settings.get().contextKeepRecent,
+  toolTimeoutMs: () => settings.get().toolTimeoutSeconds * 1000,
   allowedSessionRoots,
-  sessionIndex,
+  catalog: sessionIndex,
   // 计划模式状态挂在 hub 上，由每个 Conversation 按会话 id 查；
   // 不传则该装配没有计划模式（Conversation.planMode 恒为 false）。
-  { planMode },
-);
+  planMode,
+});
 hubRef = hub;
 // Gauges are derived from live state at scrape time (see /metrics) so they cannot drift.
 let wsRef: WsServer | undefined;

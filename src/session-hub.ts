@@ -38,6 +38,15 @@ import {
 import type { PlanModeController } from "./modes/plan-mode.js";
 import { ToolWatchdog } from "./approval/watchdog.js";
 import { metrics } from "./metrics.js";
+import {
+  sdkAbortCompaction,
+  sdkAgentState,
+  sdkCompact,
+  sdkCycleModel,
+  sdkCycleThinkingLevel,
+  sdkRenameSession,
+  sdkSessionManager,
+} from "./sdk-adapter.js";
 import type {
   ServerMessage,
   UiApproval,
@@ -614,10 +623,9 @@ export class Conversation {
    * summarization path (`compact()` / auto-compaction). Callers use this to decide *whether* to
    * compact, and to show the user how much is at stake — the plan itself is a pure function.
    */
-  planTrim(): TrimPlan {
+  planTrim(messages: readonly UiMessage[] = this.currentMessages()): TrimPlan {
     const model = this.session.model ?? this.fallbackModel;
     const softCap = computeSoftCap(model.contextWindow ?? 0);
-    const messages = this.currentMessages();
     return planContextTrim({
       messages,
       maxTokens: softCap,
@@ -639,9 +647,8 @@ export class Conversation {
   }
 
   private sessionManager(): SessionManager | undefined {
-    const manager = (this.session as { sessionManager?: SessionManager }).sessionManager;
-    if (!manager || typeof manager.buildContextEntries !== "function") return undefined;
-    return manager;
+    // 私有形状访问统一走 sdk-adapter（一处升级、一处改）。
+    return sdkSessionManager(this.session);
   }
 
   private requireManager(): SessionManager {
@@ -652,7 +659,7 @@ export class Conversation {
 
   /** 树变了之后，让模型看到的消息和快照跟着走。只 branch() 而不换这份数组，界面还是旧的后半段。 */
   private adoptTree(manager: SessionManager): void {
-    const state = (this.session as { agent?: { state?: { messages: AgentMessage[] } } }).agent?.state;
+    const state = sdkAgentState(this.session);
     if (!state) throw new AppError("internal", "当前会话不能同步消息");
     state.messages = manager.buildSessionContext().messages;
     this.cache = new WeakMap();
@@ -708,7 +715,7 @@ export class Conversation {
     return all.slice(all.length - MAX_SNAPSHOT_MESSAGES);
   }
 
-  private buildState(): UiState {
+  private buildState(): Omit<UiState, "rev"> {
     const session = this.session;
     const allMessages = this.currentMessages();
     const totalMessageCount = allMessages.length;
@@ -723,7 +730,8 @@ export class Conversation {
       cwd: this.cwd,
       sessionId: session.sessionId,
       conversationId: this.id,
-      rev: 0,
+      // 不在这里给 rev：revision 链由 SnapshotEmitter 独占（`++this.rev`），
+      // 本函数返回类型也刻意去掉了 rev，避免出现一个看似生效、实则被覆盖的死字段。
       messages,
       messagesTruncated: messages.length < totalMessageCount,
       totalMessages: totalMessageCount,
@@ -756,7 +764,9 @@ export class Conversation {
           usage: contextUsageRatio(contextTokens, softCap),
           // `planContextTrim` uses the exact same estimator, so "over budget" here means the
           // trim planner would also propose dropping messages — no second source of truth.
-          overBudget: this.planTrim().trimmed,
+          // 复用本次已投影好的 `allMessages`，避免每个快照周期再全量投影一遍（原先这里
+          // 会再调一次 `currentMessages()`，等于每周期做两遍投影 + 两遍会话树遍历）。
+          overBudget: this.planTrim(allMessages).trimmed,
         },
       },
       pendingApproval: this.pendingApproval,
@@ -893,8 +903,8 @@ export class Conversation {
    * 不会报错。这里不额外抛错——「已经停了」和「刚停掉」对调用方是同一个结果。
    */
   abortCompaction(): void {
-    const abortFn = (this.session as { abortCompaction?: () => void }).abortCompaction;
-    if (typeof abortFn !== "function") return;
+    const abortFn = sdkAbortCompaction(this.session);
+    if (!abortFn) return;
     abortFn.call(this.session);
     this.getState();
   }
@@ -919,9 +929,8 @@ export class Conversation {
    * 装配无轮换列表 / SDK 不提供该方法时返回 undefined。
    */
   async cycleModel(): Promise<Model<any> | undefined> {
-    const fn = (this.session as { cycleModel?: () => Promise<{ model?: Model<any> } | undefined> })
-      .cycleModel;
-    if (typeof fn !== "function") return undefined;
+    const fn = sdkCycleModel(this.session);
+    if (!fn) return undefined;
     const result = await fn.call(this.session);
     this.getState();
     return result?.model;
@@ -929,8 +938,8 @@ export class Conversation {
 
   /** 轮换思考档（官方 `session.cycleThinkingLevel`）。 */
   cycleThinking(): string | undefined {
-    const fn = (this.session as { cycleThinkingLevel?: () => string | undefined }).cycleThinkingLevel;
-    if (typeof fn !== "function") return undefined;
+    const fn = sdkCycleThinkingLevel(this.session);
+    if (!fn) return undefined;
     const level = fn.call(this.session);
     this.getState();
     return level;
@@ -1003,8 +1012,8 @@ export class Conversation {
         tokensBefore: before,
       };
     }
-    const compactFn = (session as { compact?: (i?: string) => Promise<unknown> }).compact;
-    if (typeof compactFn !== "function") {
+    const compactFn = sdkCompact(session);
+    if (!compactFn) {
       return { ok: false, reason: "当前 SDK 不支持主动压缩", tokensBefore: before };
     }
 
@@ -1107,12 +1116,9 @@ export class Conversation {
       throw new AppError("conflict", "对话正在生成，先停掉再改名");
     }
     const next = normalizeConversationTitle(title);
-    const session = this.session as Session & {
-      setSessionName?: (name: string) => void;
-      sessionManager?: SessionManager;
-    };
-    if (typeof session.setSessionName === "function") session.setSessionName(next);
-    else session.sessionManager?.appendSessionInfo(next);
+    // 优先官方 setSessionName，退回落 sessionManager.appendSessionInfo —— 两条私有路径
+    // 都收在 sdk-adapter.sdkRenameSession 里，这里不再自行按形状试错。
+    sdkRenameSession(this.session, next);
     this.title = next;
     this.titleLocked = true;
     this.lastActiveAt = Date.now();
@@ -1288,7 +1294,17 @@ export class ClientSession {
     this.keepRecent = options.keepRecent ?? (() => 6);
     this.toolTimeoutMs = options.toolTimeoutMs ?? (() => 0);
     const cap = options.maxOpenConversations ?? DEFAULT_MAX_OPEN_CONVERSATIONS;
-    this.maxOpenConversations = Number.isInteger(cap) && cap >= 1 ? cap : DEFAULT_MAX_OPEN_CONVERSATIONS;
+    if (cap === 1) {
+      // cap = 1 与「永不淘汰活动会话」互相矛盾：`evictForCapacity()` 只淘汰非 active，
+      // 而新建对话时唯一的那条**就是** active → 无候选可淘汰 → 插入后静默变成 2，
+      // 上限形同虚设。与其悄悄超出，不如把它夹到 2（并告警），让行为可预期。
+      getLogger()
+        .child({ component: "session-hub", clientId: options.clientId })
+        .warn("maxOpenConversations=1 与「永不淘汰活动会话」冲突，已按 2 处理", { requested: 1 });
+      this.maxOpenConversations = 2;
+    } else {
+      this.maxOpenConversations = Number.isInteger(cap) && cap >= 2 ? cap : DEFAULT_MAX_OPEN_CONVERSATIONS;
+    }
     this.allowedSessionRoots = options.allowedSessionRoots ?? [];
     this.persistedConversations = options.persistedConversations ?? (() => []);
     this.rememberConversation = options.rememberConversation;
@@ -1979,7 +1995,56 @@ export class SessionHub {
   }
 }
 
-/** Build a SessionHub over an assembled agent. */
+/**
+ * `createSessionHub` 的具名参数形式。
+ *
+ * 位置参数形式（见下方重载）有 8 个可选参数 + 1 个 options，作者自己在注释里承认
+ * 「再加第 9 个会让调用方无法分辨传错顺序与少传一个」。具名形式从签名上消除这一类错误，
+ * 且新增字段不再需要改动调用方。
+ */
+export interface CreateSessionHubOptions {
+  /** 会话工作目录。默认 `process.cwd()`。 */
+  cwd?: string;
+  /** 惰性读取「上下文保留最近多少轮」（设置热更新靠它）。 */
+  keepRecent?: () => number;
+  /** 单连接最多同时打开的对话数（超出按 LRU 淘汰）。 */
+  maxOpenConversations?: number;
+  /** 惰性读取工具看门狗超时（毫秒）。 */
+  toolTimeoutMs?: () => number;
+  /** 允许恢复 / 打开的会话文件根（fail-closed：空数组 = 不允许打开既有文件）。 */
+  allowedSessionRoots?: readonly string[];
+  /** 会话索引（重启后列出磁盘上的对话）。 */
+  catalog?: SessionCatalog;
+  /** 计划模式控制器；不传则该装配没有计划模式。 */
+  planMode?: PlanModeController;
+}
+
+/** 推荐入口：具名参数装配 `SessionHub`。 */
+export function createSessionHubFromOptions(
+  agent: BuiltAgent,
+  cfg: RuntimeConfig,
+  options: CreateSessionHubOptions = {},
+): SessionHub {
+  return new SessionHub(
+    agent,
+    cfg,
+    options.cwd,
+    options.keepRecent,
+    options.maxOpenConversations,
+    options.toolTimeoutMs,
+    options.allowedSessionRoots,
+    options.catalog,
+    options.planMode ? { planMode: options.planMode } : undefined,
+  );
+}
+
+/**
+ * Build a SessionHub over an assembled agent.
+ *
+ * @deprecated 8 个位置参数极易传错顺序（`maxOpenConversations` 与 `toolTimeoutMs` 相邻、
+ * 类型还不同，传错往往只在运行期才暴露）。新代码请用 {@link createSessionHubFromOptions}；
+ * 本函数保留仅为兼容既有嵌入方，内部直接转调具名形式。
+ */
 export function createSessionHub(
   agent: BuiltAgent,
   cfg: RuntimeConfig,
@@ -1991,8 +2056,13 @@ export function createSessionHub(
   catalog?: SessionCatalog,
   options?: { planMode?: PlanModeController },
 ): SessionHub {
-  return new SessionHub(
-    agent, cfg, cwd, keepRecent, maxOpenConversations, toolTimeoutMs, allowedSessionRoots, catalog,
-    options,
-  );
+  return createSessionHubFromOptions(agent, cfg, {
+    cwd,
+    keepRecent,
+    maxOpenConversations,
+    toolTimeoutMs,
+    allowedSessionRoots,
+    catalog,
+    planMode: options?.planMode,
+  });
 }

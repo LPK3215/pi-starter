@@ -18,8 +18,17 @@
  * 纯逻辑（arm/disarm/判定）不依赖 SDK 便于单测；`session.abort` 通过回调注入。
  */
 
+import { getLogger } from "../log.js";
+
 /** 默认超时：20 分钟。足够长的 LLM 工具调用，又不至于让用户等到放弃。 */
 export const DEFAULT_TOOL_TIMEOUT_MS = 20 * 60 * 1000;
+
+/**
+ * 同时 armed 的看门狗上限（超过只告警，不淘汰）。
+ *
+ * 目的是让「map 被泄漏 id 撑爆」这件事**可见**，而不是把保护偷偷摘掉。
+ */
+const MAX_ARMED_TIMERS = 512;
 
 export interface ToolWatchdogOptions {
   /**
@@ -58,10 +67,24 @@ export class ToolWatchdog {
   /** Arm a watchdog for a started tool call. Re-arming the same id restarts the timer. */
   arm(toolCallId: string, toolName: string): void {
     if (this.disposed) return;
-    // Defensive: never let a leaked id grow this map without bound.
-    if (!this.timers.has(toolCallId) && this.timers.size >= 512) {
+    // 上限兜底：**必须**有界。异常调用方（泄漏的 id、没有 end 事件的工具）否则会把这个
+    // map 撑爆——`pendingCount <= 512` 这条守恒由测试明确锁定，是有意的资源保证，
+    // 不能为了"保住每一条的保护"而放弃它。
+    //
+    // 但淘汰最旧一条是有代价的：那一条若仍在跑就失去了看门狗。真正的问题不是"淘汰"
+    // 这个动作，而是**静默**淘汰——所以这里必须告警，让这条取舍在日志里可见。
+    if (!this.timers.has(toolCallId) && this.timers.size >= MAX_ARMED_TIMERS) {
       const oldest = this.timers.keys().next();
-      if (!oldest.done) this.disarm(oldest.value);
+      if (!oldest.done) {
+        getLogger()
+          .child({ component: "watchdog" })
+          .warn("在途看门狗数量达到上限，回收最旧一条（该工具若仍在跑将失去超时保护）", {
+            armed: this.timers.size,
+            limit: MAX_ARMED_TIMERS,
+            evictedToolCallId: oldest.value,
+          });
+        this.disarm(oldest.value);
+      }
     }
     this.disarm(toolCallId);
     if (this.exempt(toolName)) return;

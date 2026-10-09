@@ -27,6 +27,8 @@ import {
   type UiCapabilities,
   type UiExtensionRequest,
   type UiExtensionResponse,
+  THINKING_LEVELS,
+  isThinkingLevel,
 } from "../protocol.js";
 import type { RuntimeConfig } from "../config.js";
 import type { BuiltAgent } from "../agent.js";
@@ -36,8 +38,10 @@ import type { SettingsService } from "../settings.js";
 import { searchKnowledge } from "../knowledge/index.js";
 import { parsePromptImages } from "../prompt-images.js";
 import { Metrics, metrics as defaultMetrics } from "../metrics.js";
+import { buildCapabilityBase } from "../capabilities.js";
+import { toUiModel } from "../models.js";
 import { getLogger } from "../log.js";
-import { AppError } from "../http/errors.js";
+import { AppError, clientErrorMessage } from "../http/errors.js";
 
 /** 把毫秒耗时收成 3 位小数，用于日志（避免浮点噪声刷屏）。 */
 function roundMs(ms: number): number {
@@ -171,17 +175,6 @@ const DEFAULT_COMMANDS: UiCapabilities["commands"] = [
   { name: "/state", description: "Force a full state refresh" },
 ];
 
-/**
- * Thinking levels accepted by `set_thinking`. Mirrors the SDK's ThinkingLevel union.
- * `"default"` is the settings-only sentinel meaning "leave the SDK's own default alone".
- */
-const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
-
-/** Type guard for the SDK's ThinkingLevel union (the settings field is a plain string). */
-function isThinkingLevel(value: string): value is (typeof THINKING_LEVELS)[number] {
-  return (THINKING_LEVELS as readonly string[]).includes(value);
-}
-
 /** WeakMap-backed stringify cache: identical objects serialize once across tabs. */
 const wireCache = new WeakMap<object, string>();
 
@@ -212,14 +205,14 @@ export function originAllowed(origin: string | undefined, host: string | undefin
 /** Build the capability catalog sent to clients. */
 function buildCapabilities(runtime: WsRuntime): UiCapabilities {
   return {
-    builtinTools: runtime.agent.builtinTools,
-    tools: runtime.registry.catalog(),
-    skills: runtime.agent.skills.map((s) => ({ name: s.name, description: s.description })),
-    knowledge: runtime.agent.knowledge.map((k) => ({
-      name: k.name,
-      title: k.title,
-      description: k.description,
-    })),
+    // 工具 / 技能 / 知识库与 REST `GET /capabilities` 共用同一整形函数（见 capabilities.ts），
+    // 只有提示词模板 / 斜杠命令 / 计划模式默认值这三项是 WS 通道特有的。
+    ...buildCapabilityBase({
+      builtinTools: runtime.agent.builtinTools,
+      tools: runtime.registry.catalog(),
+      skills: runtime.agent.skills,
+      knowledge: runtime.agent.knowledge,
+    }),
     promptTemplates: runtime.agent.promptTemplates.map((t) => ({
       name: t.name,
       description: t.description,
@@ -228,6 +221,15 @@ function buildCapabilities(runtime: WsRuntime): UiCapabilities {
     planModeDefault: runtime.settings.get().planMode,
   };
 }
+
+/**
+ * `hello` 之前允许排队的帧数上限。
+ *
+ * 客户端抢跑（握手帧还没到就先发命令）是常见现象，所以需要排队；但排多少必须有界——
+ * `maxPayload` 只限制单帧字节数，不限帧数，一个永不发 `hello` 的连接可以持续灌小帧把
+ * 内存堆满，而且这些命令在 `flushPending()` 之后仍会被依次执行。
+ */
+const MAX_PENDING_BEFORE_HELLO = 64;
 
 /** One live WebSocket connection + its session binding. */
 class ClientConn {
@@ -300,6 +302,23 @@ class ClientConn {
   /** Entry point for every inbound frame. */
   handle(msg: ClientMessage): void {
     if (!this.attached && msg.type !== "hello") {
+      // 握手前的帧要排队（客户端可能抢跑），但队列必须有界：`maxPayload` 只限制单帧大小，
+      // 不限帧数——一个不发 hello 的连接可以持续灌小帧把内存堆满，且这些命令在
+      // `flushPending()` 后仍会被依次执行。超限直接断开，语义上等同于握手失败。
+      if (this.pending.length >= MAX_PENDING_BEFORE_HELLO) {
+        getLogger()
+          .child({ component: "ws", clientId: this.clientId || "unattached" })
+          .warn("握手前 pending 队列超限，断开连接", {
+            pending: this.pending.length,
+            limit: MAX_PENDING_BEFORE_HELLO,
+            command: msg.type,
+          });
+        this.metrics.inc("protocolErrorsTotal");
+        // 1008 = policy violation。直接 terminate：握手都没完成，没有需要保留的接收缓冲。
+        this.pending.length = 0;
+        this.ws.terminate();
+        return;
+      }
       this.pending.push(msg);
       return;
     }
@@ -420,7 +439,7 @@ class ClientConn {
           try {
             await runtime.hub.openConversation(this.clientId, msg.conversationId);
           } catch (err) {
-            const message = err instanceof AppError ? err.clientMessage() : "无法打开该会话";
+            const message = clientErrorMessage(err, "无法打开该会话");
             this.send({ type: "error", message });
           }
           break;
@@ -441,7 +460,7 @@ class ClientConn {
             if (!this.clientId) throw new AppError("bad_request", "not attached");
             runtime.hub.deleteConversation(this.clientId, msg.conversationId);
           } catch (err) {
-            const message = err instanceof AppError ? err.clientMessage() : "无法删除该会话";
+            const message = clientErrorMessage(err, "无法删除该会话");
             this.send({ type: "error", message });
           }
           break;
@@ -494,7 +513,7 @@ class ClientConn {
               await runtime.hub.forkConversation(this.clientId, msg.conversationId, msg.entryId);
             }
           } catch (err) {
-            const message = err instanceof AppError ? err.clientMessage() : "无法修改该会话";
+            const message = clientErrorMessage(err, "无法修改该会话");
             this.send({ type: "error", message });
           }
           break;
@@ -503,12 +522,16 @@ class ClientConn {
           const models = await runtime.agent.listModels();
           this.send({
             type: "models",
-            models: models.map((m) => ({ provider: m.provider, id: m.id, name: m.name ?? m.id })),
+            models: models.map(toUiModel),
             current: `${runtime.agent.model.provider}/${runtime.agent.model.id}`,
           });
           break;
         }
         case "set_model": {
+          if (typeof msg.modelId !== "string" || !msg.modelId.trim()) {
+            this.send({ type: "error", message: "set_model 需要非空的 modelId（`provider/modelId`）" });
+            break;
+          }
           try {
             // Route through the hub so every conversation AND the shared session switch
             // together; a client-side switch must not leave other conversations stale.
@@ -517,11 +540,11 @@ class ClientConn {
             const current = runtime.agent.model;
             this.send({
               type: "models",
-              models: models.map((m) => ({ provider: m.provider, id: m.id, name: m.name ?? m.id })),
+              models: models.map(toUiModel),
               current: `${current.provider}/${current.id}`,
             });
           } catch (err) {
-            this.send({ type: "error", message: err instanceof Error ? err.message : String(err) });
+            this.send({ type: "error", message: clientErrorMessage(err, "切换模型失败") });
           }
           break;
         }
@@ -548,11 +571,11 @@ class ClientConn {
             const models = await runtime.agent.listModels();
             this.send({
               type: "models",
-              models: models.map((m) => ({ provider: m.provider, id: m.id, name: m.name ?? m.id })),
+              models: models.map(toUiModel),
               current: `${next.provider}/${next.id}`,
             });
           } catch (err) {
-            this.send({ type: "error", message: err instanceof Error ? err.message : String(err) });
+            this.send({ type: "error", message: clientErrorMessage(err, "轮换模型失败") });
           }
           break;
         }
@@ -567,6 +590,12 @@ class ClientConn {
           this.send({ type: "capabilities", capabilities: buildCapabilities(runtime) });
           break;
         case "set_tool_enabled": {
+          // 显式校验而不是靠 `undefined` 落到 else 分支：漏传/传错 `enabled` 会**静默禁用**该工具
+          // 并回 ok，而 REST 同输入返回 400。两条通道对同一动作的安全语义必须一致。
+          if (typeof msg.name !== "string" || typeof msg.enabled !== "boolean") {
+            this.send({ type: "error", message: "set_tool_enabled 需要 { name: string, enabled: boolean }" });
+            break;
+          }
           const ok = runtime.registry.setEnabled(msg.name, msg.enabled);
           if (!ok) {
             this.send({ type: "error", message: `unknown tool ${msg.name}` });
@@ -665,7 +694,7 @@ class ClientConn {
             }
             this.send({ type: "settings_state", settings });
           } catch (err) {
-            this.send({ type: "error", message: err instanceof Error ? err.message : String(err) });
+            this.send({ type: "error", message: clientErrorMessage(err, "更新设置失败") });
           }
           break;
         }
@@ -673,13 +702,15 @@ class ClientConn {
     } catch (err) {
       // Never let one bad command kill the connection: report and keep serving.
       this.metrics.inc("dispatchErrorsTotal");
-      const message = err instanceof Error ? err.message : String(err);
+      // 日志记**原始** message（logger 会做值级脱敏），推给客户端的必须是脱敏后的文案：
+      // 未经标记的 AppError 与未知 SDK 异常都可能带绝对路径、连接串等内部信息。
+      const raw = err instanceof Error ? err.message : String(err);
       cmdLog.error("ws command failed", {
         command: msg.type,
-        error: message,
+        error: raw,
         durationMs: roundMs(performance.now() - startedAt),
       });
-      this.send({ type: "error", message });
+      this.send({ type: "error", message: clientErrorMessage(err) });
     } finally {
       cmdLog.info("ws command completed", { command: msg.type, durationMs: roundMs(performance.now() - startedAt) });
     }
@@ -715,11 +746,17 @@ class ClientConn {
     } catch (err) {
       // A failing business command must not take the connection down.
       this.metrics.inc("dispatchErrorsTotal");
-      const message = err instanceof Error ? err.message : String(err);
+      const raw = err instanceof Error ? err.message : String(err);
       getLogger()
         .child({ component: "ws", clientId: this.clientId || "unattached" })
-        .error("自定义命令处理失败", { command: type, error: message });
-      this.send({ type: "error", message });
+        .error("自定义命令处理失败", { command: type, error: raw });
+      // 业务命令是**可控边界**：`defineCommand` 的作者自己决定抛什么、给用户看什么
+      // （扩展契约，由 `extensions.test.ts` 锁定）。所以这里保留原有文案转发，
+      // 只把「脚手架自己生成的内部 AppError」脱敏——那才是会漏路径/连接串的一类。
+      this.send({
+        type: "error",
+        message: err instanceof AppError ? err.clientMessage() : raw,
+      });
     }
   }
 

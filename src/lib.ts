@@ -196,6 +196,7 @@ export {
   Conversation,
   SessionHub,
   createSessionHub,
+  createSessionHubFromOptions,
   type ClientSessionOptions,
   type ConversationOptions,
 } from "./session-hub.js";

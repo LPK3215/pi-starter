@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -24,6 +24,22 @@ const docs: KnowledgeDoc[] = [
   doc("faq", "常见问题", "如何切换模型：POST /model。", "怎么切换模型"),
   doc("pricing", "价格", "基础版 99 / 月。", "套餐"),
 ];
+
+/**
+ * 回归：注释曾承诺「首次开库设 0o600」，但代码里没有任何 chmod ——
+ * `new DatabaseSync(path)` 按进程 umask 建文件（通常 0o644），
+ * 而向量可能反映私有文档内容，共享主机上可被他人读取。
+ */
+test("SqliteVectorStore：落盘权限收紧到 0o600", () => {
+  if (process.platform === "win32") return; // Windows 上 chmod 只能力所能及
+  const file = join(mkdtempSync(join(tmpdir(), "pi-vec-mode-")), "vectors.db");
+  const store = new SqliteVectorStore({ path: file });
+  try {
+    assert.equal(statSync(file).mode & 0o777, 0o600, "向量库必须仅本人可读");
+  } finally {
+    store.close();
+  }
+});
 
 test("SqliteVectorStore：upsert/has/query + 关闭重开后仍在（持久化）", async () => {
   const file = join(mkdtempSync(join(tmpdir(), "pi-vec-")), "vectors.db");

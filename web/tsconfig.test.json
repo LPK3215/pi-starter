@@ -1,0 +1,19 @@
+{
+  /*
+   * 前端测试的 tsconfig。
+   *
+   * 单独一份而不是并进 tsconfig.app.json：测试跑在 node 下（`node:test` / `node:assert`），
+   * 需要 `node` 类型；而浏览器 app 引入 node 全局会污染 `setTimeout` 之类的返回类型
+   * （NodeJS.Timeout 与 DOM 的 number 不同）。分成两个 project 才能各用各的全局。
+   *
+   * 运行方式：`npm test`（根目录）→ `tsx --test --tsconfig web/tsconfig.json web/src/pi/client.test.ts`
+   */
+  "extends": "./tsconfig.app.json",
+  "compilerOptions": {
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.test.tsbuildinfo",
+    "types": ["node", "vite/client"],
+    "noEmit": true
+  },
+  "include": ["src/**/*.test.ts", "../src/protocol.ts"],
+  "exclude": []
+}

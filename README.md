@@ -47,7 +47,7 @@ Every `POST /chat` follows the same lifecycle: HTTP body → busy guard → `ses
 | HTTP | [Express](https://expressjs.com/) | `^5.2.1` | single process; REST shares one session, WS runs several conversations per client (cap + LRU) |
 | Schema | [TypeBox](https://www.npmjs.com/package/typebox) | `^1.1.39` | tool `parameters` definitions |
 | WebSocket | [ws](https://www.npmjs.com/package/ws) | `^8.18.0` | snapshot-driven bidirectional transport (`transport/ws.ts`) |
-| Test runner | Node built-in test runner via `tsx --test` | `^4.22.4` | 37 test files · 308 cases, no model calls |
+| Test runner | Node built-in test runner via `tsx --test` | `^4.22.4` | 42 test files · 364 cases + 7 frontend cases, no model calls |
 | Build | `tsc -p tsconfig.build.json` + `scripts/dist-assets.cjs` | `^5.6.0` | copies `prompts/ skills/ prompt-templates/ knowledge/` into `dist/` |
 
 Truth source for the table above: [`package.json`](package.json). When versions change, update the code and this table together (the Architecture SVG refreshes automatically via `node scripts/visualization/generate_architecture.mjs`).
@@ -83,7 +83,7 @@ The scaffold is a **vertical-agent starting point**, not another coding-assistan
 | `src/prompt-templates/<name>.md` via SDK `additionalPromptTemplatePaths` (`/name` expands) | Global `~/.pi/agent/prompts` and project `.pi/prompts` scanning |
 | In-memory SQLite + `GET /db` / `db_query` | Remote Postgres / connection pools (inject your own `database`) |
 | `persona.md` + `rules.md` system prompt | File extensions from `~/.pi/agent/extensions` and `<cwd>/.pi/extensions` |
-| `guard` intercepting dangerous bash and paths outside cwd (`read SKILL.md` excepted) | Full sandboxing / container isolation |
+| `guard` intercepting dangerous bash, paths outside cwd (`read SKILL.md` excepted), and the sensitive-file deny list | Full sandboxing / container isolation |
 | `audit` printing tool durations | Login, multi-user sessions, public-internet exposure |
 | Snapshot-driven WebSocket (restart/reconnect self-healing, backpressure drops, slow-client disconnect) | Cross-client conversation takeover |
 | Rename, roll back, edit a user message, fork a path, and **delete a conversation for real** (`delete_conversation`: index entry + session file, path re-checked against the same allowlist as open) | Goal-review loop. The SDK does not provide that workflow |
@@ -109,7 +109,11 @@ npm run dev -- --builtin-tools coding
 
 `readonly` / `coding` go through the SDK allowlist, and custom tool names are merged into it automatically. Tools must appear in `src/tools/index.ts` or `buildAgent({ extraTools })`; names registered only inside extensions are not allowlisted automatically.
 
-With `coding` on, `guard` actually intercepts bash / exec / write: dangerous commands (e.g. `rm -rf`) and paths outside the working directory are blocked with `{ block: true }`. `exec` is process execution (capture output, background jobs), not an interactive terminal. Edit rules in `src/extensions/guard.ts`.
+With `coding` on, `guard` intercepts a fixed list of dangerous shell patterns (e.g. `rm -rf`, `mkfs`, `dd of=`) and blocks `read` / `write` / `edit` / `ls` / `grep` / `find` targets whose **realpath** falls outside the working directory (so symlink escapes are caught too), returning `{ block: true }`. The shell patterns are a single source of truth shared with the approval rules (`src/extensions/shell-rules.ts`).
+
+`guard` also refuses the sensitive file names listed in [`src/secret-files.ts`](src/secret-files.ts) (`.env`, `*.pem`, `id_rsa`, `auth.json`, …) **in every tier** — the path check alone is not enough, because those files normally live *inside* the working directory. The same list backs the HTTP file service's `denyNames` (including the directory-listing preview), so the agent cannot read `.env` through either channel.
+
+**This is not a sandbox.** `bash` itself has no path or command constraint beyond that pattern list, and the patterns can be evaded (command substitution, encoding, shell builtins). For real isolation use the bundled `Dockerfile` (non-root, publishes only on `127.0.0.1`) or the tool-routing seam in `src/extensions/sandbox.example.ts`. `exec` is process execution (capture output, background jobs), not an interactive terminal. Edit rules in `src/extensions/guard.ts`.
 
 ## Quick Start
 
@@ -138,7 +142,7 @@ Existing keys for a provider are kept by default. To overwrite, add `--force`:
 npm run setup -- --force
 ```
 
-The SDK still reads these two files at runtime; `PI_API_KEY` in `.env` is only consumed by setup and never sits in the request path.
+The SDK reads these two files at runtime, and the server also loads `.env` into its own `process.env` (`loadEnvFile`), so `PI_API_KEY` **does** live in the server process — that is how the model call is authenticated. It is deliberately **not** inherited by child processes: `exec` and MCP spawns receive a filtered environment (`src/child-env.ts`), so a `bash` command can no longer read the key.
 
 The default model in `.env` can be written two ways:
 
@@ -341,8 +345,9 @@ pi-starter/
 Contract smoke tests (no model calls, never touch the real `~/.pi/agent`):
 
 ```bash
-npm test            # 308 unit + integration tests
-npm run smoke       # 17 real WebSocket end-to-end checks
+npm test            # 364 unit + integration tests
+npm run test:web    # 7 frontend (WS client) tests — reuses tsx, adds no dependency
+npm run smoke       # 21 real WebSocket end-to-end checks
 npm run typecheck   # types + protocol completeness
 npm run lint:unused # dead code gate (the "declared but never wired" class of bug)
 npm run build

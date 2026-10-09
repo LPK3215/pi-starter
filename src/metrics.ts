@@ -108,16 +108,28 @@ const startedAt = Date.now();
 export class Metrics {
   private readonly values = new Map<string, number>();
 
+  /**
+   * 解析指标名对应的存储键。未知名字返回 undefined —— **不抛**。
+   *
+   * 契约是「拼错的指标名绝不能让一次请求失败」：`MetricName` 只是编译期约束，
+   * 运行时（JS 调用方、动态拼接的名字）仍可能传进未知值，此时静默忽略比抛错更可容忍。
+   */
+  private keyOf(name: MetricName): string | undefined {
+    return (METRICS as Record<string, { name: string } | undefined>)[name as string]?.name;
+  }
+
   /** Increment a counter. Negative deltas are rejected (counters must be monotonic). */
   inc(name: MetricName, delta = 1): void {
     if (delta < 0) return;
-    const key = METRICS[name].name;
+    const key = this.keyOf(name);
+    if (key === undefined) return;
     this.values.set(key, (this.values.get(key) ?? 0) + delta);
   }
 
   /** Adjust a gauge by a signed delta. */
   addGauge(name: MetricName, delta: number): void {
-    const key = METRICS[name].name;
+    const key = this.keyOf(name);
+    if (key === undefined) return;
     const next = (this.values.get(key) ?? 0) + delta;
     // A gauge must never go negative; a decrement below zero means double-decrement.
     this.values.set(key, Math.max(0, next));
@@ -125,11 +137,14 @@ export class Metrics {
 
   /** Set a gauge to an absolute value (e.g. recomputed from a live collection). */
   setGauge(name: MetricName, value: number): void {
-    this.values.set(METRICS[name].name, Math.max(0, value));
+    const key = this.keyOf(name);
+    if (key === undefined) return;
+    this.values.set(key, Math.max(0, value));
   }
 
   get(name: MetricName): number {
-    return this.values.get(METRICS[name].name) ?? 0;
+    const key = this.keyOf(name);
+    return key === undefined ? 0 : (this.values.get(key) ?? 0);
   }
 
   /** Snapshot of all metrics as { name: value }. */

@@ -90,6 +90,14 @@ const EMPTY_SNAPSHOT: PiSnapshot = {
 /** tool_delta 单个工具最多保留的字符数（尾部）。 */
 const TOOL_OUTPUT_CAP = 4000;
 
+/**
+ * 协议里有、但本项目前端**刻意不消费**的帧，静默忽略不算漂移：
+ * - `settings_state`：前端不调 `get_settings` / `set_settings`（控制面只做模型/思考/计划模式）。
+ * - `knowledge_hits`：前端不调 `search_knowledge`。
+ * - `turn_end`：只有一个 `turnIndex` 进度值，当前 UI 没有消费者（`turn_start` 已在维护它）。
+ */
+const IGNORED_FRAMES = new Set(["settings_state", "knowledge_hits", "turn_end"]);
+
 const CLIENT_ID_KEY = "pi-starter.clientId";
 
 function wsUrl(): string {
@@ -117,6 +125,52 @@ export class PiWsClient {
   private rev: number | null = null;
   private attempt = 0;
   private closedByUser = false;
+  /** 重连退避的定时器句柄：`disconnect()` 必须能取消它，否则断开后还会再开一条 socket。 */
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  /** 已发出切/建会话命令、正在等对应的权威快照。 */
+  private awaitingSnapshot = false;
+  /** 切换目标会话 id；`new_conversation` 时还没分配，为 null。 */
+  private pendingConversationId: string | null = null;
+  /** 被丢弃的「非当前会话」帧数（排障用：出现即说明存在并发生成的后台会话）。 */
+  private foreignFrames = 0;
+  /** 已告警过的未知帧类型（去重）。 */
+  private readonly warnedFrames = new Set<string>();
+
+  /** 已丢弃的非当前会话帧数。 */
+  get droppedForeignFrames(): number {
+    return this.foreignFrames;
+  }
+
+  /**
+   * 该会话作用域帧是否属于**当前正在显示的会话**。
+   *
+   * 后端每条已打开对话都 `push` 到*同一个* socket（`ClientSession.emit` 不按 active 过滤，
+   * 见 `src/session-hub.ts`），所以后台还在生成的会话 A 会持续发 `message_delta` /
+   * `snapshot(_delta)`。不按 `conversationId` 过滤的后果是：A 的流式文本被拼进 B 的视图、
+   * A 的工具轨迹混进 B 的列表、A 的全量快照整个替换掉 B 的消息。
+   *
+   * 还没有权威快照（`state === null`）时无法判定归属：
+   * - 刚发过切/建会话命令（`awaitingSnapshot`）：只认切换目标，避免抢跑的后台帧先建立身份；
+   * - 首连（没有等待）：放行，让第一份快照建立身份。
+   */
+  private belongsToView(conversationId: string | undefined): boolean {
+    if (conversationId === undefined) return true; // 全局帧（conversations / models / notice…）
+    const current = this.snap.state?.conversationId;
+    if (current === undefined) {
+      if (!this.awaitingSnapshot) return true;
+      return this.pendingConversationId === null || this.pendingConversationId === conversationId;
+    }
+    return current === conversationId;
+  }
+
+  /** 丢弃一个非当前会话的帧并计数。 */
+  private dropForeign(conversationId: string, frame: string): void {
+    this.foreignFrames += 1;
+    // 只在第一条上记日志：后台会话流式期间这类帧是高频的，逐条打会刷屏。
+    if (this.foreignFrames === 1) {
+      console.info(`[pi] 丢弃非当前会话的帧（当前 ${this.snap.state?.conversationId ?? "-"}，收到 ${conversationId}，帧 ${frame}）`);
+    }
+  }
 
   /** 供 useSyncExternalStore 使用：引用稳定，变更时才换新对象。 */
   getSnapshot = (): PiSnapshot => this.snap;
@@ -135,11 +189,22 @@ export class PiWsClient {
 
   disconnect(): void {
     this.closedByUser = true;
+    this.cancelReconnect();
     this.ws?.close();
     this.ws = null;
   }
 
+  private cancelReconnect(): void {
+    if (this.reconnectTimer !== null) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+  }
+
   private open(): void {
+    // 退避到期时再确认一次：等待期间可能已经 `disconnect()` 了，
+    // 否则会建出一条无人管理的僵尸 socket（`closedByUser` 仍为 true，它的 close 又不再重连）。
+    if (this.closedByUser) return;
     this.patch({ status: "connecting" });
     const ws = new WebSocket(wsUrl());
     this.ws = ws;
@@ -158,7 +223,11 @@ export class PiWsClient {
       if (this.closedByUser) return;
       this.patch({ status: "offline", runActive: false });
       const delay = Math.min(30000, 500 * 2 ** this.attempt++);
-      setTimeout(() => this.open(), delay);
+      this.cancelReconnect();
+      this.reconnectTimer = setTimeout(() => {
+        this.reconnectTimer = null;
+        this.open();
+      }, delay);
     });
     ws.addEventListener("error", () => ws.close());
   }
@@ -191,23 +260,36 @@ export class PiWsClient {
         break;
       }
       case "snapshot": {
+        if (!this.belongsToView(msg.state.conversationId)) {
+          this.dropForeign(msg.state.conversationId, "snapshot");
+          return;
+        }
+        // 收到了在等的那份（或首连的）权威快照：清空等待标记。
+        this.awaitingSnapshot = false;
+        this.pendingConversationId = null;
         this.rev = msg.state.rev;
         // 快照权威：流式缓冲以快照里的 streamingMessage 为准。
+        //
+        // 思维链必须与文本同样**回填**：只回填文本、把 streamThinking 置空的话，
+        // 下一条 thinking 增量会在空串上累加（`"" + delta`），快照之前累积的思维链
+        // 整段丢失——表现为思维链在流式中"闪断"，只剩最后一帧之后的尾巴。
         this.patch({
           state: msg.state,
           conversations: msg.state.conversations,
           streamText: msg.state.streamingMessage?.text ?? "",
-          streamThinking: "",
+          streamThinking: msg.state.streamingMessage?.thinking ?? "",
           runActive: msg.state.isStreaming,
           uiRequests: this.uiRequestsFor(msg.state),
         });
         break;
       }
       case "snapshot_delta": {
-        // 跨会话的增量直接丢弃：服务端切会话时会自己推全量 snapshot。
-        // 不拦的话，新会话的 appended 会被拼到旧会话的 messages 后面（消息串会话）。
-        if (this.snap.state && this.snap.state.conversationId !== msg.conversationId) {
-          this.resetConversationView();
+        // 非当前会话的增量**直接丢弃**（服务端切会话时会自己推全量 snapshot）。
+        //
+        // 这里以前调的是 `resetConversationView()`——注释写"丢弃"，实现却是把**当前**视图
+        // 清空。于是"看 B 时后台 A 在流式"会让 B 的消息被反复抹掉，比不过滤更糟。
+        if (!this.belongsToView(msg.conversationId)) {
+          this.dropForeign(msg.conversationId, "snapshot_delta");
           return;
         }
         if (this.rev !== null && msg.baseRev !== this.rev) {
@@ -228,6 +310,10 @@ export class PiWsClient {
         break;
       }
       case "message_delta": {
+        if (!this.belongsToView(msg.conversationId)) {
+          this.dropForeign(msg.conversationId, "message_delta");
+          return;
+        }
         if (msg.channel === "thinking") {
           this.patch({ streamThinking: this.snap.streamThinking + msg.delta });
         } else {
@@ -236,6 +322,10 @@ export class PiWsClient {
         break;
       }
       case "tool_status": {
+        if (!this.belongsToView(msg.conversationId)) {
+          this.dropForeign(msg.conversationId, "tool_status");
+          return;
+        }
         const tools = [...this.snap.tools];
         const idx = tools.findIndex((t) => t.toolCallId === msg.toolCallId);
         if (msg.phase === "start") {
@@ -256,6 +346,10 @@ export class PiWsClient {
         break;
       }
       case "tool_delta": {
+        if (!this.belongsToView(msg.conversationId)) {
+          this.dropForeign(msg.conversationId, "tool_delta");
+          return;
+        }
         this.patch({
           tools: this.snap.tools.map((t) =>
             t.toolCallId === msg.toolCallId
@@ -266,14 +360,26 @@ export class PiWsClient {
         break;
       }
       case "run_start":
+        if (!this.belongsToView(msg.conversationId)) {
+          this.dropForeign(msg.conversationId, "run_start");
+          return;
+        }
         this.patch({ runActive: true, tools: [], turnIndex: 0 });
         break;
       case "run_end":
+        if (!this.belongsToView(msg.conversationId)) {
+          this.dropForeign(msg.conversationId, "run_end");
+          return;
+        }
         // willRetry 表示 SDK 会自动重试，本轮没真结束，保持 running。
         // 工具轨迹**不清空**：留到下一轮 run_start 才清，否则几毫秒完事的工具根本看不见。
         this.patch({ runActive: msg.willRetry === true });
         break;
       case "turn_start":
+        if (!this.belongsToView(msg.conversationId)) {
+          this.dropForeign(msg.conversationId, "turn_start");
+          return;
+        }
         this.patch({ turnIndex: msg.turnIndex });
         break;
       case "conversations":
@@ -298,14 +404,34 @@ export class PiWsClient {
       case "error": {
         const level = msg.type === "error" ? "error" : msg.level;
         const text = msg.type === "error" ? msg.message : msg.text;
+        // 出错过就放弃"正在等某会话快照"的坚持：切会话失败时不会再有快照到来，
+        // 而 `belongsToView` 在等待期间会过滤掉所有其它会话的帧——不清掉就会永久黑屏。
+        // （代价是无关的错误会提前放弃等待；此时 state 仍为 null，行为等同首连。）
+        if (msg.type === "error") {
+          this.awaitingSnapshot = false;
+          this.pendingConversationId = null;
+        }
         // 只留最近 3 条：重连恢复、限流之类提示会连续来，堆成一屏就没法看了。
         this.patch({ notices: [...this.snap.notices.slice(-2), { level, text, at: Date.now() }] });
         break;
       }
       case "pong":
+        break;
       default:
+        // 协议新增帧不能无声消失（排障时"后端明明推了、前端毫无反应"最难查）。
+        // 已知但本项目不消费的帧不算漂移，见 IGNORED_FRAMES。
+        if (!IGNORED_FRAMES.has((msg as { type: string }).type)) {
+          this.warnUnknownFrame((msg as { type: string }).type);
+        }
         break;
     }
+  }
+
+  /** 每个未知帧类型只告警一次，避免坏帧刷屏。 */
+  private warnUnknownFrame(type: string): void {
+    if (this.warnedFrames.has(type)) return;
+    this.warnedFrames.add(type);
+    console.warn(`[pi] 收到未知的服务端帧类型 "${type}"，已忽略（可能是前端与后端版本不一致）`);
   }
 
   /**
@@ -330,9 +456,22 @@ export class PiWsClient {
     for (const l of this.listeners) l();
   }
 
-  send(msg: ClientMessage): void {
-    if (this.ws?.readyState !== WebSocket.OPEN) return;
+  /** 发送一条命令；返回是否真的发出去了（离线时为 false，调用方据此决定要不要改本地视图）。 */
+  send(msg: ClientMessage): boolean {
+    if (this.ws?.readyState !== WebSocket.OPEN) {
+      // 以前静默 return：离线时用户点发送，消息直接消失且没有任何反馈。
+      this.notifyOffline();
+      return false;
+    }
     this.ws.send(JSON.stringify(msg));
+    return true;
+  }
+
+  /** 离线提示只加一条（`get_state` 之类的连发不该刷出一屏提示条）。 */
+  private notifyOffline(): void {
+    const text = "尚未连接服务端，操作未发送";
+    if (this.snap.notices.at(-1)?.text === text) return;
+    this.patch({ notices: [...this.snap.notices.slice(-2), { level: "warn", text, at: Date.now() }] });
   }
 
   /* ────────────── 类型化命令面（A 类） ────────────── */
@@ -353,15 +492,22 @@ export class PiWsClient {
     this.send({ type: "compact_context", instructions });
   }
   newConversation() {
-    this.send({ type: "new_conversation" });
+    // 发送失败（离线）时**不动本地视图**：否则用户看到消息被清空、却什么也没发生。
+    if (!this.send({ type: "new_conversation" })) return;
+    this.awaitingSnapshot = true;
+    this.pendingConversationId = null; // 新会话 id 由服务端分配，快照到达时才知道
     this.resetConversationView();
   }
   openConversation(conversationId: string) {
-    this.send({ type: "open_conversation", conversationId });
+    if (!this.send({ type: "open_conversation", conversationId })) return;
+    this.awaitingSnapshot = true;
+    this.pendingConversationId = conversationId;
     this.resetConversationView();
   }
   switchConversation(conversationId: string) {
-    this.send({ type: "switch_conversation", conversationId });
+    if (!this.send({ type: "switch_conversation", conversationId })) return;
+    this.awaitingSnapshot = true;
+    this.pendingConversationId = conversationId;
     this.resetConversationView();
   }
   closeConversation(conversationId: string) {

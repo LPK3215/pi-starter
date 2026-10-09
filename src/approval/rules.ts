@@ -16,6 +16,7 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { isPathInsideCwd } from "../extensions/guard.js";
+import { shellApprovalRuleSpecs } from "../extensions/shell-rules.js";
 import { validationFailed } from "../http/errors.js";
 import { getLogger } from "../log.js";
 
@@ -70,88 +71,17 @@ export interface ApprovalVerdict {
 /* ────────────────────────── 内置高危规则 ────────────────────────── */
 
 const BUILTIN_RULES: ApprovalRule[] = [
-  {
-    id: "builtin:bash.rm-rf",
-    description: "Recursive force delete (rm -rf)",
+  // shell 类高危命令与 `extensions/guard.ts` 同源（`shell-rules.ts` 单一事实源），
+  // 避免「guard 拦了一条、审批表里没有」的漂移。
+  ...shellApprovalRuleSpecs().map<ApprovalRule>((spec) => ({
+    id: spec.id,
+    description: spec.description,
     tools: ["bash", "exec"],
     field: "command",
-    match: {
-      kind: "regex",
-      value: "\\brm\\s+-(?=[a-zA-Z]*r)(?=[a-zA-Z]*f)[a-zA-Z]+\\b|\\brm\\s+--recursive\\b",
-    },
-    action: "ask",
+    match: { kind: "regex", value: spec.pattern },
+    action: spec.action,
     builtin: true,
-  },
-  {
-    id: "builtin:bash.mkfs",
-    description: "Disk format (mkfs)",
-    tools: ["bash", "exec"],
-    field: "command",
-    match: { kind: "regex", value: "\\bmkfs(\\.\\w+)?\\b" },
-    action: "deny",
-    builtin: true,
-  },
-  {
-    id: "builtin:bash.dd",
-    description: "Raw device write (dd of=)",
-    tools: ["bash", "exec"],
-    field: "command",
-    match: { kind: "regex", value: "\\bdd\\b[\\s\\S]*\\bof\\s*=" },
-    action: "deny",
-    builtin: true,
-  },
-  {
-    id: "builtin:bash.fork-bomb",
-    description: "Fork bomb",
-    tools: ["bash", "exec"],
-    field: "command",
-    match: { kind: "regex", value: ":\\(\\)\\s*\\{\\s*:\\s*\\|\\s*:\\s*&\\s*\\}\\s*;" },
-    action: "deny",
-    builtin: true,
-  },
-  {
-    id: "builtin:bash.shutdown",
-    description: "Shutdown / reboot",
-    tools: ["bash", "exec"],
-    field: "command",
-    match: { kind: "regex", value: "\\b(shutdown|reboot|halt|poweroff)\\b" },
-    action: "deny",
-    builtin: true,
-  },
-  {
-    id: "builtin:bash.windows-destructive",
-    description: "Windows destructive delete / format",
-    tools: ["bash", "exec"],
-    field: "command",
-    match: {
-      kind: "regex",
-      value:
-        "\\bRemove-Item\\b[\\s\\S]*-(Recurse|Force)\\b|\\bdel\\s+/s\\b|\\brd\\s+/s\\b|\\bformat\\s+[a-z]:",
-    },
-    action: "ask",
-    builtin: true,
-  },
-  {
-    id: "builtin:bash.git-destructive",
-    description: "Destructive git (reset --hard / push --force / clean -fd)",
-    tools: ["bash", "exec"],
-    field: "command",
-    match: {
-      kind: "regex",
-      value: "\\bgit\\s+reset\\s+--hard\\b|\\bgit\\s+push\\b[\\s\\S]*--force\\b|\\bgit\\s+clean\\s+-[a-z]*f",
-    },
-    action: "ask",
-    builtin: true,
-  },
-  {
-    id: "builtin:bash.chmod-recursive",
-    description: "Recursive chmod (chmod -R / 777)",
-    tools: ["bash", "exec"],
-    field: "command",
-    match: { kind: "regex", value: "\\bchmod\\s+-R\\b|\\bchmod\\s+777\\b" },
-    action: "ask",
-    builtin: true,
-  },
+  })),
   {
     id: "builtin:path.outside-workspace-write",
     description: "Write outside workspace",

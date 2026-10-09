@@ -100,6 +100,19 @@ export function LogPanel({ onClose }: { onClose: () => void }) {
 
   const listRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
+  /** 卸载后不再 setState（面板关闭即卸载，见 App.tsx）。 */
+  const aliveRef = useRef(true);
+  const copiedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // 卸载清理：取消在途请求 + 清掉"已复制"计时器。
+  // 原先只靠"下一次查询"顺手 abort，关闭面板时 in-flight fetch 会继续跑并在卸载后 setState。
+  useEffect(() => {
+    return () => {
+      aliveRef.current = false;
+      abortRef.current?.abort();
+      if (copiedTimer.current !== null) clearTimeout(copiedTimer.current);
+    };
+  }, []);
 
   const runQuery = useCallback(
     async (query: LogQueryFilters, append: boolean) => {
@@ -110,13 +123,14 @@ export function LogPanel({ onClose }: { onClose: () => void }) {
       setError(null);
       try {
         const page = await queryLogs(query, ctrl.signal);
+        if (!aliveRef.current) return;
         setEntries((prev) => (append ? [...prev, ...page.entries] : page.entries));
         setNextCursor(page.nextCursor);
         setHasMore(page.hasMore);
       } catch (err) {
-        if ((err as Error).name !== "AbortError") setError((err as Error).message);
+        if (aliveRef.current && (err as Error).name !== "AbortError") setError((err as Error).message);
       } finally {
-        setLoading(false);
+        if (aliveRef.current) setLoading(false);
       }
     },
     [],
@@ -157,7 +171,7 @@ export function LogPanel({ onClose }: { onClose: () => void }) {
     if (typeof rid === "string" && rid) {
       try {
         const chain = await queryLogs({ requestId: rid, order: "asc", limit: 500 });
-        setContext(chain.entries);
+        if (aliveRef.current) setContext(chain.entries);
       } catch {
         /* 上下文拉取失败不影响主详情 */
       }
@@ -166,7 +180,8 @@ export function LogPanel({ onClose }: { onClose: () => void }) {
 
   const flashCopied = (key: string) => {
     setCopied(key);
-    setTimeout(() => setCopied((c) => (c === key ? null : c)), 1200);
+    if (copiedTimer.current !== null) clearTimeout(copiedTimer.current);
+    copiedTimer.current = setTimeout(() => setCopied((c) => (c === key ? null : c)), 1200);
   };
   const copyText = async (key: string, text: string) => {
     try {

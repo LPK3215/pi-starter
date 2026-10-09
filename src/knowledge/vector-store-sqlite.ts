@@ -9,6 +9,7 @@
  * 要接真正的向量库（Qdrant/pgvector）时另写一个 VectorStore 实现替换，上层不动。
  */
 
+import { chmodSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import type { VectorItem, VectorSearchResult, VectorStore } from "./retrieval.js";
 
@@ -43,7 +44,18 @@ export class SqliteVectorStore implements VectorStore {
   constructor(options: SqliteVectorStoreOptions = {}) {
     this.path = options.path?.trim() || `:memory:`;
     this.db = new DatabaseSync(this.path);
-    // 首次开库设 0o600（含 API 无关，但向量可能反映私有文档内容，收紧到仅本人可读）。
+    // 向量可能反映私有文档内容，收紧到仅本人可读。
+    //
+    // 必须显式 chmod：`new DatabaseSync(path)` 会按**进程 umask** 建文件（通常 0o644），
+    // 并不接受权限参数——只写注释不 chmod，等于承诺了一个从未发生的动作。
+    // `:memory:` 没有文件可收紧。
+    if (this.path !== ":memory:") {
+      try {
+        chmodSync(this.path, 0o600);
+      } catch {
+        /* Windows 上是尽力而为 */
+      }
+    }
     this.db.exec(
       "CREATE TABLE IF NOT EXISTS pi_vectors (id TEXT PRIMARY KEY, dim INTEGER NOT NULL, vector BLOB NOT NULL)",
     );

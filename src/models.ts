@@ -11,6 +11,7 @@
  */
 
 import type { Model } from "@earendil-works/pi-ai";
+import type { UiModel } from "./protocol.js";
 
 /** 目录里的一条模型。name 不填就用 id 的最后一段。 */
 export interface ModelCatalogEntry {
@@ -48,6 +49,16 @@ export function modelDisplayName(entry: Pick<ModelCatalogEntry, "id" | "name">):
   if (named) return named;
   const slash = entry.id.lastIndexOf("/");
   return slash >= 0 ? entry.id.slice(slash + 1) : entry.id;
+}
+
+/**
+ * 把 SDK 模型对象整形为线协议里的 `UiModel`（`name` 缺省回落 `id`）。
+ *
+ * REST（`/info`）与 WS（`models` 帧，三处）原先各写一遍同一个映射，字段规则一旦改动
+ * 就会在两条通道上分叉。收敛到这里，两边共用。
+ */
+export function toUiModel(model: Pick<Model<any>, "provider" | "id" | "name">): UiModel {
+  return { provider: model.provider, id: model.id, name: model.name ?? model.id };
 }
 
 /**

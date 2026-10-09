@@ -435,13 +435,45 @@ export interface UiKnowledgeHit {
 
 /* ────────────────────────── 类型守卫 ────────────────────────── */
 
-/** Narrow an unknown payload to a ClientMessage (only checks the discriminant). */
+/**
+ * Narrow an unknown payload to a ClientMessage.
+ *
+ * 只检查判别字段的**类型与形态**（完整字段校验在各命令的 switch 里做，避免重复），
+ * 但把形态收紧到「非空、无空白」：
+ *   - 数组不是消息（`{type}` 检查对数组同样成立，会一路进 dispatch）；
+ *   - `""` / `"   "` 这类空命令名没有任何合法来源，内置命令与 `defineCommand` 注册的
+ *     自定义命令都不含空白字符。
+ *
+ * 这样既不误伤合法命令名（含业务方自定义的），也不会把噪声对象当成命令放行。
+ */
 export function isClientMessage(value: unknown): value is ClientMessage {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    typeof (value as { type?: unknown }).type === "string"
-  );
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const type = (value as { type?: unknown }).type;
+  return typeof type === "string" && type.length > 0 && !/\s/.test(type);
+}
+
+/**
+ * `set_thinking` 接受的思考档 —— 镜像 SDK 的 `ThinkingLevel` 联合。
+ *
+ * 放在这里（而不是 `transport/ws.ts`）是为了让设置层的 schema 与命令校验**共用同一份**：
+ * 两者原先各持一套口径（WS 用枚举、`PATCH /settings` 用「任意 ≤32 字符字符串」），
+ * 于是 `PATCH /settings {"thinkingLevel":"garbage"}` 能被接受并存盘。
+ */
+export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+
+export type ThinkingLevelName = (typeof THINKING_LEVELS)[number];
+
+/**
+ * 设置里允许的 `thinkingLevel` 取值：SDK 档位 + `"default"`。
+ *
+ * `"default"` 是**设置层哨兵**（表示「不动 SDK 自己的默认档」），不是 SDK 档位，
+ * 所以它只出现在设置 schema 里，不出现在 `set_thinking` 的校验里。
+ */
+export const SETTINGS_THINKING_LEVELS = ["default", ...THINKING_LEVELS] as const;
+
+/** Type guard for the SDK's `ThinkingLevel` union (settings store it as a plain string). */
+export function isThinkingLevel(value: string): value is ThinkingLevelName {
+  return (THINKING_LEVELS as readonly string[]).includes(value);
 }
 
 /** All known client command discriminants (for dispatch exhaustiveness checks). */

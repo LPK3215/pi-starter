@@ -17,6 +17,7 @@ import { scanReadOnlySql } from "../db/index.js";
 import { AppError, badRequest, errorHandler, notFound, validationFailed } from "./errors.js";
 import { getRequestLogger } from "./request-context.js";
 import { Metrics } from "../metrics.js";
+import { buildCapabilityBase } from "../capabilities.js";
 import type { BuiltAgent } from "../agent.js";
 import type { ToolRegistry } from "../tools/registry.js";
 import type { SettingsService } from "../settings.js";
@@ -295,16 +296,15 @@ export function registerControlRoutes(
 
   if (registry) {
     app.get("/capabilities", (_req, res) => {
+      // 与 WS 的 `capabilities` 帧共用同一整形函数，避免两条通道各写一份而漂移。
       res.json({
         ok: true,
-        builtinTools: agent.builtinTools,
-        tools: registry.catalog(),
-        skills: agent.skills.map((item) => ({ name: item.name, description: item.description })),
-        knowledge: agent.knowledge.map((item) => ({
-          name: item.name,
-          title: item.title,
-          description: item.description,
-        })),
+        ...buildCapabilityBase({
+          builtinTools: agent.builtinTools,
+          tools: registry.catalog(),
+          skills: agent.skills,
+          knowledge: agent.knowledge,
+        }),
       });
     });
 

@@ -51,6 +51,12 @@ jobs:
         # Contract smoke tests: no model calls, no ~/.pi/agent writes.
         run: npm test
 
+      - name: Test (frontend WS client)
+        # Frontend's first tests: cross-conversation frame filtering and friends.
+        # Reuses the root tsx and needs no web/node_modules — client.ts only depends
+        # on @pi/protocol (aliased to src/protocol.ts), not on React/DOM.
+        run: npm run test:web
+
       - name: Runtime smoke (WebSocket end-to-end)
         # Exercises the real transport: frame ordering, pending-queue replay,
         # origin checks, backpressure-driven disconnect.
@@ -79,5 +85,42 @@ jobs:
         with:
           name: dist-node${{ matrix.node-version }}-${{ matrix.os }}
           path: dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  frontend:
+    # 前端在此之前完全没有被 CI 覆盖（既不 typecheck 也不 build），一个独立作业即可补上。
+    # 只跑 lint 与 typecheck+build：`npm --prefix web run check:official` 当前**退出码为 1**
+    # （官方 registry 组件已有 11 处不同 / 3 处缺失），放进 CI 会把流水线变红——
+    # 那是需要单独决策的对齐工作，不是门禁。
+    name: Frontend (lint + typecheck + build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node 24.x
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24.x'
+          cache: npm
+          # 前端是独立 package，缓存要指向它自己的 lockfile。
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci --prefix web
+
+      - name: Lint
+        run: npm --prefix web run lint
+
+      - name: Typecheck + build
+        run: npm --prefix web run build
+
+      - name: Upload web dist artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-dist
+          path: web/dist/
           if-no-files-found: error
           retention-days: 7

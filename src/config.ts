@@ -11,7 +11,9 @@
  * 用法：复制 .env.example 为 .env，填好即可。
  */
 
+import { existsSync } from "node:fs";
 import { join } from "node:path";
+import { getLogger } from "./log.js";
 import { PROTOCOL_VERSION } from "./protocol.js";
 import {
   modelDisplayName,
@@ -311,16 +313,23 @@ export const SETUP_HINT =
 
 /**
  * 加载项目根目录的 .env（Node 22 内置，零依赖）。
- * .env 是可选的——不存在就静默跳过，用命令行参数照样能跑。
+ *
+ * 不存在 → 静默跳过（.env 是可选的，用命令行参数照样能跑）。
+ * 存在但加载失败 → **必须出声**：一个笔误（引号没配对、变量名非法）会让整份 .env
+ * 静默失效，表现为「Key 明明填了却说没配」，比直接报错难查得多。
  */
 export function loadEnvFile(cwd = process.cwd()): void {
   const envPath = join(cwd, ".env");
   if (loadedEnvPaths.has(envPath)) return;
   loadedEnvPaths.add(envPath);
+  if (!existsSync(envPath)) return;
   try {
     process.loadEnvFile?.(envPath);
-  } catch {
-    /* .env 不存在或格式有误 → 忽略，回落到命令行参数 */
+  } catch (err) {
+    getLogger().warn("加载 .env 失败，已忽略该文件（回落到命令行参数与环境变量）", {
+      envPath,
+      error: err instanceof Error ? err.message : String(err),
+    });
   }
 }
 

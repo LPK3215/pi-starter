@@ -6,7 +6,8 @@
  * 由 `configureLog({ sink: createCompositeSink([stdout, file]) })` 组合进现有 logger。
  *
  * 提供的能力：
- *   - **按天分片**：活跃文件 `pi-starter-YYYY-MM-DD.log`，跨天自动切新文件；
+ *   - **按天分片**：活跃文件 `<base>-<date>.<seq>.log`（如 `pi-starter-2026-10-10.01.log`），
+ *     跨天或轮转自动切新分段；
  *   - **按大小轮转**：超过 `maxBytes` 时把当前文件改名归档并 gzip，重开同名活跃文件；
  *   - **压缩归档**：轮转下来的片段异步 gzip 成 `.log.gz`，成功即删原文件；
  *   - **保留天数**：超过 `retentionDays` 的 `.log` / `.log.gz` 在轮转与启动时清理；

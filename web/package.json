@@ -7,6 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
+    "test": "npm --prefix .. run test:web",
     "check:official": "node scripts/check-registry-sync.mjs",
     "sync:official": "node scripts/sync-official-components.mjs",
     "preview": "vite preview"

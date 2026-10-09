@@ -3,7 +3,7 @@
  * 一个路径穿越或符号链接逃逸就等于把整个文件系统交出去。
  */
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, realpathSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, realpathSync, existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -243,4 +243,88 @@ test("文件服务：对二进制扩展名拒绝文本写入", () => {
   const err = expectAppError(() => fs_.write("pic.png", "not really a png"));
   assert.equal(err.httpStatus, 400);
   assert.match(err.message, /二进制/);
+});
+
+/**
+ * 回归：`.env` 旁路。
+ *
+ * root 就是 `process.cwd()`，而 `.env`（含 PI_API_KEY）正躺在那里。路径校验只拦
+ * 「越出工作目录」，拦不住「工作目录内本来就有的密钥文件」——`GET /files/read?path=.env`
+ * 会把 Key 原样吐出，与 provider-keys 守的「原始 key 永不出服务端」直接冲突。
+ */
+test("文件服务：敏感文件名在读 / 列表 / 写入中一律被拒", () => {
+  const root = tmpRoot();
+  writeFileSync(join(root, ".env"), "PI_API_KEY=leaked");
+  writeFileSync(join(root, "id_rsa"), "PRIVATE KEY");
+  writeFileSync(join(root, "server.pem"), "CERT");
+  writeFileSync(join(root, "keep.txt"), "ok");
+  const fs_ = new FileService({ root });
+
+  for (const name of [".env", "id_rsa", "server.pem", ".env.local"]) {
+    writeFileSync(join(root, ".env.local"), "PI_API_KEY=leaked");
+    assert.equal(expectAppError(() => fs_.read(name)).httpStatus, 403, `${name} 必须被拒`);
+  }
+  // 写入同样被拒：既不能读走，也不能被改成别的密钥。
+  assert.equal(expectAppError(() => fs_.write(".env", "x")).httpStatus, 403);
+
+  // 列表里连名字都不能出现——列表带文本预览，否则是又一条旁路。
+  const names = fs_.list("").entries.map((e) => e.name);
+  assert.ok(!names.includes(".env"), ".env must not be listed");
+  assert.ok(!names.includes("id_rsa"));
+  assert.ok(!names.includes("server.pem"));
+  assert.ok(names.includes("keep.txt"), "普通文件不受影响");
+});
+
+test("文件服务：denyNames 可覆盖默认名单", () => {
+  const root = tmpRoot();
+  writeFileSync(join(root, ".env"), "PI_API_KEY=leaked");
+  writeFileSync(join(root, "custom.secret"), "x");
+  const fs_ = new FileService({ root, denyNames: ["*.secret"] });
+
+  // 换成自定义名单后 `.env` 放开、`*.secret` 被拒。
+  assert.equal(fs_.read(".env").text, "PI_API_KEY=leaked");
+  assert.equal(expectAppError(() => fs_.read("custom.secret")).httpStatus, 403);
+});
+
+/**
+ * 回归：root 内的符号链接绕过 denyNames。
+ *
+ * 字面 basename 无害（`notes.txt`）不等于真实目标无害（`.env`）。更危险的是**列表**：
+ * 它的预览走绝对路径直接读、不经过 `resolvePath`，所以只要条目被列出来，`.env` 的
+ * 内容就会作为 `notes.txt` 的预览出现在目录列表里。
+ */
+test("文件服务：root 内的符号链接不能绕过 denyNames（读与列表预览）", () => {
+  const root = tmpRoot();
+  writeFileSync(join(root, ".env"), "PI_API_KEY=leaked");
+  try {
+    symlinkSync(".env", join(root, "notes.txt"));
+  } catch {
+    return; // 平台不支持符号链接
+  }
+  const fs_ = new FileService({ root });
+
+  assert.equal(expectAppError(() => fs_.read("notes.txt")).httpStatus, 403, "读必须被拒");
+  const listed = fs_.list("");
+  assert.ok(!listed.entries.some((e) => e.name === "notes.txt"), "链接条目不能出现在列表里");
+  assert.ok(
+    !listed.entries.some((e) => (e.preview ?? "").includes("PI_API_KEY")),
+    "列表预览绝不能吐出被拒文件的内容",
+  );
+});
+
+/**
+ * 回归：上传二进制必然损坏。
+ *
+ * 原实现是 `write(path, buf.toString("utf8"))`：非 UTF-8 字节被替换成 U+FFFD，
+ * 且 `write` 本身又拒绝二进制扩展名——两头都对不上。
+ */
+test("文件服务：writeBinary 保证字节无损（上传路径）", () => {
+  const fs_ = new FileService({ root: tmpRoot() });
+  const bytes = Buffer.from([0x00, 0xff, 0xfe, 0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a]);
+  fs_.writeBinary("media/blob.png", bytes);
+
+  const written = readFileSync(join(fs_.root, "media", "blob.png"));
+  assert.deepEqual(new Uint8Array(written), new Uint8Array(bytes), "binary bytes must survive intact");
+  // 读回时如实标记为二进制，而不是把它当文本吐出来。
+  assert.equal(fs_.read("media/blob.png").binary, true);
 });

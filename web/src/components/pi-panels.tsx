@@ -10,12 +10,12 @@
  * - 模型 / 思考档 / 计划模式 / 上下文预算：assistant-ui 概念里没有，全部自绘。
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
-import { piClient } from "@/pi/client";
+import { piClient, toUiResponsePayload } from "@/pi/client";
 import { usePiSnapshot } from "@/pi/usePiRuntime";
 import { cn } from "@/lib/utils";
-import type { UiExtensionRequest } from "@pi/protocol";
+import { THINKING_LEVELS } from "@pi/protocol";
 
 const btn =
   "rounded-lg border border-border px-2.5 py-1 text-xs hover:bg-muted disabled:opacity-40";
@@ -110,15 +110,28 @@ export function HitlDialog() {
   const request = uiRequests.find((r) => r.method !== "notify");
   const notices = uiRequests.filter((r) => r.method === "notify");
   const [value, setValue] = useState("");
+  /** 已应答过的 notify id：effect 在多渲染/StrictMode 双挂载下会重跑，重复应答会被服务端当成未知 id。 */
+  const answered = useRef(new Set<string>());
 
-  if (notices.length > 0) {
-    for (const n of notices) piClient.respondUi(n, { id: n.id, value: "" });
-  }
+  // notify 是 fire-and-forget：必须立刻回一个空应答，否则桥那边一直挂着。
+  //
+  // 这件事**只能在 effect 里做**：`respondUi` 会 send + `patch`，也就是在渲染期间改外部
+  // store 并唤醒其它订阅者——React 明令禁止（"Cannot update a component while rendering
+  // a different component"），而且可能形成重渲染环。
+  useEffect(() => {
+    const present = new Set(notices.map((n) => n.id));
+    for (const id of answered.current) if (!present.has(id)) answered.current.delete(id);
+    for (const n of notices) {
+      if (answered.current.has(n.id)) continue;
+      answered.current.add(n.id);
+      piClient.respondUi(n, { id: n.id, value: "" });
+    }
+  }, [notices]);
 
   if (!request) return null;
 
   const answer = (v: string | boolean | null) => {
-    piClient.respondUi(request, payload(request, v));
+    piClient.respondUi(request, toUiResponsePayload(request, v));
     setValue("");
   };
 
@@ -162,15 +175,6 @@ export function HitlDialog() {
       </div>
     </div>
   );
-}
-
-function payload(
-  request: UiExtensionRequest,
-  value: string | boolean | null,
-): { id: string; value: string } | { id: string; confirmed: boolean } | { id: string; cancelled: true } {
-  if (value === null) return { id: request.id, cancelled: true };
-  if (request.method === "confirm") return { id: request.id, confirmed: value === true };
-  return { id: request.id, value: String(value) };
 }
 
 /** 左侧对话列表：多对话编排（conversations + new/switch/open/rename/close）。 */
@@ -242,9 +246,6 @@ export function ToolTrace() {
     </div>
   );
 }
-
-/** 与后端 set_thinking 接受值一致（非法值会被服务端拒）。 */
-const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high"] as const;
 
 /**
  * 思考档选择器。

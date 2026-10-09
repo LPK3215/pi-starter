@@ -10,7 +10,7 @@ import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { SettingsService, fileSettingsPort, SETTINGS_DEFAULTS } from "./settings.js";
+import { SettingsService, fileSettingsPort, SETTINGS_DEFAULTS, validateSettings } from "./settings.js";
 
 function makeService(): { svc: SettingsService; file: string } {
   const dir = mkdtempSync(join(tmpdir(), "pi-builtin-"));
@@ -18,6 +18,21 @@ function makeService(): { svc: SettingsService; file: string } {
   const svc = new SettingsService(fileSettingsPort(file));
   return { svc, file };
 }
+
+/**
+ * 回归：`thinkingLevel` 两条写入路径口径分叉。
+ *
+ * `set_thinking`（WS）用严格枚举，而设置 schema 过去是「任意 ≤32 字符字符串」，
+ * 于是 `PATCH /settings {"thinkingLevel":"garbage"}` 能被接受并存盘。现在两者同源于
+ * `protocol.ts` 的枚举（含设置层哨兵 `default`）。
+ */
+test("设置：thinkingLevel 收敛为枚举，拒绝垃圾值", () => {
+  assert.equal(validateSettings({ thinkingLevel: "high" }), null);
+  assert.equal(validateSettings({ thinkingLevel: "off" }), null);
+  assert.equal(validateSettings({ thinkingLevel: "default" }), null, "`default` 是设置层哨兵");
+  assert.ok(validateSettings({ thinkingLevel: "garbage" }), "任意字符串过去会被接受并存盘");
+  assert.ok(validateSettings({ thinkingLevel: "" }), "空串同样必须拒绝");
+});
 
 test("设置：内置示例内容默认开启（示例对零嵌入方有用）", () => {
   const { svc } = makeService();

@@ -7,8 +7,11 @@
  * 这不是沙箱。按你的业务改 DANGEROUS_BASH_RULES 和路径策略即可。
  */
 
-import { basename, isAbsolute, relative, resolve } from "node:path";
+import { existsSync, realpathSync } from "node:fs";
+import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
 import { getLogger } from "../log.js";
+import { isDeniedName } from "../secret-files.js";
+import { matchGuardShellRule } from "./shell-rules.js";
 import {
   isToolCallEventType,
   type ExtensionAPI,
@@ -21,52 +24,15 @@ export interface BashDangerMatch {
   description: string;
 }
 
-const DANGEROUS_BASH_RULES: Array<{
-  id: string;
-  description: string;
-  test: (command: string) => boolean;
-}> = [
-  {
-    id: "rm-rf",
-    description: "递归强制删除（rm -rf）",
-    test: (cmd) =>
-      /\brm\s+-(?=[a-zA-Z]*r)(?=[a-zA-Z]*f)[a-zA-Z]+\b/i.test(cmd) ||
-      /\brm\s+--recursive\b/i.test(cmd),
-  },
-  {
-    id: "mkfs",
-    description: "格式化磁盘（mkfs）",
-    test: (cmd) => /\bmkfs(\.\w+)?\b/i.test(cmd),
-  },
-  {
-    id: "dd",
-    description: "裸设备写入（dd of=）",
-    test: (cmd) => /\bdd\b/i.test(cmd) && /\bof\s*=/i.test(cmd),
-  },
-  {
-    id: "fork-bomb",
-    description: "fork bomb",
-    test: (cmd) => /:\(\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;/.test(cmd),
-  },
-  {
-    id: "shutdown",
-    description: "关机 / 重启",
-    test: (cmd) => /\b(shutdown|reboot|halt|poweroff)\b/i.test(cmd),
-  },
-  {
-    id: "windows-destructive",
-    description: "Windows 破坏性删除 / 格式化",
-    test: (cmd) =>
-      (/\bRemove-Item\b/i.test(cmd) && /-(Recurse|Force)\b/i.test(cmd)) ||
-      /\bdel\s+\/s\b/i.test(cmd) ||
-      /\brd\s+\/s\b/i.test(cmd) ||
-      /\bformat\s+[a-z]:/i.test(cmd),
-  },
-];
-
-/** 命中危险 bash 规则则返回第一条；放行返回 undefined */
+/**
+ * 命中危险 bash 规则则返回第一条；放行返回 undefined。
+ *
+ * 规则表来自 `shell-rules.ts`（与审批规则同源），这里只取 `guardBlocks` 的条目。
+ * 返回的 `id` 与审批规则 id 的后缀一致（`builtin:bash.<id>`），便于两边对照与排查。
+ */
 export function findDangerousBash(command: string): BashDangerMatch | undefined {
-  return DANGEROUS_BASH_RULES.find((rule) => rule.test(command));
+  const rule = matchGuardShellRule(command);
+  return rule ? { id: rule.id, description: rule.reason } : undefined;
 }
 
 /**
@@ -81,16 +47,59 @@ export function dangerousShellCommand(
   return findDangerousBash(input.command);
 }
 
+/** 字面路径包含判定（不解析链接）。 */
+function isInsideLiteral(root: string, target: string): boolean {
+  const rel = relative(root, target);
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+}
+
+/**
+ * 取路径**最近的已存在祖先**的 realpath；整条路径都不存在（或解析失败）时返回 undefined。
+ *
+ * 对还不存在的目标（新建文件）而言，字面路径在 cwd 内不等于真实路径在 cwd 内——
+ * 中间任何一层是符号链接就可能逃逸。所以要落到最近存在的祖先上再解析。
+ */
+function realpathOfNearestExisting(target: string): string | undefined {
+  let probe = target;
+  for (let depth = 0; depth < 64; depth += 1) {
+    if (existsSync(probe)) {
+      try {
+        return realpathSync.native(probe);
+      } catch {
+        // 解析失败（权限 / 异常链接 / 与删除竞争）时按「不可信」处理。
+        return undefined;
+      }
+    }
+    const parent = dirname(probe);
+    if (parent === probe) return undefined;
+    probe = parent;
+  }
+  return undefined;
+}
+
 /**
  * 判断目标路径是否落在 cwd 内（含 cwd 自身）。
- * 用 path.resolve + relative，Windows 跨盘符会得到绝对路径，isAbsolute 能拦住。
- * 不处理 symlink 逃逸——要沙箱请用容器，不要只靠这一层。
+ *
+ * 两道校验，与 `FileService` 同强度：
+ *   1. `resolve` 后的**字面路径**在 cwd 内 —— 拦 `../` 与绝对路径穿越；
+ *      Windows 跨盘符会得到绝对路径，`isAbsolute` 能拦住。
+ *   2. 最近**已存在祖先**的 **realpath** 在 cwd 内 —— 拦符号链接逃逸。
+ *      字面路径在 cwd 内并不等于真实路径在 cwd 内，符号链接正是把两者分开的机制。
+ *
+ * cwd 自身也用它自己的 realpath 作基准：macOS 的 `/tmp`、或用户从链接目录启动时，
+ * 字面 cwd 与真实 cwd 不同，用字面值当基准会把合法操作误判成越界。
+ *
+ * 这不是沙箱（bash 命令体本身不受此约束），但至少让 read/write/edit 与文件服务一致。
  */
 export function isPathInsideCwd(targetPath: string, cwd: string): boolean {
   const resolvedCwd = resolve(cwd);
   const resolvedTarget = resolve(resolvedCwd, targetPath);
-  const rel = relative(resolvedCwd, resolvedTarget);
-  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+  if (!isInsideLiteral(resolvedCwd, resolvedTarget)) return false;
+
+  const realTarget = realpathOfNearestExisting(resolvedTarget);
+  if (realTarget === undefined) return true; // 整条路径都不存在：没有可逃逸的实体
+  const realCwd = realpathOfNearestExisting(resolvedCwd) ?? resolvedCwd;
+  return isInsideLiteral(realCwd, realTarget);
 }
 
 function block(reason: string, extra?: Record<string, unknown>): ToolCallEventResult {
@@ -130,6 +139,20 @@ export function guardExtension(pi: ExtensionAPI) {
     }
 
     const targetPath = pathFromEvent(event);
+    // 敏感文件名：与 HTTP 文件服务（`files/service.ts` 的 `denyNames`）共用同一份名单
+    // （`secret-files.ts`）。
+    //
+    // 这一步不能省：路径校验判的是「在不在工作目录内」，而 `.env` 恰好**就在**工作目录里
+    // ——不拦的话，agent 用内置 `read` 就能把模型 Key 读进上下文（`read` 在任何档位都可用，
+    // 而审批规则 `builtin:secret.access` 是 `ask`，`toolApprovalEnabled` 默认 false 时会
+    // 被压制为 allow）。文件服务那条通道已堵，这条是同一铁律的另一半。
+    if (targetPath && isDeniedName(basename(targetPath))) {
+      return block(`${event.toolName}：拒绝访问敏感文件（${basename(targetPath)}）`, {
+        toolName: event.toolName,
+        targetPath,
+        rule: "secret-file",
+      });
+    }
     if (targetPath && !isPathInsideCwd(targetPath, ctx.cwd)) {
       // SDK 技能正文在 additionalSkillPaths 里，不一定落在 cwd。
       // 只放行 read SKILL.md，write/edit 越界照拦。

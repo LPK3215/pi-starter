@@ -7,7 +7,69 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **文件服务敏感文件名黑名单（P1-1）**：`FileService` 新增 `denyNames`（默认 `.env` / `.env.*` / `*.pem` / `*.key` / `*.p12` / `*.pfx` / `id_rsa` / `id_ed25519` / `auth.json` / `credentials*` / `.npmrc` / `.netrc`），在 `resolvePath` 之后按 basename 拦（fail-closed），`/files/read`、`/files/raw`、写入与目录列表（**含列表预览**）全部覆盖。此前 root 就是 `process.cwd()`，`.env` 正好躺在那里，`GET /files/read?path=.env` 会把 `PI_API_KEY` 原样吐出——与 `provider-keys.ts` 反复强调的「原始 key 及其任何派生形式永不出服务端」直接冲突。业务方可用 `denyNames` 覆盖默认名单。
+- **子进程不再继承模型密钥（P1-2）**：新增 `src/child-env.ts`；`exec/runner.ts`（两个 spawn 分支）与 `mcp/client.ts` 一律从 `childProcessEnv()` 取环境，剔除 `PI_API_KEY` / `PI_API_KEY_<PROVIDER>`。MCP 服务器**自己**的凭据仍由调用方经 `options.env` 显式传入，不受影响。
+- **guard 路径校验升级为 realpath（P1-3）**：`isPathInsideCwd` 现在解析「最近已存在祖先」的 realpath，基准用 cwd 自身的 realpath（避免 macOS `/tmp`、从链接目录启动时把合法操作误判为越界）。read / write / edit / ls / grep / find 与 `FileService`、`exec` **同强度**，符号链接逃逸不再只靠文件服务那一层拦。
+- **危险命令表收敛为单一事实源（P1-3）**：新增 `src/extensions/shell-rules.ts`，`guard` 与审批 `BUILTIN_RULES` 从同一份表派生。此前两张表**已漂移**（审批表多了 `git-destructive` / `chmod-recursive`，guard 没有）。guard 的硬拦截集合刻意保持原有 6 条不变（这两条交给审批 `ask`），因此**行为完全不变**，只是消除了漂移。
+- **文档降调**：README（中英）`coding` 段落与「进阶」段落不再暗示 guard 能约束 `bash` 命令体；明确「不是沙箱、`bash` 命令体无路径约束、正则可被绕过、要真隔离请用 `Dockerfile` / `sandbox.example.ts`」。
+- **`killProcessTree` 的 `taskkill` 也裁剪环境（P1-2 补漏）**：`exec/runner.ts` 在 Windows 上 spawn `taskkill` 时**没有传 `env`**，同样会继承 `PI_API_KEY`。现在凡是 spawn 的地方口径一致（`exec` 主命令 / 后台任务 / MCP / taskkill）。
+- **agent 自己的内置工具也不许碰敏感文件（高危，与 P1-1 同一条铁律的另一半）**：`guard` 原先只判「路径在不在工作目录内」，而 `.env` **恰好就在**工作目录里——于是默认配置下 `read` 就能把模型 Key 读进上下文（`read` 在任何档位都可用；审批 `builtin:secret.access` 是 `ask`，而 `toolApprovalEnabled` 默认 `false` 时 ask 被压制为 allow）。现 `guard` 对 `read`/`write`/`edit`/`ls`/`grep`/`find` 追加敏感文件名拦截，**与 HTTP 文件服务共用同一份名单**（新模块 `src/secret-files.ts`）。
+- **sqlite 向量库落盘权限收紧（注释曾承诺 0o600，实际从未设置）**：`new DatabaseSync(path)` 按进程 umask 建文件（通常 0o644），而向量可能反映私有文档内容。现显式 `chmodSync(path, 0o600)`，与 `provider-keys.ts` / `setup.ts` 的做法一致（Windows 上尽力而为）。
+- **`denyNames` 的两个绕过点**：① 只看字面 basename —— root 内 `notes.txt -> .env` 的链接可读到 `.env`，现追加**真实目标 basename** 校验；② 更危险的是 `list()` 的**预览**走绝对路径直接读、不经过 `resolvePath`，条目一旦被列出就把 `.env` 内容当预览吐出——现在真实目标命中名单的条目**连列都不列**。
+
+### Fixed
+
+- **`db.query()` 不再全量载入（P2-1）**：改用 `stmt.iterate()` 边取边判，只物化前 `maxRows` 行，其余行只计数；`totalRows` 仍报**真实总数**（既有承诺不变）。原实现 `stmt.all()` 会把整张表物化进内存，行数上限只限制了「返回多少行」，没限制「载入多少行」——注释与实现自此一致。
+- **上传二进制不再损坏（P4）**：新增 `FileService.writeBinary()`，`/files/upload` 改走它。原实现 `write(path, buf.toString("utf8"))` 会把非 UTF-8 字节替换成 U+FFFD，且 `write` 本身又拒绝二进制扩展名，两头都对不上。
+- **`.env` 加载失败不再静默（P4）**：`loadEnvFile` 只在文件**不存在**时静默跳过；文件存在但解析失败时告警——一个笔误（引号没配对等）以前会让整份 `.env` 静默失效，表现为「Key 明明填了却说没配」。
+- **`buildState` 不再残留死字段 `rev: 0`（P4）**：`SnapshotEmitter` 的 `buildState` 契约改为 `Omit<UiState, "rev">`，revision 链由发射器独占（`++this.rev`）并在两个分支注入；那个看似生效实则被覆盖的 `0` 不复存在。
+- **`isClientMessage` 收紧形态校验（P4）**：拒绝数组、空串与纯空白 `type`；合法命令名（内置命令与 `defineCommand` 注册的业务命令，均不含空白）不受影响。
+- **子代理等待队列加上限（P2-3）**：新增 `DEFAULT_MAX_QUEUED_SUBAGENTS = 32` 与 `SubagentRunnerOptions.maxQueued`；超限**明确回绝**并给出可读原因，而不是堆起一串永不 resolve 的 Promise。并发上限内仍是排队（既有语义不变）。
+- **`Metrics` 对未知指标名不再抛（P2-3）**：收敛为私有 `keyOf()`，未知名字静默忽略——与代码注释声明的契约一致（拼错的指标名绝不能带崩一次请求）。
+- **文档事实性纠错（README 中英）**：原文称「`.env` 里的 `PI_API_KEY` 只给 setup 用、不在请求路径上」——不实：服务端会把 `.env` 载入 `process.env`（模型调用正是用它鉴权），`/providers` 也会把它标成密钥来源。现改述为「确实存在于服务端进程，但刻意不被子进程继承」，与新加的 `child-env.ts` 一致；同时把陈旧的测试数字（37 文件 / 308 用例、smoke 17 项）校为 42 文件 / 357 用例、smoke 21 项。
+- **WS 错误文案统一脱敏（内部信息曾原样外泄）**：`transport/ws.ts` 有 **6 处**直接 `err.message` 回给客户端（`set_model` / `cycle_model` / `set_settings` / 顶层 `dispatch` catch / 自定义命令），而 REST 侧一直用 `clientMessage()` 脱敏——同一类失败「REST 干净、WS 泄漏绝对路径与驱动信息」。新增 `http/errors.ts` 的 `clientErrorMessage(err, fallback?)`，三条通道共用。**例外**：自定义命令是业务可控边界（`defineCommand` 作者自己决定文案，由 `extensions.test.ts` 锁定），故仍转发原文，只对脚手架自产的内部 `AppError` 脱敏。
+- **WS 握手前 `pending` 队列加上限（可与 `maxPayload` 组合成内存耗尽面）**：`maxPayload` 只限单帧字节、不限帧数，一个不发 `hello` 的连接可以持续灌小帧，且这些命令在 `flushPending()` 后仍会被依次执行。现超过 `MAX_PENDING_BEFORE_HELLO = 64` 即计 `protocolErrorsTotal` 并 `terminate()`。
+- **WS `set_tool_enabled` 缺布尔校验会静默禁用工具**：漏传 `enabled` 时 `undefined` 落到 `else` 分支 → **静默禁用该工具**且回 `ok:true`（REST 同输入返回 400）。现显式校验 `{ name: string, enabled: boolean }`；`set_model` 同样补非空 `modelId` 校验。
+- **`thinkingLevel` 两条写入路径口径分叉**：`set_thinking`（WS）用严格枚举，而设置 schema 是「任意 ≤32 字符字符串」→ `PATCH /settings {"thinkingLevel":"garbage"}` 能被接受并存盘。现两者同源于 `protocol.ts` 的 `THINKING_LEVELS` / `SETTINGS_THINKING_LEVELS`（含设置层哨兵 `default`）。
+- **MCP 客户端 `start()` 漏 `await`**：注入 `spawn` 的分支未等待异步握手 → rejection 逃出 `catch` 变成 unhandled rejection，且紧接着的 `listTools()` 会在子进程未就绪时开跑。
+- **MCP 子进程只发 SIGTERM、无 SIGKILL 升级（注释谎称有）**：忽略 SIGTERM 的 MCP server 会变成孤儿进程（父进程退出后仍存活，占着端口/句柄）。现 SIGTERM 后 2s 未退出即 SIGKILL（定时器 unref，不拖住事件循环退出；退出状态由 `onExit` 维护，不读 `McpProcessHandle` 未暴露的字段）。
+- **子代理截断结果超过声明的 `maxChars`**：返回 `half + marker + half`，marker 未计入预算，"上限"实际是上限 + marker 长度。现把 marker 算进预算，并在上限小到放不下 marker 时改为硬截断（仍然 ≤ 上限）。
+- **`maxOpenConversations = 1` 会静默突破上限**：`evictForCapacity()` 只淘汰非 active，而 cap=1 时唯一那条就是 active → 无候选 → 插入后变成 2。现夹到 2 并告警（cap=1 与「永不淘汰活动会话」本就互相矛盾，与其悄悄超出不如让行为可预期）。
+- **看门狗上限淘汰从此可见**：512 上限回收最旧一条是**有意的**资源保证（`pendingCount <= 512` 由测试锁定），但原来是静默的——被回收的那条若仍在跑就失去超时保护。现在回收前记 warn（保留有界保证，去掉静默）。
+- **文件日志 sink 头部注释的文件名漂移**：注释写 `pi-starter-YYYY-MM-DD.log`，实际是 `<base>-<date>.<seq>.log`。
+
+#### 前端（`web/`）
+
+- **【高危】跨会话帧污染当前视图（3 处同源）**：后端每条已打开对话都把帧推到**同一个** socket（`ClientSession.emit` 不按 active 过滤），而协议里 `snapshot_delta` / `message_delta` / `tool_status` / `tool_delta` / `run_start` / `run_end` / `turn_start` **都带 `conversationId`**。前端全部不比对，于是"在 A 里发 prompt、切到 B"之后：A 的流式文本被拼进 B 的 `streamText`、A 的工具轨迹混进 B 的列表、A 的 `run_start` 把 B 标成运行中，而 A 的**全量快照会整个替换掉 B 的消息**。最离谱的是 `snapshot_delta` 的跨会话分支——注释写"直接丢弃"，实现却是调 `resetConversationView()`，**把当前会话清空**（比不过滤更糟）。现新增 `belongsToView()` 统一按 `conversationId` 过滤，并新增 `dropForeign()` 计数 + 首条告警（出现即说明有并发生成的后台会话）；切/建会话期间按"期望会话 id"过滤，避免抢跑的后台快照先建立身份。
+- **思维链在流式中"闪断"**：全量 `snapshot` 只回填 `streamText`、把 `streamThinking` 置空，下一条 thinking 增量就在空串上累加（`"" + delta`），快照之前累积的思维链整段丢失。现与文本通道同样从 `streamingMessage.thinking` 回填。
+- **重连退避定时器无句柄**：`disconnect()` 取消不掉已排定的 `setTimeout`，退避到期后仍会 `open()`；且 `open()` 不检查 `closedByUser`，于是断开后多出一条无人管理的僵尸 socket（其 close 又不再重连）。现保存句柄并在 `disconnect()` 取消，`open()` 入口再确认一次。
+- **离线时静默丢帧且擅自清空视图**：`send()` 在非 OPEN 时静默 return；`newConversation/openConversation/switchConversation` 即使发送失败也照样 `resetConversationView()`——用户看到消息被清空、却什么都没发生。现 `send()` 返回布尔并给出一次性提示（去重，避免高频连发刷屏），三个切换命令失败时**不动本地视图**。
+- **`HitlDialog` 在 render 阶段产生副作用**：`notify` 的自动应答写在渲染体里，而 `respondUi` 会 `send` + `patch`（改外部 store 并唤醒其它订阅者）——React 明令禁止，可能形成重渲染环。现移入 `useEffect`，并用 `ref` 记录已应答 id（effect 在双挂载下会重跑，重复应答会被服务端当成未知 id 而回提示帧）。
+- **`ErrorBoundary` 不覆盖适配层**：`useExternalStoreRuntime(usePiRuntime())` 写在 `App` 自己的渲染里，而边界只在它的子树内——适配层一抛错就整页白屏，与注释"至少给出可读错框"不符。现把适配层创建移进边界内的 `RuntimeShell`。
+- **思考档枚举漂移（且注释自称与后端一致）**：前端硬编码 5 档，协议是 7 档——`xhigh` / `max` 在下拉里根本选不到。现从 `@pi/protocol` 导入 `THINKING_LEVELS`（与 `set_thinking` / 设置 schema 同一份）。
+- **未知帧静默丢弃**：`switch` 的 `default` 与 `pong` 共用且无日志，新增帧（如协议将来的字段）会无声消失，排障时最难查。现未知类型告警一次（按类型去重），并对**刻意不消费**的帧（`settings_state` / `knowledge_hits` / `turn_end`，前端不调对应命令、无消费者）显式列白名单，不算漂移。
+- **日志面板卸载后 setState / 不 abort**：面板关闭即卸载，但 `flashCopied` 的计时器不清理、在途 `fetch` 只在"下一次查询"时才被 abort。现加卸载清理（abort + clearTimeout）与 `aliveRef` 守卫，另 `selectEntry` 的异步 `setContext` 同样加守卫。
+- **`payload()` 与 `toUiResponsePayload()` 两份同逻辑实现**：前者在组件里、后者在 client 里且无人调用，`confirm`/取消语义需人工保持同步。现统一用 `client` 里的一份。
+
+### Changed
+
+- **快照构建去掉一次全量重投影（P2-2）**：`planTrim()` 现在接受已投影好的消息数组，`buildState` 复用本次的 `allMessages`。原先每周期会把 `currentMessages()` 跑两遍（连带两遍会话树遍历），流式输出时每 60ms 重复一次。
+- **双通道整形去重（P3-3）**：新增 `src/capabilities.ts`（`buildCapabilityBase`）与 `models.ts` 的 `toUiModel()`；REST `GET /capabilities`、`/info` 与 WS `capabilities` / `models` 帧共用同一整形函数，字段规则不再分叉（顺带把 `/info` 的 `name` 缺省回落对齐到 WS 的 `name ?? id`）。
+- **SDK 私有形状收敛到 `src/sdk-adapter.ts`（P3-2）**：`session.sessionManager` / `agent.state.messages` / `compact` / `abortCompaction` / `cycleModel` / `cycleThinkingLevel` / `setSessionName` 这些**未从 SDK 公开类型导出**的形状，原先散落在 `session-hub.ts` 各处、各写一遍 `typeof === "function"` 兜底——升级 SDK 时的表现是「有些点静默失效、有些点抛错」，且没有任何一处能列出「我们依赖了哪些私有形状」。现全部收敛为带存在性检查的访问器（缺失即返回 `undefined`，由调用方显式降级；`sdkRenameSession` 把「官方 setter → sessionManager 退化」的两条私有路径也封在里面）。语义与抽取前**逐字一致**，该模块自身的「形状缺失即降级、不抛」契约有单测锁定。
+- **`createSessionHubFromOptions()`（P3-5，非破坏式）**：新增具名参数入口并在 `server.ts` 使用；原 8 位置参数版 `createSessionHub()` 保留为转调具名形式的 `@deprecated` 适配器，**既有嵌入方零改动**（`lib.ts` 两个都导出）。
+- **CI 补上前端**：`web/` 此前在 CI 里**完全没有被覆盖**（既不 typecheck 也不 build，只有一个跑不起来的 lockfile 存在）。现新增独立的 `frontend` 作业（ubuntu 单作业，不进 9 路矩阵）：`npm ci --prefix web` → `lint` → `typecheck + build` → 上传 `web/dist`；并在矩阵作业的 Test 之后加 `npm run test:web`（复用根 tsx，**不需要 web/node_modules**——已实测在移走 `web/node_modules` 后 7/7 通过，所以不会给矩阵作业增加安装成本）。
+  注意：**没有**把 `npm --prefix web run check:official` 放进 CI——它当前**退出码为 1**（官方 registry 组件已有 11 处内容不同 / 3 处本地缺失）。那是需要单独决策的对齐工作，直接进门禁会把流水线变红。
+
 ### Added
+
+- **回归测试（改回缺陷即变红）**：文件服务敏感名黑名单（读 / 列表 / 写入）与 `writeBinary` 字节无损、`denyNames` 可覆盖；shell-rules 与审批规则同源且 guard 硬拦集合不变、realpath 链接逃逸；子进程环境裁剪；`isClientMessage` 形态；子代理等待队列上限；Metrics 未知指标名不抛。
+- **`src/sdk-adapter.test.ts`（新测试文件，已登记进 `npm test`）**：锁定适配层的核心契约——形状**对**时取得到、形状**缺失/不对**时返回 `undefined` 而不抛；并锁住 `sdkRenameSession` 的「优先官方 setter、退化到 sessionManager」两条路径。
+- **`src/secret-files.ts`**：敏感文件名策略的中性模块，供 HTTP 文件服务与 `guard` 共用（不让扩展层反向依赖 `files/service.ts`）；`files/service.ts` 继续 re-export 原有符号，既有引用与二次开发不受影响。
+- **本轮新增回归测试**：guard 钩子拒绝 agent 读写敏感文件（含普通文件与 `read SKILL.md` 白名单不受影响的对照）、root 内符号链接绕过 `denyNames`（读 + 列表预览）、`clientErrorMessage` 脱敏边界、`isDeniedName` 通配与名单契约、MCP 生命周期、sqlite 向量库 `0o600`、设置 `thinkingLevel` 枚举、子代理截断不超上限。`npm test` **364 通过 / 0 失败**（42 个测试文件）。
+- **前端首个测试 + 把它接进验证链（`web/src/pi/client.test.ts`，7 个用例）**：覆盖跨会话帧过滤（快照 / 增量 / 流式文本 / 工具轨迹 / run 状态）、切换会话期间只接受目标会话的快照、修订链断裂触发 `get_state` 自愈、快照回填 `streamThinking`、离线 `send` 不改视图且给提示。**不引入任何新依赖**——复用根项目已有的 `tsx --test`，用 `FakeWebSocket` + `location` / `localStorage` 替身驱动（`client.ts` 不依赖 React/DOM）。新增 `npm run test:web` 并纳入 `npm run verify`；`web/tsconfig.test.json` 单独一份（测试要 node 类型，而浏览器 app 引入 node 全局会污染 `setTimeout` 的返回类型），`tsconfig.app.json` 排除 `**/*.test.ts`。
+
 
 - **会话真删除（`delete_conversation`）+ 前端批量管理入口**：验收过程中积了几十条测试会话，而现有 `close_conversation` **不是删除**——它先 `rememberConversation` 再 dispose，索引还在，刷新后又是一条磁盘态条目，“关掉又冒出来”。
   - **协议**：`ClientMessage` 新增 `delete_conversation`（同步进 `CLIENT_MESSAGE_TYPES` 完备性断言）。`ws.ts` 单独一个 case，失败**必回 error 帧**（这条会动磁盘，不能静默）。

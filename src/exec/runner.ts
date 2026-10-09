@@ -18,6 +18,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { realpathSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 import { isPathInsideCwd } from "../extensions/guard.js";
+import { childProcessEnv } from "../child-env.js";
 
 /** 前台默认超时。模型没写超时时，不让一条命令无限挂住这一轮。 */
 export const DEFAULT_TIMEOUT_MS = 30_000;
@@ -422,7 +423,7 @@ function launch(command: string, cwd: string): ChildProcess {
     const file = process.env.ComSpec?.trim() || "cmd.exe";
     return spawn(file, ["/d", "/s", "/c", `"${command}"`], {
       cwd,
-      env: process.env,
+      env: childProcessEnv(),
       windowsHide: true,
       windowsVerbatimArguments: true,
       stdio: ["ignore", "pipe", "pipe"],
@@ -470,6 +471,8 @@ export function killProcessTree(pid: number): void {
   if (!Number.isInteger(pid) || pid <= 0) return;
   if (process.platform === "win32") {
     const killer = spawn("taskkill", ["/pid", String(pid), "/T", "/F"], {
+      // 同样不给子进程继承模型密钥——凡是 spawn 的地方口径一致，避免漏一个。
+      env: childProcessEnv(),
       windowsHide: true,
       stdio: "ignore",
     });

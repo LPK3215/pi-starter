@@ -30,6 +30,11 @@ import {
 } from "node:fs";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { AppError, badRequest, notFound } from "../http/errors.js";
+import { DEFAULT_DENY_NAMES, isDeniedName } from "../secret-files.js";
+
+// 重新导出：这两个符号原先定义在本文件，既有引用（含测试与二次开发）继续可用。
+// 策略本体已挪到 `secret-files.ts`，以便 `guard` 也能共用同一份名单。
+export { DEFAULT_DENY_NAMES, isDeniedName };
 
 /** 预览上限：只读前这么多字节，避免大文件打爆内存与响应体。 */
 export const DEFAULT_MAX_PREVIEW_BYTES = 512 * 1024;
@@ -94,6 +99,11 @@ export interface FileServiceOptions {
   maxEntries?: number;
   /** 列出目录时是否带文本预览。默认 true。 */
   previewInList?: boolean;
+  /**
+   * 敏感文件名（basename 匹配，支持 `*` 前缀/后缀通配）。默认 {@link DEFAULT_DENY_NAMES}。
+   * 命中的文件在 read / raw / write / 列表预览中一律拒绝，避免 `.env`、私钥等经 HTTP 外泄。
+   */
+  denyNames?: readonly string[];
 }
 
 export class FileService {
@@ -102,6 +112,7 @@ export class FileService {
   private readonly maxWriteBytes: number;
   private readonly maxEntries: number;
   private readonly previewInList: boolean;
+  private readonly denyNames: readonly string[];
 
   constructor(options: FileServiceOptions) {
     this.root = resolve(options.root);
@@ -112,6 +123,7 @@ export class FileService {
     this.maxWriteBytes = options.maxWriteBytes ?? DEFAULT_MAX_WRITE_BYTES;
     this.maxEntries = options.maxEntries ?? DEFAULT_MAX_ENTRIES;
     this.previewInList = options.previewInList ?? true;
+    this.denyNames = options.denyNames ?? DEFAULT_DENY_NAMES;
   }
 
   /**
@@ -130,6 +142,20 @@ export class FileService {
       throw badRequest(`路径越出工作目录：${rel}`);
     }
     this.assertRealpathInside(target);
+    // 敏感文件名（工作目录内的 `.env` 等）不是路径问题，单独拦一道，fail-closed。
+    if (isDeniedName(basename(target), this.denyNames)) {
+      throw new AppError("forbidden", `该文件被文件服务拒绝访问：${basename(target)}`, { expose: true });
+    }
+    // 字面 basename 无害 ≠ 真实目标无害：root 内一个 `notes.txt -> .env` 的链接，
+    // 字面名校验会放行，而读出来的正是 `.env`。所以真实目标的名字也必须查。
+    const real = this.realpathOfExisting(target);
+    if (real !== undefined && real !== target && isDeniedName(basename(real), this.denyNames)) {
+      throw new AppError(
+        "forbidden",
+        `该路径经符号链接指向敏感文件，已拒绝：${basename(target)} -> ${basename(real)}`,
+        { expose: true },
+      );
+    }
     return target;
   }
 
@@ -141,25 +167,34 @@ export class FileService {
    * 这道检查失效的时刻，此时放行等于把校验交给运气。服务不可用比放行一个文件更可接受。
    */
   private assertRealpathInside(target: string): void {
+    // 整条路径都不存在：没有实体可逃逸，字面校验已足够（新建/删除场景）。
+    const real = this.realpathOfExisting(target);
+    if (real === undefined) return;
+    const rel = relative(this.realRoot, real);
+    if (rel.startsWith("..") || isAbsolute(rel)) {
+      throw badRequest("路径经符号链接越出工作目录");
+    }
+  }
+
+  /**
+   * 「最近已存在祖先」的真实路径；整条路径都不存在时返回 `undefined`。
+   *
+   * realpath 失败（权限、异常链接、与删除竞争）时抛错而非放行——那正是这道检查失效的
+   * 时刻，此时放行等于把校验交给运气。
+   */
+  private realpathOfExisting(target: string): string | undefined {
     let probe = target;
     for (let depth = 0; depth < 64; depth += 1) {
       if (existsSync(probe)) break;
       const parent = dirname(probe);
-      if (parent === probe) return;
+      if (parent === probe) return undefined;
       probe = parent;
     }
-    // 整条路径都不存在：没有实体可逃逸，字面校验已足够（新建/删除场景）。
-    if (!existsSync(probe)) return;
-
-    let real: string;
+    if (!existsSync(probe)) return undefined;
     try {
-      real = realpathSync.native(probe);
+      return realpathSync.native(probe);
     } catch (err) {
       throw badRequest(`无法校验真实路径，已拒绝（可能是权限问题或链接异常）：${(err as Error).message}`);
-    }
-    const rel = relative(this.realRoot, real);
-    if (rel.startsWith("..") || isAbsolute(rel)) {
-      throw badRequest("路径经符号链接越出工作目录");
     }
   }
 
@@ -193,12 +228,26 @@ export class FileService {
     const truncated = names.length > this.maxEntries;
     const entries: FileEntry[] = [];
     for (const name of truncated ? names.slice(0, this.maxEntries) : names) {
+      // 敏感文件连名字都别出现在列表里——列表会带文本预览，等于又漏一条旁路。
+      if (isDeniedName(name, this.denyNames)) continue;
       const abs = join(dir, name);
       let st2;
       try {
         st2 = statSync(abs);
       } catch {
         continue; // 断链的 symlink / 刚被删除的条目：跳过而非让整个列表失败
+      }
+      // 真实目标也是敏感名（如 `notes.txt -> .env`）：连条目都不能列。
+      // 下面的 `readHead` 走的是**绝对路径**、不经过 `resolvePath`，不会替我们拦——
+      // 漏掉这一步就等于把 `.env` 的内容当成 notes.txt 的预览吐进目录列表。
+      if (!st2.isDirectory()) {
+        let realAbs: string | undefined;
+        try {
+          realAbs = this.realpathOfExisting(abs);
+        } catch {
+          continue; // 解析不了真实路径 → 宁可不列，也不冒险给预览
+        }
+        if (realAbs !== undefined && isDeniedName(basename(realAbs), this.denyNames)) continue;
       }
       const entry: FileEntry = {
         path: this.toRelPath(abs),
@@ -267,6 +316,27 @@ export class FileService {
     }
     mkdirSync(dirname(abs), { recursive: true });
     writeFileSync(abs, buf);
+    return this.read(relPath);
+  }
+
+  /**
+   * 写入原始字节（上传用）。
+   *
+   * 与 `write` 的差别：不做 UTF-8 解码、**允许二进制扩展名**。
+   * 原先上传走 `write(path, buf.toString("utf8"))`，任意非 UTF-8 字节会被替换成 U+FFFD，
+   * 二进制文件必然损坏，且 `write` 本身又拒绝二进制扩展名——两头都对不上。
+   */
+  writeBinary(relPath: string, content: Buffer): FileContent {
+    const abs = this.resolvePath(relPath);
+    if (abs === this.root) throw badRequest("不能写入工作目录本身");
+    if (content.byteLength > this.maxWriteBytes) {
+      throw new AppError(
+        "payload_too_large",
+        `内容超过 ${this.maxWriteBytes} 字节上限（${content.byteLength}）`,
+      );
+    }
+    mkdirSync(dirname(abs), { recursive: true });
+    writeFileSync(abs, content);
     return this.read(relPath);
   }
 
