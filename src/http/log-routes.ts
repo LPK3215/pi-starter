@@ -290,10 +290,24 @@ async function scanPage(
   let startIdx = 0;
   let startPos = beginPos(q.order, false);
   if (q.cursor) {
-    const at = files.indexOf(q.cursor.file);
-    if (at === -1) throw validationFailed("cursor references a file that is no longer in range");
+    let at = files.indexOf(q.cursor.file);
+    let pos = q.cursor.pos;
+    if (at === -1) {
+      // 游标里的文件刚被**轮转归档**：`X.log` → `X.log.gz`，原文件已被 unlink。
+      // 字节偏移在压缩流上没有意义，所以从该文件开头重新开始——宁可重复几行，也不丢内容，
+      // 更不该把一次正常翻页变成 400（那与本模块"无损"的硬约束直接冲突）。
+      at = files.indexOf(`${q.cursor.file}.gz`);
+      if (at !== -1) pos = beginPos(q.order, true);
+    }
+    if (at === -1) {
+      // 连归档也没了（被保留期清理）：退到**名字排在它之后**的第一个文件。
+      // 文件列表按名称有序，而名称里带补零的日期与序号，故名称序即时间序。
+      at = files.findIndex((name) => name > q.cursor!.file);
+      if (at === -1) return { entries: [], hasMore: false }; // 后面确实没有文件了 = 翻到头
+      pos = beginPos(q.order, files[at]!.endsWith(".gz"));
+    }
     startIdx = at;
-    startPos = q.cursor.pos;
+    startPos = pos;
   }
 
   const page: LogEntry[] = [];

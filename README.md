@@ -47,7 +47,7 @@ Every `POST /chat` follows the same lifecycle: HTTP body → busy guard → `ses
 | HTTP | [Express](https://expressjs.com/) | `^5.2.1` | single process; REST shares one session, WS runs several conversations per client (cap + LRU) |
 | Schema | [TypeBox](https://www.npmjs.com/package/typebox) | `^1.1.39` | tool `parameters` definitions |
 | WebSocket | [ws](https://www.npmjs.com/package/ws) | `^8.18.0` | snapshot-driven bidirectional transport (`transport/ws.ts`) |
-| Test runner | Node built-in test runner via `tsx --test` | `^4.22.4` | 42 test files · 367 cases + 8 frontend cases, no model calls |
+| Test runner | Node built-in test runner via `tsx --test` | `^4.22.4` | 42 test files · 370 cases + 8 frontend cases, no model calls |
 | Build | `tsc -p tsconfig.build.json` + `scripts/dist-assets.cjs` | `^5.6.0` | copies `prompts/ skills/ prompt-templates/ knowledge/` into `dist/` |
 
 Truth source for the table above: [`package.json`](package.json). When versions change, update the code and this table together (the Architecture SVG refreshes automatically via `node scripts/visualization/generate_architecture.mjs`).
@@ -345,7 +345,7 @@ pi-starter/
 Contract smoke tests (no model calls, never touch the real `~/.pi/agent`):
 
 ```bash
-npm test            # 367 unit + integration tests
+npm test            # 370 unit + integration tests
 npm run test:web    # 8 frontend (WS client) tests — reuses tsx, adds no dependency
 npm run smoke       # 21 real WebSocket end-to-end checks
 npm run typecheck   # types + protocol completeness

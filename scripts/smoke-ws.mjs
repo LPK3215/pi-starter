@@ -99,8 +99,11 @@ const socket = new WebSocket(`ws://127.0.0.1:${port}/ws`, { origin: `http://127.
 socket.on("message", (data) => frames.push(JSON.parse(data.toString())));
 await once(socket, "open");
 
-// hello 之前先发一条命令，验证 pending 队列回放（握手竞态）。
+// hello 之前先发命令，验证 pending 队列回放（握手竞态）。
+// 第二条刻意**缺 `text`**：dispatcher 对它必然回一条确定性的错误帧，用它来断言"确实回放了"——
+// 不依赖模型是否可用（原先这里写的是 `check(标签, true)`，恒真，等于没有检查）。
 socket.send(JSON.stringify({ type: "prompt", text: "early" }));
+socket.send(JSON.stringify({ type: "prompt" }));
 socket.send(JSON.stringify({ type: "hello", protocolVersion: PROTOCOL_VERSION }));
 await new Promise((r) => setTimeout(r, 250));
 
@@ -110,7 +113,11 @@ check("ready echoes client version", frames[0]?.clientProtocolVersion === PROTOC
 check("ready carries capabilities", Array.isArray(frames[0]?.capabilities?.tools));
 check("snapshot follows ready", frames.some((f) => f.type === "snapshot"));
 check("snapshot carries context budget block", typeof frames.find((f) => f.type === "snapshot")?.state?.stats?.context?.usage === "number");
-check("queued prompt replayed after attach (no dropped command)", true);
+check(
+  "queued commands replayed after attach (no dropped command)",
+  frames.some((f) => f.type === "error" && /prompt text is required/.test(f.message ?? "")),
+  `frames=${frames.map((f) => f.type).join(",")}`,
+);
 
 /* ── 3. 非法 thinking level 被拒 ── */
 frames.length = 0;

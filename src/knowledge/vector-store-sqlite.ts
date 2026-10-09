@@ -93,9 +93,13 @@ export class SqliteVectorStore implements VectorStore {
 
   /** 清掉某篇文档的全部 chunk（重索引/删除时可选调用）。 */
   deleteByChunkPrefix(docName: string): number {
+    // 刻意**不用 LIKE**：`_` 在 LIKE 里匹配任意单字符、`%` 匹配任意串，而文档名来自
+    // `.md` 文件名——`a_b.md` 生成的 `a_b#%` 会把 `aXb#...` 的向量一并删掉（静默数据丢失）。
+    // 用定长前缀比较做精确匹配。
+    const prefix = `${docName}#`;
     const info = this.db
-      .prepare("DELETE FROM pi_vectors WHERE id LIKE ?")
-      .run(`${docName}#%`);
+      .prepare("DELETE FROM pi_vectors WHERE substr(id, 1, ?) = ?")
+      .run(prefix.length, prefix);
     return Number(info.changes ?? 0);
   }
 

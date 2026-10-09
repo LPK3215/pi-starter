@@ -53,6 +53,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **日志面板卸载后 setState / 不 abort**：面板关闭即卸载，但 `flashCopied` 的计时器不清理、在途 `fetch` 只在"下一次查询"时才被 abort。现加卸载清理（abort + clearTimeout）与 `aliveRef` 守卫，另 `selectEntry` 的异步 `setContext` 同样加守卫。
 - **`payload()` 与 `toUiResponsePayload()` 两份同逻辑实现**：前者在组件里、后者在 client 里且无人调用，`confirm`/取消语义需人工保持同步。现统一用 `client` 里的一份。
 
+#### 第三轮审计：此前从未覆盖的模块（`knowledge/` · `log-routes` · `log-panel` · `scripts/`）
+
+- **【数据丢失】批量删除会删掉当前正在用的会话**：`ThreadManager` 的复选框用 `disabled={isCurrent}` 在渲染期挡住当前会话，但**拦不住"先勾选、再切到该会话"**——撤选集合的 effect 只清"已消失"的 id，不清"已变成 current"的 id，于是点「删除所选」会把当前会话连同磁盘文件一起删掉（不可恢复）。现 effect 跟随 `current` 收敛，`submit()` 再按当下值挡一次。
+- **【安全】「改写后允许」把字段摘录当成完整入参发出去**：该按钮把 `approval.preview`（只是 command / path / params 的**摘录**）当作改写后的工具入参 JSON——解析成功就会用**错误且不完整**的参数放行工具，解析失败则静默退化成普通「允许」，文案既没兑现又制造了一次错误执行。现**移除该按钮**；要真正支持改写需要协议让 `UiApproval` 携带完整入参（见下方"未做"）。
+- **【安全】审批放行范围会跨审批残留**：`ApprovalCard` 常驻挂载（`pendingApproval` 为空时只是返回 null，实例不销毁），上一次选的「本对话全部」会留到下一次——用户顺手点「允许」即意外放行整段规则。现在每条新审批（按 `requestId`）重置为「仅本次」。
+- **日志分页游标越过一次轮转就必然 400**：游标里存的是**文件名**，而大小轮转会把 `X.log` 归档成 `X.log.gz` 并 unlink 原文件 → 下一页 `indexOf === -1` → 400，与模块"无损…绝不静默丢弃"的硬约束直接冲突。现在游标文件消失时先找 `.gz` 同名归档（压缩流上字节偏移无意义，从该文件开头重来——宁可重复几行也不丢），再退到"名字排在它之后"的第一个文件；确实到头才返回空页。
+- **一个恒为 `true` 的冒烟断言（门禁假绿）**：`scripts/smoke-ws.mjs` 里 `check("queued prompt replayed…", true)` 没有任何检查，却在 `npm run verify` → `npm run smoke` 链里，握手套路回归会直接漏网。现改为发送一条**缺 `text`** 的排队命令（dispatcher 必然回确定性的 `prompt text is required`），用那条错误帧断言"确实回放了"——不依赖模型可用性。
+- **【数据丢失】`deleteByChunkPrefix` 用 `LIKE` 导致误删**：文档名来自 `.md` 文件名，而 LIKE 里 `_` 匹配任意单字符、`%` 匹配任意串——`a_b.md` 会连带删掉 `aXb.md` 的全部向量（静默、无报错）。改为定长前缀精确匹配（`substr(id,1,?) = ?`）。
+- **改标题不会重算向量**：chunk id 只哈希 body，而送去向量化的文本是 `title\nbody`——改 frontmatter 的 `title` 时 id 不变 → `store.has()` 命中 → 跳过 embedding，库里留着旧向量而 snippet 已是新文本（评分与展示不一致）。现 id 由**同一个** `embedText()` 派生（改标题会留下孤儿向量，`search` 用 `chunkById` 过滤，不会变成"没有正文的命中"）。
+- **聚合式检索欠取**：向量检索只取 `limit*3` 个 chunk 再按文档聚合，某篇长文档霸榜时会把其它文档整篇挤出窗口，返回的文档数少于 `limit`。现取样窗口逐步翻倍，直到拿到 `limit` 篇不同文档或取尽已知 chunk。
+- **日志面板的竞态**：① 被新请求取代的旧请求在 `finally` 里仍会 `setLoading(false)`，把新请求刚点亮的指示器提前熄掉（`abort` 的 rejection 是微任务）；② 2 秒一次的自动刷新会 abort 掉用户刚点的「加载更多」，表现为点了没反应；③ 快速先后点两条记录时，先发后到的链路响应会覆盖后选的条目；④ 「导出」「错误统计」在面板卸载后仍 `setState`（甚至弹出下载）。现用请求序号（只让最新一次写结果与 loading）、`appendInFlight` 让轮询避让、以及补上缺失的 `aliveRef` 守卫。
+- **导出谎报"已截断"**：`queryAllForExport` 把 `collected.length >= maxEntries` 探在 `hasMore` 之前——结果总数**恰好等于**上限且已无下一页时，一条都没丢却提示"结果超过导出上限，请缩小时间范围"。现先判是否还有下一页。
+
 ### Changed
 
 - **快照构建去掉一次全量重投影（P2-2）**：`planTrim()` 现在接受已投影好的消息数组，`buildState` 复用本次的 `allMessages`。原先每周期会把 `currentMessages()` 跑两遍（连带两遍会话树遍历），流式输出时每 60ms 重复一次。
@@ -64,7 +77,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **回归测试（改回缺陷即变红）**：文件服务敏感名黑名单（读 / 列表 / 写入）与 `writeBinary` 字节无损、`denyNames` 可覆盖；shell-rules 与审批规则同源且 guard 硬拦集合不变、realpath 链接逃逸；子进程环境裁剪；`isClientMessage` 形态；子代理等待队列上限；Metrics 未知指标名不抛。
+- **回归测试（改回缺陷即变红）**：文件服务敏感名黑名单（读 / 列表 / 写入）与 `writeBinary` 字节无损、`denyNames` 可覆盖；shell-rules 与审批规则同源且 guard 硬拦集合不变、realpath 链接逃逸；子进程环境裁剪；`isClientMessage` 形态；子代理等待队列上限；Metrics 未知指标名不抛；`deleteByChunkPrefix` 精确匹配（`_` 不是通配符）；向量检索改标题必重算 / 内容未变仍走缓存；单篇文档霸榜时聚合不欠取。
 - **`src/sdk-adapter.test.ts`（新测试文件，已登记进 `npm test`）**：锁定适配层的核心契约——形状**对**时取得到、形状**缺失/不对**时返回 `undefined` 而不抛；并锁住 `sdkRenameSession` 的「优先官方 setter、退化到 sessionManager」两条路径。
 - **`src/secret-files.ts`**：敏感文件名策略的中性模块，供 HTTP 文件服务与 `guard` 共用（不让扩展层反向依赖 `files/service.ts`）；`files/service.ts` 继续 re-export 原有符号，既有引用与二次开发不受影响。
 - **本轮新增回归测试**：guard 钩子拒绝 agent 读写敏感文件（含普通文件与 `read SKILL.md` 白名单不受影响的对照）、root 内符号链接绕过 `denyNames`（读 + 列表预览）、`clientErrorMessage` 脱敏边界、`isDeniedName` 通配与名单契约、MCP 生命周期、sqlite 向量库 `0o600`、设置 `thinkingLevel` 枚举、子代理截断不超上限。`npm test` **364 通过 / 0 失败**（42 个测试文件）。

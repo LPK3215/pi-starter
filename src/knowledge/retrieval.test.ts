@@ -55,6 +55,57 @@ test("VectorRetriever：语义命中排序 + 按文档聚合 + limit", async () 
   assert.equal(one.length, 1, "limit 生效");
 });
 
+/**
+ * 回归：chunk id 只哈希 body，而向量化文本含 title。
+ *
+ * 后果是"改 frontmatter 的 title 不重算向量"：持久 store 里留着旧向量，snippet 却是新文本，
+ * 评分与展示不一致。id 必须由**实际送去向量化的那段文本**派生。
+ */
+test("VectorRetriever：改标题会重新 embedding，内容没变则命中缓存", async () => {
+  const store = new InMemoryVectorStore();
+  const embeddings = new FakeEmbeddings(["价格"]);
+  const original = doc("pricing", "价格", "基础版 99 / 月。");
+  await VectorRetriever.build([original], embeddings, store);
+
+  // 反向：内容一字未动时必须仍走缓存（否则每次启动都全量重算，成本白付）。
+  const beforeCacheHit = embeddings.calls;
+  await VectorRetriever.build([original], embeddings, store);
+  assert.equal(embeddings.calls, beforeCacheHit, "内容没变不应重新 embedding");
+
+  // 只改 title，body 一字未动 → 必须重算。
+  const beforeRetitle = embeddings.calls;
+  const rebuilt = await VectorRetriever.build([doc("pricing", "定价说明", "基础版 99 / 月。")], embeddings, store);
+  assert.ok(embeddings.calls > beforeRetitle, "改标题必须触发重新 embedding");
+  // id 变了 → 旧向量在持久库里成为**孤儿**（没人再引用它）。这里刻意不断言"库里只剩一份"：
+  // 清孤儿需要按文档名前缀删，而那会把新向量一起删掉。孤儿的代价只是存储。
+  assert.equal(store.size, 2, "旧 id 的向量作为孤儿留下");
+  const hits = await rebuilt.search("价格", 5);
+  assert.equal(hits.length, 1, "孤儿不会以「没有正文的命中」形式出现");
+  assert.equal(hits[0]?.title, "定价说明", "snippet/标题取自新的文档元数据");
+});
+
+/**
+ * 回归：聚合式检索的**欠取**。
+ *
+ * 取样窗口固定为 `limit*3` 个 chunk 时，一篇长文档若占据排名前列，会把其它文档整篇挤出窗口，
+ * 聚合后返回的文档数少于 limit。取样必须随结果扩大。
+ */
+test("VectorRetriever：单篇文档霸榜时仍返回 limit 篇不同文档（聚合不欠取）", async () => {
+  // big 有 12 个高度相关的 chunk（切段按空行），o1/o2 各 1 个相关度略低的 chunk。
+  // 若只取 3*3=9 个 chunk，窗口会被 big 填满，聚合后只剩 1 篇。
+  const big = doc("big", "大文档", Array.from({ length: 12 }, () => "甲 甲 甲").join("\n\n"));
+  const other1 = doc("o1", "其他一", "甲 乙");
+  const other2 = doc("o2", "其他二", "甲 丙");
+  const r = await VectorRetriever.build(
+    [big, other1, other2],
+    new FakeEmbeddings(["甲", "乙", "丙"]),
+    new InMemoryVectorStore(),
+  );
+
+  const hits = await r.search("甲 甲 甲", 3);
+  assert.equal(hits.length, 3, `三篇都应出现，实际 ${hits.map((h) => h.name).join(",")}`);
+});
+
 test("VectorRetriever：空库返回空、不抛；空 query 返回空", async () => {
   const empty = await VectorRetriever.build([], new FakeEmbeddings(["x"]), new InMemoryVectorStore());
   assert.deepEqual(await empty.search("任何"), []);

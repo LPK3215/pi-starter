@@ -103,6 +103,12 @@ export function LogPanel({ onClose }: { onClose: () => void }) {
   /** 卸载后不再 setState（面板关闭即卸载，见 App.tsx）。 */
   const aliveRef = useRef(true);
   const copiedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** 只让**最新**一次列表请求写结果与 loading。 */
+  const requestSeq = useRef(0);
+  /** 用户主动「加载更多」是否在途：轮询要避让，否则会把它 abort 掉。 */
+  const appendInFlight = useRef(false);
+  /** 只让**最新**一次「选中条目」的链路请求写 context。 */
+  const selectedSeq = useRef(0);
 
   // 卸载清理：取消在途请求 + 清掉"已复制"计时器。
   // 原先只靠"下一次查询"顺手 abort，关闭面板时 in-flight fetch 会继续跑并在卸载后 setState。
@@ -119,18 +125,26 @@ export function LogPanel({ onClose }: { onClose: () => void }) {
       abortRef.current?.abort();
       const ctrl = new AbortController();
       abortRef.current = ctrl;
+      const seq = (requestSeq.current += 1);
+      if (append) appendInFlight.current = true;
       setLoading(true);
       setError(null);
       try {
         const page = await queryLogs(query, ctrl.signal);
-        if (!aliveRef.current) return;
+        // 已被更新的一次请求取代：整份丢掉，否则旧响应会盖掉新筛选的结果。
+        if (!aliveRef.current || seq !== requestSeq.current) return;
         setEntries((prev) => (append ? [...prev, ...page.entries] : page.entries));
         setNextCursor(page.nextCursor);
         setHasMore(page.hasMore);
       } catch (err) {
-        if (aliveRef.current && (err as Error).name !== "AbortError") setError((err as Error).message);
+        if (aliveRef.current && seq === requestSeq.current && (err as Error).name !== "AbortError") {
+          setError((err as Error).message);
+        }
       } finally {
-        if (aliveRef.current) setLoading(false);
+        if (append) appendInFlight.current = false;
+        // 只有最新一次请求能关 loading：旧请求的 finally 会在新请求 `setLoading(true)` 之后
+        // 才跑到（abort 的 rejection 是微任务），把刚点亮的指示器提前熄掉。
+        if (aliveRef.current && seq === requestSeq.current) setLoading(false);
       }
     },
     [],
@@ -144,7 +158,12 @@ export function LogPanel({ onClose }: { onClose: () => void }) {
   // 自动刷新：仅在开关打开且处于跟随态时轮询第一页（面板卸载即随 effect cleanup 停止，关闭后面板不轮询）。
   useEffect(() => {
     if (!autoRefresh || !follow) return;
-    const id = setInterval(() => void runQuery(applied, false), 2000);
+    const id = setInterval(() => {
+      // 用户点了「加载更多」就先让路：`runQuery` 开头会 abort 在途请求，轮询撞上来会把它
+      // 静默丢掉（append 分支永不执行，表现为"点了没反应"）。
+      if (appendInFlight.current) return;
+      void runQuery(applied, false);
+    }, 2000);
     return () => clearInterval(id);
   }, [autoRefresh, follow, applied, runQuery]);
 
@@ -167,11 +186,14 @@ export function LogPanel({ onClose }: { onClose: () => void }) {
   const selectEntry = useCallback(async (entry: LogEntry) => {
     setSelected(entry);
     setContext([]);
+    const seq = (selectedSeq.current += 1);
     const rid = entry.requestId;
     if (typeof rid === "string" && rid) {
       try {
         const chain = await queryLogs({ requestId: rid, order: "asc", limit: 500 });
-        if (aliveRef.current) setContext(chain.entries);
+        // 快速先后点两条不同 requestId 的记录时，先发后到的响应不能覆盖后选的那条——
+        // 否则"同请求链路"显示的是上一条记录的链路。
+        if (aliveRef.current && seq === selectedSeq.current) setContext(chain.entries);
       } catch {
         /* 上下文拉取失败不影响主详情 */
       }
@@ -198,9 +220,10 @@ export function LogPanel({ onClose }: { onClose: () => void }) {
   const loadStats = async () => {
     try {
       const s = await queryStats({ ...applied, level: applied.level?.length ? applied.level : ["error"] });
-      setStats(s.stats);
+      // 与 runQuery 同一口径：卸载后不再 setState（面板关闭即卸载）。
+      if (aliveRef.current) setStats(s.stats);
     } catch (err) {
-      setError((err as Error).message);
+      if (aliveRef.current) setError((err as Error).message);
     }
   };
 
@@ -208,6 +231,8 @@ export function LogPanel({ onClose }: { onClose: () => void }) {
     setError(null);
     try {
       const { entries: all, truncated } = await queryAllForExport({ ...applied, order: "asc" }, 20000);
+      // 卸载（用户关掉面板）后既不再 setState，也不该突然弹出下载。
+      if (!aliveRef.current) return;
       const body =
         format === "jsonl"
           ? all.map((e) => JSON.stringify(e)).join("\n")
@@ -215,7 +240,7 @@ export function LogPanel({ onClose }: { onClose: () => void }) {
       download(`pi-logs-${Date.now()}.${format === "jsonl" ? "jsonl" : "txt"}`, body);
       if (truncated) setError(`结果超过导出上限（2 万条），已截断。请缩小时间范围。`);
     } catch (err) {
-      setError((err as Error).message);
+      if (aliveRef.current) setError((err as Error).message);
     }
   };
 

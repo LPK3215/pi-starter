@@ -111,8 +111,15 @@ export async function queryAllForExport(
   for (;;) {
     const page = await queryLogs({ ...pageFilters, cursor }, signal);
     collected.push(...page.entries);
+    // 先判"还有没有下一页"再判上限：结果总数**恰好等于**上限且已无下一页时，
+    // 一条都没被丢掉，回 truncated=false。原实现把 `>=` 探在 hasMore 之前，
+    // 这种情况会谎报"已截断"，让用户白去缩小时间范围。
+    if (!page.hasMore || !page.nextCursor) {
+      return collected.length <= maxEntries
+        ? { entries: collected, truncated: false }
+        : { entries: collected.slice(0, maxEntries), truncated: true }; // 确实超出上限、确实丢了
+    }
     if (collected.length >= maxEntries) return { entries: collected.slice(0, maxEntries), truncated: true };
-    if (!page.hasMore || !page.nextCursor) return { entries: collected, truncated: false };
     cursor = page.nextCursor;
   }
 }

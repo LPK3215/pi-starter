@@ -157,6 +157,16 @@ export class VectorRetriever implements Retriever {
     private readonly store: VectorStore,
   ) {}
 
+  /**
+   * 实际送去向量化的文本：`title\nbody`。
+   *
+   * 抽成一处是因为它必须被**同一个值**用在两处：chunk id 的哈希（决定要不要重新 embedding）
+   * 与 embed 的输入。两处不一致时，改标题不会触发重算，缓存下来的就是过期向量。
+   */
+  private static embedText(title: string, text: string): string {
+    return `${title}\n${text}`;
+  }
+
   /** 切段 → 只对未入库的 chunk 分批 embedding → upsert，返回就绪实例。 */
   static async build(
     docs: readonly KnowledgeDoc[],
@@ -173,7 +183,14 @@ export class VectorRetriever implements Retriever {
       const chunks = chunkDoc(doc);
       for (let i = 0; i < chunks.length; i += 1) {
         const text = chunks[i]!;
-        metas.push({ id: `${doc.name}#${i}#${chunkHash(text)}`, name: doc.name, text });
+        // id 必须由**实际送去向量化的那段文本**派生（见 embedText）。
+        // 只哈希 body 的话，改 frontmatter 的 `title` 不会让 id 变化 → `store.has()` 命中
+        // → 跳过重新 embedding，库里还是旧向量，而 snippet 已是新文本：评分与展示不一致。
+        metas.push({
+          id: `${doc.name}#${i}#${chunkHash(VectorRetriever.embedText(doc.title, text))}`,
+          name: doc.name,
+          text,
+        });
       }
     }
     for (const m of metas) retriever.chunkById.set(m.id, m);
@@ -187,7 +204,7 @@ export class VectorRetriever implements Retriever {
       const batch = toEmbed.slice(i, i + EMBED_BATCH);
       // 把 title 拼进待向量化文本，让整段命中不只看 body。
       const vectors = await embeddings.embed(
-        batch.map((m) => `${retriever.docsByName.get(m.name)?.title ?? ""}\n${m.text}`),
+        batch.map((m) => VectorRetriever.embedText(retriever.docsByName.get(m.name)?.title ?? "", m.text)),
       );
       if (vectors.length !== batch.length) {
         throw new Error(
@@ -204,17 +221,32 @@ export class VectorRetriever implements Retriever {
     if (!q || this.chunkById.size === 0) return [];
     const [qvec] = await this.embeddings.embed([q]);
     if (!qvec) return [];
-    const results = await this.store.query(
-      qvec,
-      Math.min(this.chunkById.size, Math.max(1, limit) * 3),
-    );
-    // 按文档聚合：同一篇取最高分 chunk。
-    const best = new Map<string, { score: number; chunk: ChunkMeta }>();
-    for (const r of results) {
-      const meta = this.chunkById.get(r.id);
-      if (!meta) continue;
-      const cur = best.get(meta.name);
-      if (!cur || r.score > cur.score) best.set(meta.name, { score: r.score, chunk: meta });
+    const want = Math.max(1, limit);
+    /**
+     * 按文档聚合取最高分 chunk。
+     *
+     * 取样窗口必须**随结果扩大**：只取 `want*3` 个 chunk 时，某篇文档若命中大量 chunk 会把
+     * 其它文档整篇挤出窗口，聚合后返回的文档数就少于 `want`（聚合式检索的经典欠取）。
+     * 这里逐步翻倍，直到拿到 `want` 篇不同文档或把已知 chunk 都取过一遍。
+     *
+     * 上限用 `chunkById.size`（当前**有效** chunk 数）：持久库里可能留着改标题前的孤儿向量
+     * （见 retrieval.test.ts），它们会占掉一些取样槽位——那是存储卫生问题，不影响正确性，
+     * 因为下面的 `if (!meta) continue` 会把它们滤掉。
+     */
+    const total = this.chunkById.size;
+    let take = Math.min(total, want * 3);
+    let best = new Map<string, { score: number; chunk: ChunkMeta }>();
+    for (;;) {
+      const results = await this.store.query(qvec, take);
+      best = new Map<string, { score: number; chunk: ChunkMeta }>();
+      for (const r of results) {
+        const meta = this.chunkById.get(r.id);
+        if (!meta) continue;
+        const cur = best.get(meta.name);
+        if (!cur || r.score > cur.score) best.set(meta.name, { score: r.score, chunk: meta });
+      }
+      if (best.size >= want || take >= total) break;
+      take = Math.min(total, take * 2);
     }
     const hits: RetrievalHit[] = [];
     for (const [name, { score, chunk }] of best) {
@@ -229,7 +261,7 @@ export class VectorRetriever implements Retriever {
       });
     }
     hits.sort((a, b) => b.score - a.score || a.name.localeCompare(b.name));
-    return hits.slice(0, Math.max(1, limit));
+    return hits.slice(0, want);
   }
 }
 

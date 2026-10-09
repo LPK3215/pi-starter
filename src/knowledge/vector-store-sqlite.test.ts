@@ -41,6 +41,25 @@ test("SqliteVectorStore：落盘权限收紧到 0o600", () => {
   }
 });
 
+/**
+ * 回归：`deleteByChunkPrefix` 曾用 `id LIKE 'docName#%'`。
+ *
+ * 文档名来自 `.md` 文件名，而 LIKE 里 `_` 匹配任意单字符、`%` 匹配任意串——`a_b.md` 生成的
+ * 模式会把 `aXb.md` 的全部向量一起删掉（静默数据丢失，且没有任何报错）。
+ */
+test("SqliteVectorStore：deleteByChunkPrefix 精确匹配（文档名里的 `_` 不是通配符）", async () => {
+  const store = new SqliteVectorStore();
+  await store.upsert([
+    { id: "a_b.md#0#h", vector: [1, 0] },
+    { id: "aXb.md#0#h", vector: [0, 1] },
+  ]);
+
+  assert.equal(store.deleteByChunkPrefix("a_b.md"), 1, "只删自己那一篇");
+  assert.equal(store.has("a_b.md#0#h"), false);
+  assert.equal(store.has("aXb.md#0#h"), true, "LIKE 会把这本不相干的向量一起删掉");
+  store.close();
+});
+
 test("SqliteVectorStore：upsert/has/query + 关闭重开后仍在（持久化）", async () => {
   const file = join(mkdtempSync(join(tmpdir(), "pi-vec-")), "vectors.db");
   const store = new SqliteVectorStore({ path: file });

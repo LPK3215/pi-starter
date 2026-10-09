@@ -46,6 +46,15 @@ export function ApprovalCard() {
   const { state } = usePiSnapshot();
   const approval = state?.pendingApproval;
   const [scope, setScope] = useState<"once" | "category" | "all">("once");
+
+  // 每来一条新审批都把范围重置为"仅本次"。本组件常驻挂载（approval 为空时只是返回 null，
+  // 实例不销毁），不重置的话上一次选的"本对话全部"会留到下一次——用户顺手点"允许"
+  // 就会意外放行整段规则。hooks 必须在 `if (!approval)` 之前。
+  const requestId = approval?.requestId;
+  useEffect(() => {
+    setScope("once");
+  }, [requestId]);
+
   if (!approval) return null;
 
   return (
@@ -77,28 +86,18 @@ export function ApprovalCard() {
         <button className={btn} onClick={() => piClient.approvalResponse(approval, "deny", scope)}>
           拒绝
         </button>
-        <button
-          className={btn}
-          onClick={() =>
-            // modify 需要改写后的入参；这里先用 JSON 编辑框收集，留空则原样放行。
-            piClient.approvalResponse(approval, "modify", scope, parseModified(approval.preview))
-          }
-        >
-          改写后允许
-        </button>
+        {/*
+          * 这里原先有一个「改写后允许」按钮，它把 `approval.preview` 当作改写后的入参 JSON
+          * 发给后端——但 preview 只是**字段摘录**（command / path / params），不是完整入参：
+          * 解析成功时会用**错误且不完整**的参数放行工具，解析失败则静默退化成普通「允许」，
+          * 按钮文案既没兑现、又制造了一次错误执行。已移除。
+          *
+          * 要真正支持改写，需要协议让 `UiApproval` 携带完整的工具入参（现在只带摘录），
+          * 前端才能给出可编辑的完整 JSON。见 CHANGELOG「未做」。
+          */}
       </div>
     </div>
   );
-}
-
-/** preview 是字段摘录，不保证是完整合法 JSON；解析失败返回 undefined（等于不改写）。 */
-function parseModified(preview: string): Record<string, unknown> | undefined {
-  try {
-    const parsed = JSON.parse(preview);
-    return typeof parsed === "object" && parsed !== null ? (parsed as Record<string, unknown>) : undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 /**
@@ -299,14 +298,21 @@ export function ThreadManager() {
   const [confirming, setConfirming] = useState(false);
 
   const deletable = conversations.filter((c) => c.id !== current);
-  // 删完服务端会重推列表；选中的 id 已经不存在了，得从集合里清掉。
+  /**
+   * 选中集合只保留"仍存在且不是当前会话"的 id。
+   *
+   * 两个理由：
+   * - 删完服务端会重推列表，选中的 id 可能已经不存在；
+   * - **复选框的 `disabled={isCurrent}` 拦不住"先勾选、再切到该会话"**——那样点「删除所选」
+   *   会把正在用的会话连同磁盘文件一起删掉。所以要跟着 `current` 一起收敛。
+   */
   useEffect(() => {
     const alive = new Set(conversations.map((c) => c.id));
     setSelected((prev) => {
-      const next = new Set([...prev].filter((id) => alive.has(id)));
+      const next = new Set([...prev].filter((id) => alive.has(id) && id !== current));
       return next.size === prev.size ? prev : next;
     });
-  }, [conversations]);
+  }, [conversations, current]);
 
   const toggle = (id: string) =>
     setSelected((prev) => {
@@ -317,7 +323,11 @@ export function ThreadManager() {
     });
 
   const submit = () => {
-    for (const id of selected) piClient.deleteConversation(id);
+    for (const id of selected) {
+      // 双保险：确认框弹出的这段时间里用户仍可能切换会话，提交时再按当下值挡一次。
+      if (id === current) continue;
+      piClient.deleteConversation(id);
+    }
     setSelected(new Set());
     setConfirming(false);
     setOpen(false);
