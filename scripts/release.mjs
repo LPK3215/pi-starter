@@ -5,7 +5,9 @@
 // 读项目根目录 pipeline.config.json：
 //   versionFiles  版本回写位置（type: json / toml-package / cargo-lock / regex）
 //   tagPrefix     tag 前缀，默认 "v"
-//   remote        git 远程名，默认 "origin"
+//   remote        主远程名，默认 "origin"（Release / 网页链接 / CI 都挂在它上面）
+//   remotes       可选，要同步推送的**全部**远程名数组（如 ["origin", "cnb"]）。
+//                 缺省时等价于 [remote]。分支与 tag 会逐个推，一个都不落。
 //   verify        （由 scripts/verify.mjs 读取）发布门禁命令
 // 换技术栈只改配置，不改本文件。
 //
@@ -102,6 +104,16 @@ function loadConfig() {
 const config = loadConfig();
 const tagPrefix = typeof config.tagPrefix === "string" ? config.tagPrefix : "v";
 const remote = typeof config.remote === "string" && config.remote ? config.remote : "origin";
+// 多远程同步：remotes 缺省就只推主远程。去重，保留配置顺序（主远程放最前，
+// 这样 tag 先落在挂 Release 的那个远程上，镜像后到也不影响 CI 触发）。
+const remotes = [
+  ...new Set(
+    (Array.isArray(config.remotes) && config.remotes.length > 0
+      ? config.remotes
+      : [remote]
+    ).filter((r) => typeof r === "string" && r.trim())
+  ),
+];
 const tag = `${tagPrefix}${version}`;
 const versionFiles = Array.isArray(config.versionFiles) ? config.versionFiles : [];
 
@@ -256,7 +268,9 @@ if (!skipVerify) {
 try {
   execSync(`git rev-parse "${tag}"`, { cwd: ROOT, stdio: "ignore" });
   console.error(
-    `tag ${tag} 已存在。删除旧 tag（git tag -d ${tag} && git push ${remote} :${tag}）后再发。`
+    `tag ${tag} 已存在。删除旧 tag（git tag -d ${tag} && ${remotes
+      .map((r) => `git push ${r} :${tag}`)
+      .join(" && ")}）后再发。`
   );
   process.exit(1);
 } catch {
@@ -295,9 +309,28 @@ if (bumps.length > 0) {
 
 // 5) 打 tag + 推送
 sh(`git tag "${tag}"`);
+// 分支与 tag 推送到**每一个**配置的远程。某个远程失败不中断其余推送（否则
+// 一个镜像挂了就导致全部落后），但最后以非零码退出，避免"看着成功了"。
 const branch = execSync("git rev-parse --abbrev-ref HEAD", { cwd: ROOT }).toString().trim();
-sh(`git push ${remote} "${branch}"`);
-sh(`git push ${remote} "${tag}"`);
+const failed = [];
+for (const r of remotes) {
+  for (const ref of [branch, tag]) {
+    try {
+      sh(`git push ${r} "${ref}"`);
+    } catch {
+      failed.push(`${r}:${ref}`);
+    }
+  }
+}
+if (failed.length > 0) {
+  console.error(
+    `\n[release] ${tag} 未推送到：${failed.join(", ")}\n` +
+      `本地 tag 已打好，修好该远程后单独补推：${failed
+        .map((f) => `git push ${f.replace(":", " ")}`)
+        .join(" && ")}`
+  );
+  process.exit(1);
+}
 
 let web = "";
 try {
@@ -310,5 +343,8 @@ try {
   /* 取不到就当没有，不影响发版 */
 }
 
-console.log(`\n[release] ${tag} 已推送。CI 收到 tag 后会构建并发布 Release${web ? "：" : "。"}`);
+console.log(
+  `\n[release] ${tag} 已推送到 ${remotes.length} 个远程（${remotes.join(", ")}）。` +
+    `CI 收到 tag 后会构建并发布 Release${web ? "：" : "。"}`
+);
 if (web) console.log(`  ${web}/releases`);

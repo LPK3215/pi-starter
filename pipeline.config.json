@@ -7,6 +7,9 @@
   "tagPrefix": "v",
   "remote": "origin",
 
+  "_remotes说明": "发版时分支与 tag 要推到的全部远程（一个都不落）。remote 是主远程——Release / CI / 网页链接都挂在它上面，所以排在第一位先推；其余是镜像，缺推只报警不阻断。没配 remotes 时等价于只推 remote。本地 git 远程名：origin = GitHub，cnb = CNB。",
+  "remotes": ["origin", "cnb"],
+
   "versionFiles": [
     { "path": "package.json", "type": "json" },
     {

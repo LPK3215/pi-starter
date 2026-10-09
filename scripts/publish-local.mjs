@@ -99,6 +99,16 @@ function loadConfig() {
 const config = loadConfig();
 const tagPrefix = typeof config.tagPrefix === "string" ? config.tagPrefix : "v";
 const remote = typeof config.remote === "string" && config.remote ? config.remote : "origin";
+// 全部远程（与 release.mjs 同一口径）：Release 只挂在主远程 remote 上，但镜像
+// 远程缺 tag 需要能看到，否则推一漏一不会有人发现。
+const remotes = [
+  ...new Set(
+    (Array.isArray(config.remotes) && config.remotes.length > 0
+      ? config.remotes
+      : [remote]
+    ).filter((r) => typeof r === "string" && r.trim())
+  ),
+];
 const versionFiles = Array.isArray(config.versionFiles) ? config.versionFiles : [];
 const lp = config.localPublish && typeof config.localPublish === "object" ? config.localPublish : {};
 const steps = Array.isArray(lp.steps) ? lp.steps : [];
@@ -342,6 +352,26 @@ if (!hasRemoteTag && !noRelease) {
       `先推送：git push ${remote} ${tag}`
   );
   process.exit(1);
+}
+
+// 镜像远程只提醒不阻断：本脚本的职责是出包 + 建 Release，
+// 把缺的 tag 补上是一行 git push 的事，拼好命令直接交给用户。
+const lagging = remotes.filter((r) => {
+  if (r === remote) return false;
+  try {
+    return (
+      execSync(`git ls-remote --tags ${r} "${tag}"`, { cwd: ROOT }).toString().trim().length === 0
+    );
+  } catch {
+    return true;
+  }
+});
+if (lagging.length > 0 && !dryRun) {
+  console.warn(
+    `\n[publish-local] ⚠ tag ${tag} 在这些远程上还没有：${lagging.join(", ")}。` +
+      `Release 不受影响，但会跟主远程不同版本：\n  ` +
+      lagging.map((r) => `git push ${r} ${tag}`).join(" && ")
+  );
 }
 
 // 4) 门禁
