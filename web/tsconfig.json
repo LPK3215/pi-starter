@@ -1,0 +1,14 @@
+{
+  "files": [],
+  "references": [
+    { "path": "./tsconfig.app.json" },
+    { "path": "./tsconfig.node.json" }
+  ],
+  "compilerOptions": {
+    /* 与 tsconfig.app.json 保持一致：工具链（shadcn CLI 等）读根配置解析别名 */
+    "paths": {
+      "@/*": ["./src/*"],
+      "@pi/protocol": ["../src/protocol.ts"]
+    }
+  }
+}

@@ -103,6 +103,36 @@ test("GET /health 是轻量存活探针，不依赖模型与数据库", async ()
   }
 });
 
+test("静态前端：staticDir 指向构建产物时，SPA 首页挂在 /", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "pi-static-"));
+  writeFileSync(join(dir, "index.html"), "<!doctype html><title>pi-starter web</title>");
+  const { app, dispose } = createApp({ agent: fakeAgent(), staticDir: dir });
+  const { url, close } = await listen(app);
+  try {
+    const res = await json(`${url}/`);
+    assert.equal(res.status, 200);
+    assert.match(res.text, /pi-starter web/);
+  } finally {
+    await close();
+    dispose();
+  }
+});
+
+test("静态前端：前端未构建（目录不存在）时 API 照常，不能把进程带倒", async () => {
+  // express.static 对不存在的目录不抛错、直接穿透；默认值就指向可能不存在的 web/dist，
+  // 所以这条契约必须有测试兜着，否则“先跑后端再构建前端”的开箱姿势会碎。
+  const missing = join(mkdtempSync(join(tmpdir(), "pi-nostatic-")), "dist");
+  const { app, dispose } = createApp({ agent: fakeAgent(), staticDir: missing });
+  const { url, close } = await listen(app);
+  try {
+    assert.equal((await json(`${url}/health`)).status, 200);
+    assert.equal((await json(`${url}/`)).status, 404);
+  } finally {
+    await close();
+    dispose();
+  }
+});
+
 test("GET /health/ready 做依赖深度探针", async () => {
   const { app, dispose } = createApp({ agent: fakeAgent(), staticDir: false });
   const { url, close } = await listen(app);

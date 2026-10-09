@@ -101,7 +101,7 @@ const { app, dispose } = createApp({ agent, staticDir: false });
 existingExpressApp.use("/agent", app);
 ```
 
-Turn off `staticDir` so the sample `public/index.html` isn't mounted, and remember to call `dispose()` on shutdown to release the SQLite handle.
+Turn off `staticDir` so the bundled `web/` frontend build is not mounted, and remember to call `dispose()` on shutdown to release the SQLite handle.
 
 ### The DB is in-memory. How do I use a real file?
 

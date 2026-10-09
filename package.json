@@ -38,6 +38,8 @@
   "scripts": {
     "dev": "tsx src/index.ts",
     "web": "tsx src/server.ts",
+    "ui:dev": "npm --prefix web run dev",
+    "ui:build": "npm --prefix web run build",
     "setup": "tsx src/setup.ts",
     "clean": "node scripts/dist-assets.cjs clean",
     "build": "npm run clean && tsc -p tsconfig.build.json && node scripts/dist-assets.cjs copy",

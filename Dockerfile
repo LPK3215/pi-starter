@@ -20,6 +20,17 @@
 #   - 运行时要读 ~/.pi/agent 的 models.json + auth.json（先在本机 `npm run setup` 写好再 :ro 挂进来）。
 #   - 挂载 $PWD 到 /workspace 并 -w 进去：Agent 的 read/write/exec 就限制在该工作区内（配合 guard）。
 
+FROM node:22-bookworm-slim AS web-builder
+
+# 前端（web/）单独构建：它是独立 npm 项目，与后端各自一份 package.json。
+# 必须连 src/protocol.ts 一起拷：web/tsconfig.app.json 把线协议单源直接引为
+# `../src/protocol.ts`（前后端同一份类型），只拷 web/ 会编译失败。
+# 产物 web/dist 由下面的最终镜像静态托管（src/app.ts 的 staticDir 默认值）。
+WORKDIR /build
+COPY src/protocol.ts ./src/protocol.ts
+COPY web ./web
+RUN npm ci --prefix web && npm run build --prefix web
+
 FROM node:22-bookworm-slim
 
 # ripgrep 供 grep 工具（readonly/coding 档）；git 供仓库操作；ca-certificates 供 HTTPS。
@@ -34,6 +45,7 @@ COPY package.json package-lock.json ./
 RUN npm ci
 
 COPY . .
+COPY --from=web-builder /build/web/dist ./web/dist
 RUN npm run build && npm prune --omit=dev
 
 # 非 root 运行，别用宿主身份。

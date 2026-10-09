@@ -1,0 +1,120 @@
+@import "tailwindcss";
+
+/*
+ * 主题层：先按 assistant-ui 官网那套的中性深色基调立一组语义 token。
+ * 之后要换配色只改这里（组件全部引用语义名，不写死色值），
+ * 或者直接上官方 registry 组件覆盖这一层。
+ */
+@theme {
+  --color-background: oklch(0.16 0.01 265);
+  --color-foreground: oklch(0.95 0.005 265);
+  --color-card: oklch(0.21 0.012 265);
+  --color-border: oklch(0.32 0.01 265);
+  --color-muted: oklch(0.26 0.012 265);
+  --color-muted-foreground: oklch(0.72 0.015 265);
+  --color-accent: oklch(0.58 0.18 265);
+  --color-accent-foreground: oklch(0.98 0.005 265);
+  --color-destructive: oklch(0.65 0.2 25);
+  --color-warning: oklch(0.78 0.15 85);
+  --color-ok: oklch(0.75 0.17 155);
+
+  --font-mono: ui-monospace, "Cascadia Code", "JetBrains Mono", monospace;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: system-ui, "Segoe UI", "PingFang SC", sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/*
+ * Markdown 正文样式。Tailwind 的 preflight 会剥掉列表/标题的默认外观，
+ * 所以这里必须自己补回结构感，否则 Agent 的分级回复看成一竖块文本。
+ */
+.aui-md {
+  line-height: 1.65;
+  word-break: break-word;
+}
+.aui-md > :first-child {
+  margin-top: 0;
+}
+.aui-md > :last-child {
+  margin-bottom: 0;
+}
+.aui-md p,
+.aui-md ul,
+.aui-md ol,
+.aui-md table,
+.aui-md pre {
+  margin: 0.5em 0;
+}
+.aui-md ul {
+  list-style: disc;
+  padding-left: 1.4em;
+}
+.aui-md ol {
+  list-style: decimal;
+  padding-left: 1.4em;
+}
+.aui-md li {
+  margin: 0.2em 0;
+}
+.aui-md h1,
+.aui-md h2,
+.aui-md h3 {
+  margin: 0.9em 0 0.4em;
+  font-weight: 600;
+}
+.aui-md h1 {
+  font-size: 1.15em;
+}
+.aui-md h2 {
+  font-size: 1.08em;
+}
+.aui-md code {
+  background: var(--color-muted);
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  padding: 0.1em 0.35em;
+  font-family: var(--font-mono);
+  font-size: 0.88em;
+}
+.aui-md pre {
+  background: var(--color-muted);
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  padding: 0.7em 0.9em;
+  overflow-x: auto;
+}
+.aui-md pre code {
+  background: none;
+  border: 0;
+  padding: 0;
+}
+.aui-md table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 0.92em;
+}
+.aui-md th,
+.aui-md td {
+  border: 1px solid var(--color-border);
+  padding: 0.35em 0.6em;
+  text-align: left;
+}
+.aui-md blockquote {
+  margin: 0.5em 0;
+  border-left: 3px solid var(--color-border);
+  padding-left: 0.8em;
+  color: var(--color-muted-foreground);
+}
+.aui-md a {
+  color: var(--color-accent);
+  text-decoration: underline;
+}

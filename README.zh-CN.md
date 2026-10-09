@@ -32,7 +32,7 @@
 
 *时序图由 [`scripts/visualization/generate_request_flow.mjs`](scripts/visualization/generate_request_flow.mjs) 生成。事件词表（`text`、`thinking`、`tool_start`、`tool_end`、`done`、`error`）与工具结果预览上限都从 [`src/sse.ts`](src/sse.ts) 和 [`src/app.ts`](src/app.ts) 里读，不写死。*
 
-<!-- TODO: 截图待补充 — CLI 会话示例与 public/index.html 浏览器截图 -->
+<!-- TODO: 截图待补充 — CLI 会话示例与 web/ 前端浏览器截图 -->
 
 ## 技术栈
 
@@ -54,7 +54,7 @@
 
 ## 特性
 
-- **三入口**：CLI（`npm run dev`）+ HTTP SSE（`npm run web`）+ 官方 RPC stdio JSONL（`npm run dev -- --mode rpc`，跨语言 / 子进程集成）。后端接口是产品；`public/index.html` 只是本地试接口的示例页
+- **三入口**：CLI（`npm run dev`）+ HTTP SSE（`npm run web`）+ 官方 RPC stdio JSONL（`npm run dev -- --mode rpc`，跨语言 / 子进程集成）。后端接口是产品；[`web/`](web) 里是一个 React 前端，在浏览器里说同一套 WS 协议
 - **分层提示词**：`src/prompts/` 下 `persona.md`（人设）+ `rules.md`（规则），改文件即改性格
 - **工具即插即用**：`src/tools/` 下定义，`tools/index.ts` 登记，自动注册进 Agent
 - **技能管理**：`src/skills/<name>/SKILL.md`，走 SDK `DefaultResourceLoader.additionalSkillPaths`，目录由 `formatSkillsForPrompt` 注入，全文用内置 `read` 按 `<location>` 加载
@@ -204,7 +204,16 @@ npm run web
 # 默认 http://localhost:3000
 ```
 
-`public/index.html` 只是本地试接口的示例页，不是产品前端。嵌进已有服务时用 `createApp({ staticDir: false })`，自己挂页面。
+仓库同时自带一个产品前端 [`web/`](web)——独立 npm 项目（Vite + React + [assistant-ui](https://www.assistant-ui.com)），唯一需要手写的就是一层跑在 `/ws` 上的 `ExternalStoreRuntime` 适配。它直接复用 `src/protocol.ts`，线协议类型前后端只有一份。
+
+```bash
+npm run ui:dev     # Vite dev 服务跑在 :5173，/ws 代理到后端（:3000）
+npm run ui:build   # 产出 web/dist——之后 `npm run web` 直接把应用挂在 /，单进程部署
+```
+
+开发模式下代理必须透传原始 `Host`：后端做了同源权威校验（`src/transport/ws.ts` 的 `originAllowed`），给 Vite 代理加 `changeOrigin` 会把转发 Host 改成后端地址，浏览器的握手因此被 403 拒掉，而不带 `Origin` 的非浏览器客户端却照样能连——这个不对称坑过一回，别再踩。
+
+嵌进已有服务时用 `createApp({ staticDir: false })`，自己挂前端。
 
 `GET /health` 返回当前模型、可用模型列表、技能 / 知识库目录、数据库探活、内置工具档位、是否忙碌。
 
@@ -301,8 +310,8 @@ pi-starter/
 │   └── 嵌入指南.md      #   把 Agent 装进已有 Express 服务
 ├── .github/workflows/
 │   └── ci.yml            # typecheck + test + build，矩阵跨 ubuntu / windows / macos
-├── public/
-│   └── index.html        # 示例对话页（试接口用，不是产品前端）
+├── web/                  # 产品前端（独立 package.json：Vite + React + assistant-ui）
+│   └── src/pi/           #   唯一手写的胶水：WS 客户端 + ExternalStore 适配
 ├── Dockerfile            # 开箱即用的沙箱镜像（见 SECURITY.md / README 高级模式）
 ├── LICENSE  README.md  README.zh-CN.md  CONTRIBUTING.md  SECURITY.md
 ├── CHANGELOG.md  FAQ.md  AUTHORS  .gitignore  .gitattributes

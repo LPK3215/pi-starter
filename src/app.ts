@@ -52,7 +52,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 
 export interface CreateAppOptions {
   agent: BuiltAgent;
-  /** 静态页目录。默认仓库 public/。嵌进别人服务时传 false，自己挂前端。 */
+  /** 静态页目录。默认仓库 web/dist（`npm run ui:build` 的产物）。嵌进别人服务时传 false，自己挂前端。 */
   staticDir?: string | false;
   /** 工具注册表（可选）：提供后开放 /capabilities 与工具开关。 */
   registry?: ToolRegistry;
@@ -181,7 +181,9 @@ export function createApp(options: CreateAppOptions): CreateAppResult {
   // 原先 express.json() 无上限，单个超大请求即可打满进程内存。
   hardenApp(app, { bodyLimit: options.bodyLimit, headers: options.securityHeaders });
   if (options.staticDir !== false) {
-    app.use(express.static(options.staticDir ?? join(__dirname, "..", "public")));
+    // 默认挂 web/ 的前端产物（`npm run ui:build` 产出到 web/dist）。
+    // 目录不存在时 express.static 不报错、直接穿透，所以未构建前端也不会影响接口。
+    app.use(express.static(options.staticDir ?? join(__dirname, "..", "web", "dist")));
   }
 
   // Rate limits for the expensive routes. Opt-in via `rateLimit: true` (or a custom rule
