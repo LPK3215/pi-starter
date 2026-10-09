@@ -24,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **一个必须注意的正确性点**：工具结果到达时，那条 assistant 消息**已经在上一份快照里发出去了**。若原地改缓存对象，对象引用不变，SnapshotEmitter 的“仅追加”快路径会认为历史未变，新结果永远发不到客户端。所以投影带了一个内容签名（文本/思维链/调用数/已配对数/停止原因/entryId），**签名一变就换新对象**，让增量判定自然失效。`adoptTree`（回退/编辑）与压缩两处缓存重置同步作废。
   - **流式思维链**：以前 `thinking_delta` 只转发不累加，快照的 `streamingMessage` 永远没有思维链；新增 `streamingThinking` 缓冲，与 `streamingText` 同生命周期（`agent_start`/`message_end`/`agent_end` 重置）。
   - **前端**：`convertMessage` 改为从消息自身读 `thinking`/`calls`（刷新后官方区块仍完整），并去掉“（本轮无文本输出）”占位：空内容消息直接不占气泡；`stopReason` 为 `error`/`aborted` 时给可读的失败/中止提示，不再把上游故障说成“模型没说话”；连续多条失败记录只留最新一条。
+  - **本轮自己引入又修掉的截断 bug**：`projectMessages` 里流式文本错写成优先取 `state.streamingMessage?.text`（那是**快照生成那一刻**的旧值），把快照之后到达的 `message_delta` 全丢掉了——实测带工具轮的最终答复实时只显示“现在是”，F5 后才是全句。思维链那一行当时写对了（本地优先），文本行写反了。修为两者都以本地累加缓冲为准；不刷新的实时视图与刷新后的文本已逐字等值（codePoint 对比）。
   - **思考档控件**：`ControlBar` 的档位从只读文本改为可选下拉（协议早就有 `set_thinking`）。实测发现不支持 reasoning 的模型会被 SDK 直接回退（请求 `high` 后权威快照仍是 `off`），所以下拉**必须显示服务端回传值**并标注回退，否则用户只会觉得“下拉框坏了”。探针新增 `PI_SET_THINKING` 以验证这件事。
   - **验证**：`integration.test.ts` 新增一项，断言快照里工具轮消息带 `thinking`、`calls[0].args`、配对到的 `result` 与 `durationMs`，且 `toolResult` 不会作为独立消息出现；`npm run verify` 全绿。浏览器实测：思维链与 `1 tool call` 区块均渲染，**F5 刷新后仍完整**，“（本轮无文本输出）”不再出现，无空白气泡，控制台零 error/零 warning。
 

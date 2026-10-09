@@ -442,8 +442,11 @@ export function projectMessages(snap: PiSnapshot): UiMessage[] {
   if (!state) return [];
   const messages = [...state.messages];
   if (state.isStreaming) {
-    // 流式中的思维链以本地增量为准（快照推送频率比 delta 低）。
-    const text = state.streamingMessage?.text ?? snap.streamText;
+    // 流式中的文本与思维链都**以本地累加为准**：快照里的 streamingMessage 只是
+    // 该快照生成那一刻的快照值，比它晚到的 message_delta 全在本地缓冲里。
+    // 写成优先取 streamingMessage.text 会把快照之后的增量丢掉（实测：带工具轮的
+    // 最终答复实时只显示“现在是”，刷新后才是全句）。
+    const text = snap.streamText || state.streamingMessage?.text || "";
     const thinking = snap.streamThinking || state.streamingMessage?.thinking;
     if (text || thinking) {
       messages.push({
