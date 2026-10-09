@@ -14,6 +14,9 @@
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createServer, type Server } from "node:http";
 import { once } from "node:events";
 import { WebSocket } from "ws";
@@ -23,6 +26,8 @@ import { resolveRuntimeConfig } from "./config.js";
 import { PROTOCOL_VERSION, type ServerMessage, type UiCapabilities, type UiState } from "./protocol.js";
 import { attachWebSocket } from "./transport/ws.js";
 import { Metrics } from "./metrics.js";
+import { AppError } from "./http/errors.js";
+import type { SessionCatalog, StoredConversation } from "./sessions/store.js";
 import { createToolRegistry } from "./tools/registry.js";
 import { SettingsService, memorySettingsPort } from "./settings.js";
 import { PlanModeController } from "./modes/plan-mode.js";
@@ -229,6 +234,62 @@ test("集成：并发会话数达上限后 LRU 回收最久未活动的对话", 
   // Keep creating: the cap must hold indefinitely (no leak over time).
   for (let i = 0; i < 20; i += 1) await cs.newConversation();
   assert.equal(cs.listConversations().length, 3, "cap must hold under sustained creation");
+  hub.dispose();
+});
+
+test("集成：删除对话会真删文件与索引，越界路径与最后一条被拒", async () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-del-"));
+  const file = join(root, "s1.jsonl");
+  writeFileSync(file, "{}\n");
+  // 另一个目录里的一份：代表“索引被篡改 / 路径越界”，删除必须被拦住。
+  const outside = join(mkdtempSync(join(tmpdir(), "pi-out-")), "evil.jsonl");
+  writeFileSync(outside, "{}\n");
+
+  const index = new Map<string, StoredConversation>();
+  index.set("s1", { sessionId: "s1", sessionFile: file, title: "one", updatedAt: 1, messageCount: 3 });
+  index.set("evil", { sessionId: "evil", sessionFile: outside, title: "out", updatedAt: 2, messageCount: 1 });
+  const catalog: SessionCatalog = {
+    cwd: root,
+    list: () => [...index.values()],
+    get: (sessionId) => index.get(sessionId),
+    upsert: (entry) => void index.set(entry.sessionId, entry),
+    remove: (sessionId) => void index.delete(sessionId),
+  };
+
+  const hub = new SessionHub(
+    makeAgent(),
+    resolveRuntimeConfig(),
+    process.cwd(),
+    () => 6,
+    DEFAULT_MAX_OPEN_CONVERSATIONS,
+    () => 0,
+    [root],
+    catalog,
+  );
+  const sink = collector();
+  const cs = await hub.attach("c-del", sink.push);
+  const liveId = cs.active!.id;
+
+  // 1) 磁盘态条目：文件与索引一起消失，并重推列表。
+  hub.deleteConversation("c-del", "s1");
+  assert.ok(!existsSync(file), "会话文件应被删除");
+  assert.equal(index.has("s1"), false, "索引条目应被删除");
+  const latest = sink.frames.filter((f) => f.type === "conversations").at(-1) as
+    | { items: { id: string }[] }
+    | undefined;
+  assert.ok(latest && !latest.items.some((i) => i.id === "s1"), "重推的列表里不该再有这条");
+
+  // 2) 越界路径：fail-closed，报错且绝不能碰文件。
+  assert.throws(() => hub.deleteConversation("c-del", "evil"), (err: unknown) => err instanceof AppError);
+  assert.ok(existsSync(outside), "被拒时绝不能删文件");
+  assert.equal(index.has("evil"), true, "被拒时也不能先删索引");
+
+  // 3) 最后一条活会话不许删（与 close 的约束一致）。
+  assert.throws(() => hub.deleteConversation("c-del", liveId), (err: unknown) => err instanceof AppError);
+
+  // 4) 未知 id 与空 id 都明确拒绝。
+  assert.throws(() => hub.deleteConversation("c-del", "nope"), (err: unknown) => err instanceof AppError);
+  assert.throws(() => hub.deleteConversation("c-del", "  "), (err: unknown) => err instanceof AppError);
   hub.dispose();
 });
 

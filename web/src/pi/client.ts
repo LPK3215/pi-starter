@@ -367,6 +367,13 @@ export class PiWsClient {
   closeConversation(conversationId: string) {
     this.send({ type: "close_conversation", conversationId });
   }
+  /**
+   * 真删除（磁盘会话文件 + 索引条目一起没）。与 close 不同：close 后它会以磁盘态
+   * 重新出现在列表里。服务端拒删时回 error 帧，会落在顶部提示条上。
+   */
+  deleteConversation(conversationId: string) {
+    this.send({ type: "delete_conversation", conversationId });
+  }
   renameConversation(conversationId: string, title: string) {
     this.send({ type: "rename_conversation", conversationId, title });
   }

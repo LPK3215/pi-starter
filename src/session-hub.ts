@@ -15,7 +15,7 @@
  *      UI 进度条与真实裁剪阈值永远一致。
  */
 
-import { existsSync } from "node:fs";
+import { existsSync, rmSync } from "node:fs";
 import { resolve as resolveAbsPath } from "node:path";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
@@ -1518,6 +1518,13 @@ export class ClientSession {
     this.emitConversations();
   }
 
+  /**
+   * 仅重推一次会话列表。给那些改了索引但没动本连接内存的操作用（如删除磁盘态历史对话）。
+   */
+  refreshConversations(): void {
+    this.emitConversations();
+  }
+
   dispose(): void {
     for (const conv of this.convs.values()) {
       this.rememberConversation?.(conv);
@@ -1634,6 +1641,39 @@ export class SessionHub {
     } finally {
       this.opening.delete(conversationId);
     }
+  }
+
+  /**
+   * 真删除一条对话：内存卸掉、索引去掉、磁盘会话文件删掉。
+   *
+   * 与 closeConversation 的区别在于后者会 rememberConversation，会话仍留在索引里，
+   * 所以“删了但列表里又出现一条磁盘态”不是 bug而是 close 的本意。要真消失只能走这里。
+   *
+   * 安全：删文件前必过 `assertSessionFileAllowed`（与打开时同一道闸，fail-closed）。
+   * 宁可删不成也不能删到会话目录外面；索引条目缺失时只卸内存，不猜路径。
+   */
+  deleteConversation(clientId: string, conversationId: string): void {
+    const owner = this.sessions.get(clientId);
+    if (!owner) throw badRequest("连接尚未建立");
+    if (!conversationId?.trim()) throw badRequest("会话 id 不能为空");
+
+    const live = owner.get(conversationId);
+    const entry = this.catalog?.get(conversationId);
+    if (!live && !entry) throw new AppError("not_found", "没有这条对话");
+
+    // 正在生成回复的会话不能拆：dispose 会把回合中间的写入扫在脚下。
+    if (live?.toSummary(false).streaming) throw badRequest("该对话正在生成回复，先中止再删除");
+    // 与 close 一致：至少留一条可用对话，否则客户端会落在空列表上。
+    if (live && owner.conversationCount() === 1) throw badRequest("这是最后一条对话，先新建一条再删它");
+
+    const file = entry?.sessionFile;
+    if (file) assertSessionFileAllowed(file, this.allowedSessionRoots);
+
+    if (live) owner.dropConversation(conversationId);
+    if (file && existsSync(file)) rmSync(file);
+    this.catalog?.remove(conversationId);
+    // 只改索引没动内存时（磁盘态条目）上面的 drop 不会推列表，这里统一补一次。
+    owner.refreshConversations();
   }
 
   /** Attach a client id to a fresh ClientSession (disposes any previous one). */

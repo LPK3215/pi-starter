@@ -417,6 +417,16 @@ class ClientConn {
             this.send({ type: "notice", level: "warn", text: "cannot close the last conversation" });
           }
           break;
+        case "delete_conversation":
+          // 与 close 不同：这条会真删磁盘会话文件，失败必须明确回帧而不是静默。
+          try {
+            if (!this.clientId) throw new AppError("bad_request", "not attached");
+            runtime.hub.deleteConversation(this.clientId, msg.conversationId);
+          } catch (err) {
+            const message = err instanceof AppError ? err.clientMessage() : "无法删除该会话";
+            this.send({ type: "error", message });
+          }
+          break;
         case "list_conversations":
           this.send({ type: "conversations", items: this.cs?.listConversations() ?? [] });
           break;

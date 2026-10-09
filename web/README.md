@@ -56,6 +56,12 @@ assistant-ui 接自定义后端有四条路，这里取 ExternalStore，因为**
 
 - **审批与 HITL 反问自绘卡片**：官方 `toolApproval` / human tool 需要工具调用以带归属信息的
   tool-call part 挂在消息上，而后端快照只告诉客户端“哪个请求在等人类”，所以这两块自绘。
+- **会话删除走 `delete_conversation`，不是 `close_conversation`**：close 会先 `rememberConversation`
+  再 dispose，会话仍留在索引里，刷新后又是一条磁盘态条目；只有 delete 会连磁盘会话文件一起删。
+  入口有两层：官方 `ThreadList` 的「…」菜单逐条 Rename / Archive / Delete，加上左侧底部的
+  「批量管理」多选清理。当前会话不可选删（服务端本来就拒删最后一条），正在生成回复的会话也会被拒。
+- **官方 Archive 菜单项被重定向到 close**：后端没有归档语义，而 ExternalStore 适配层缺 `onArchive`
+  时 runtime 会直接 `throw new Error("... does not support archiving")`——不接上它，点一下就是一个未捕获异常。
 - **思维链与工具调用随消息下发**：`UiMessage` 带 `thinking` / `calls`（含配对结果与耗时）/
   `stopReason`，历史重建是完整的——**刷新后官方 Reasoning / ToolGroup 仍渲染得出来**。
   `src/pi/client.ts` 里的 `tools` 只是事件帧的实时补位（本轮刚开始、带 toolCall 的那条消息

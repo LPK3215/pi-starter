@@ -146,7 +146,16 @@ export function usePiRuntime(): ExternalStoreAdapter<UiMessage> {
             else piClient.switchConversation(threadId);
           },
           onRename: (threadId, newTitle) => piClient.renameConversation(threadId, newTitle),
-          onDelete: (threadId) => piClient.closeConversation(threadId),
+          // 官方条目的 Delete 要的是“真没了”，所以走 delete 而不是 close
+          // （close 后会话仍在索引里，会以磁盘态重新出现在列表上）。
+          onDelete: (threadId) => piClient.deleteConversation(threadId),
+          /**
+           * 后端没有归档语义，而这个回调**必须提供**：官方 thread-list 的 Archive 菜单项会调
+           * runtime.archive()，ExternalStore 适配层缺 onArchive 时直接 `throw new Error(
+           * "External store adapter does not support archiving")`。映射到 close（从当前列表
+           * 卸掉、仍可从磁盘重新打开）是可用语义里最接近的一个。
+           */
+          onArchive: (threadId) => piClient.closeConversation(threadId),
         },
       },
     }),

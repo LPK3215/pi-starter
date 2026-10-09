@@ -248,6 +248,14 @@ export type ClientMessage =
   | { type: "open_conversation"; conversationId: string }
   | { type: "switch_conversation"; conversationId: string }
   | { type: "close_conversation"; conversationId: string }
+  /**
+   * 真删除一条对话：内存卸掉 + 索引去掉 + 磁盘会话文件删掉。
+   *
+   * 与 `close_conversation` 不是一回事：close 会先 `rememberConversation` 再 dispose，
+   * 会话仍留在索引里，下次列表里又是一条磁盘态条目。要“从列表里消失”只能靠这个。
+   * 服务端删文件前必过与打开时同一道路径闸（`assertSessionFileAllowed`），越界即拒。
+   */
+  | { type: "delete_conversation"; conversationId: string }
   | { type: "list_conversations" }
   | { type: "rename_conversation"; conversationId: string; title: string }
   | {
@@ -448,6 +456,7 @@ export const CLIENT_MESSAGE_TYPES = [
   "open_conversation",
   "switch_conversation",
   "close_conversation",
+  "delete_conversation",
   "list_conversations",
   "rename_conversation",
   "rollback_conversation",

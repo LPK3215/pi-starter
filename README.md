@@ -86,7 +86,7 @@ The scaffold is a **vertical-agent starting point**, not another coding-assistan
 | `guard` intercepting dangerous bash and paths outside cwd (`read SKILL.md` excepted) | Full sandboxing / container isolation |
 | `audit` printing tool durations | Login, multi-user sessions, public-internet exposure |
 | Snapshot-driven WebSocket (restart/reconnect self-healing, backpressure drops, slow-client disconnect) | Cross-client conversation takeover |
-| Rename, roll back, edit a user message, and fork a path (SDK session tree; survives restart) | Goal-review loop. The SDK does not provide that workflow |
+| Rename, roll back, edit a user message, fork a path, and **delete a conversation for real** (`delete_conversation`: index entry + session file, path re-checked against the same allowlist as open) | Goal-review loop. The SDK does not provide that workflow |
 | Multi-conversation concurrency (cap 8 + LRU); sessions / settings / rules persisted | Goal-review loop, delegation, SCM, background-task tracking |
 | Tool watchdog (a hung tool can't block forever), approval rule engine (six matchers + editing API) | Plugin marketplace |
 | Plan mode (plan-only per conversation), subagents, MCP bridge (stdio + hot reload) | Interactive PTY (vim / top), attachments and vision bridge |

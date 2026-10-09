@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **会话真删除（`delete_conversation`）+ 前端批量管理入口**：验收过程中积了几十条测试会话，而现有 `close_conversation` **不是删除**——它先 `rememberConversation` 再 dispose，索引还在，刷新后又是一条磁盘态条目，“关掉又冒出来”。
+  - **协议**：`ClientMessage` 新增 `delete_conversation`（同步进 `CLIENT_MESSAGE_TYPES` 完备性断言）。`ws.ts` 单独一个 case，失败**必回 error 帧**（这条会动磁盘，不能静默）。
+  - **安全**：删文件前必过 `assertSessionFileAllowed`（与 `openConversation` 同一道闸、同一份 `allowedSessionRoots`，fail-closed）；索引条目缺失时只卸内存，**不猜路径**。约束与 close 对齐：正在生成回复的会话、以及最后一条活会话均拒删。
+  - **列表重推**：新增 `ClientSession.refreshConversations()`——删磁盘态条目时本连接内存里没有这个对象，原有路径推不了列表。
+  - **前端**：左侧底部新增「批量管理」（多选 + 全选可删 / 只选磁盘态 + 二次确认），当前会话 disabled；官方 `ThreadList` 的 `onDelete` 改接 delete（之前接的是 close，删了会复活）。
+  - **一个不接就会抛的坑**：官方条目菜单有 Archive，而 ExternalStore 适配层缺 `onArchive` 时 `runtime.archive()` 直接 `throw new Error("External store adapter does not support archiving")`。后端无归档语义，现映射到 close（从当前列表卸掉、仍可从磁盘重开）。
+  - **顺手修掉验收报出的计数不同步**：顶栏“N 个对话”读 `state.conversations`（只随快照刷新），面板读 `conversations` 帧，删完两处差一帧；统一到 `conversations` 单一来源。
+  - **验证**：`integration.test.ts` 新增一项（磁盘态条目删除后文件与索引均消失且重推列表；越界路径被拒且**文件与索引都保持原样**；最后一条 / 未知 id / 空 id 均拒），22/22 通过；`npm run verify` 全绿。浏览器实测：37→35 计数联动、确认框文案含“不可恢复”、**F5 后两条未复活**（真删而非卸内存）、未删会话仍可正常打开、控制台零 error/warning。
+
 - **产品前端 `web/`（Vite + React + assistant-ui）**：补齐与后端同源对话 UI。形态是**仓库内独立 npm 项目**（自己的 `package.json` / `tsconfig` / `node_modules`），后端管道（`verify` / Docker / npm 发布）对它零感知；线协议不重建翻译表，`web/tsconfig.app.json` 直接把 `src/protocol.ts` 映射为 `@pi/protocol`，前后端共用同一份类型。
   - **选型**：assistant-ui 自定义后端的四条路里取 **`ExternalStoreRuntime`**——消息权威状态在后端快照里，前端只做翻译与回调转发。`LocalRuntime` 会自己管消息状态、与 snapshot/rollback/fork 语义打架；DataStream 与 AssistantTransport 都要求后端改吐它的线格式，违反“不改后端”。
   - **手写胶水只有两个文件**：`web/src/pi/client.ts`（WS 客户端：`hello`→`ready` 握手、`rev`/`baseRev` 修订链断链自愈、`message_delta` 与快照的归属关系、退避重连）与 `web/src/pi/usePiRuntime.ts`（快照→`ExternalStoreAdapter`，含 `adapters.threadList` 多对话）。控制面（模型/思考档/计划模式/上下文预算）与审批、HITL 反问按官方口径自绘，不走 runtime。

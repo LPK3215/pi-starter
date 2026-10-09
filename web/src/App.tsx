@@ -1,7 +1,7 @@
 import { Component, useEffect, type ReactNode } from "react";
 import { AssistantRuntimeProvider, useExternalStoreRuntime } from "@assistant-ui/react";
 
-import { ApprovalCard, ConnectionBadge, ControlBar, HitlDialog, NoticeBar, ToolTrace } from "@/components/pi-panels";
+import { ApprovalCard, ConnectionBadge, ControlBar, HitlDialog, NoticeBar, ThreadManager, ToolTrace } from "@/components/pi-panels";
 // 官方 registry 组件（shadcn add @assistant-ui/thread）。我自己的那份留在
 // @/components/thread.tsx 作为回退点，两者可单独换回来对比。
 import { Thread } from "@/components/assistant-ui/elements/thread.aui";
@@ -59,20 +59,29 @@ const btnBase =
   "mt-3 rounded-lg border border-border px-3 py-1 text-xs text-foreground hover:bg-muted";
 
 function Shell() {
-  const { state } = usePiSnapshot();
+  // 计数读 conversations（由 `conversations` 帧与快照共同维护的列表），不读 state.conversations：
+  // 后者只随快照刷新，删完会话后会比实际值旧一帧（两处计数不一致就是这么来的）。
+  const { conversations } = usePiSnapshot();
   return (
     <div className="flex h-screen flex-col bg-background text-foreground">
       <header className="flex items-center gap-3 border-b border-border bg-card px-4 py-2">
         <span className="text-sm font-semibold">Pi Starter</span>
         <ConnectionBadge />
-        {state && <span className="truncate text-xs text-muted-foreground">{state.conversations.length} 个对话</span>}
+        <span className="truncate text-xs text-muted-foreground">{conversations.length} 个对话</span>
       </header>
       <NoticeBar />
       <ControlBar />
       <div className="flex min-h-0 flex-1">
         {/* 官方 ThreadList（含 New / Search / Items），不再用自研列表——保证与官方样貌一致。 */}
-        <aside className="w-64 shrink-0 overflow-y-auto border-e border-border bg-sidebar p-2">
-          <ThreadList />
+        <aside className="flex w-64 shrink-0 flex-col border-e border-border bg-sidebar">
+          {/* 官方 ThreadList（含 New / Search / Items）：可滚动区域 */}
+          <div className="min-h-0 flex-1 overflow-y-auto p-2">
+            <ThreadList />
+          </div>
+          {/* 批量管理固定在底部：列表长的时候不用先滚到最下方才能清理 */}
+          <div className="border-t border-border p-2">
+            <ThreadManager />
+          </div>
         </aside>
         <main className="flex min-w-0 flex-1 flex-col">
           <div className="min-h-0 flex-1">

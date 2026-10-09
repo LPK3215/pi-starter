@@ -281,6 +281,143 @@ function ThinkingPicker({ level }: { level: string }) {
   );
 }
 
+/**
+ * 会话批量管理。
+ *
+ * 为什么自己画而不是用官方 ThreadList 的菜单：官方条目只有逐条 Rename/Archive/Delete，
+ * 清几十条测试会话要点几十次。删除本身走的是后端 `delete_conversation`（连磁盘文件），
+ * 不是 `close_conversation`（只卸内存，下次又变回磁盘态条目）。
+ *
+ * 当前会话不可选：服务端本来就拒删最后一条，提前挡住比弹一个错误帧好。
+ */
+export function ThreadManager() {
+  const { conversations, state } = usePiSnapshot();
+  const current = state?.conversationId;
+  const [open, setOpen] = useState(false);
+  const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
+  const [confirming, setConfirming] = useState(false);
+
+  const deletable = conversations.filter((c) => c.id !== current);
+  // 删完服务端会重推列表；选中的 id 已经不存在了，得从集合里清掉。
+  useEffect(() => {
+    const alive = new Set(conversations.map((c) => c.id));
+    setSelected((prev) => {
+      const next = new Set([...prev].filter((id) => alive.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [conversations]);
+
+  const toggle = (id: string) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+
+  const submit = () => {
+    for (const id of selected) piClient.deleteConversation(id);
+    setSelected(new Set());
+    setConfirming(false);
+    setOpen(false);
+  };
+
+  if (!open) {
+    return (
+      <button className={cn(btn, "mt-2 w-full")} onClick={() => setOpen(true)}>
+        批量管理（{conversations.length}）
+      </button>
+    );
+  }
+
+  return (
+    <div className="mt-2 rounded-xl border border-border p-2">
+      <div className="mb-1.5 flex items-center justify-between text-xs text-muted-foreground">
+        <span>已选 {selected.size} 条</span>
+        <div className="flex gap-1">
+          <button className={btn} onClick={() => setSelected(new Set(deletable.map((c) => c.id)))}>
+            全选可删
+          </button>
+          <button
+            className={btn}
+            onClick={() => setSelected(new Set(deletable.filter((c) => c.dormant).map((c) => c.id)))}
+          >
+            只选磁盘态
+          </button>
+        </div>
+      </div>
+
+      <div className="max-h-64 space-y-0.5 overflow-y-auto">
+        {conversations.map((c) => {
+          const isCurrent = c.id === current;
+          return (
+            <label
+              key={c.id}
+              className={cn(
+                "flex items-start gap-2 rounded-lg px-1.5 py-1 text-xs",
+                isCurrent ? "opacity-50" : "hover:bg-muted cursor-pointer",
+              )}
+            >
+              <input
+                type="checkbox"
+                className="mt-0.5"
+                disabled={isCurrent}
+                checked={selected.has(c.id)}
+                onChange={() => toggle(c.id)}
+              />
+              <span className="min-w-0 flex-1">
+                <span className="block truncate">{c.title || "未命名对话"}</span>
+                <span className="block text-[10px] text-muted-foreground">
+                  {c.messageCount} 条
+                  {c.dormant ? " · 磁盘" : ""}
+                  {isCurrent ? " · 当前会话不可删" : ""}
+                  {c.streaming && !isCurrent ? " · 生成中" : ""}
+                </span>
+              </span>
+            </label>
+          );
+        })}
+      </div>
+
+      {confirming ? (
+        <div className="mt-2 rounded-lg border border-destructive/50 bg-destructive/10 p-2 text-xs">
+          <p className="mb-2">
+            确认删除 {selected.size} 条会话？会连同磁盘上的会话文件一起删除，<b>不可恢复</b>。
+          </p>
+          <div className="flex gap-2">
+            <button className={cn(btn, "border-destructive/60 text-destructive")} onClick={submit}>
+              确认删除
+            </button>
+            <button className={btn} onClick={() => setConfirming(false)}>
+              取消
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="mt-2 flex gap-2">
+          <button
+            className={cn(btn, "border-destructive/60 text-destructive")}
+            disabled={selected.size === 0}
+            onClick={() => setConfirming(true)}
+          >
+            删除所选
+          </button>
+          <button
+            className={btn}
+            onClick={() => {
+              setSelected(new Set());
+              setConfirming(false);
+              setOpen(false);
+            }}
+          >
+            收起
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** 顶栏控制面：模型 / 思考档 / 计划模式 / 上下文预算与用量。 */
 export function ControlBar() {
   const { models, state } = usePiSnapshot();
