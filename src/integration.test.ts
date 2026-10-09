@@ -232,6 +232,63 @@ test("集成：并发会话数达上限后 LRU 回收最久未活动的对话", 
   hub.dispose();
 });
 
+test("集成：thinking 与 toolCall 进快照，并与 toolResult 配对", async () => {
+  const agent = makeAgent();
+  const hub = new SessionHub(agent, resolveRuntimeConfig());
+  const sink = collector();
+  const cs = await hub.attach("c1", sink.push);
+  const conv = cs.active!;
+  const session = conv.sdkSession as unknown as FakeSession;
+
+  session.emit({ type: "tool_execution_start", toolCallId: "tc-1", toolName: "current_time", args: {} });
+  session.messages.push({ role: "user", content: "几点了", timestamp: 1 });
+  session.messages.push({
+    role: "assistant",
+    content: [
+      { type: "thinking", thinking: "用户想知道时间，应调用 current_time" },
+      { type: "toolCall", id: "tc-1", name: "current_time", arguments: { tz: "Asia/Shanghai" } },
+    ],
+    stopReason: "toolUse",
+    timestamp: 2,
+  } as never);
+  // 工具结果在**另一条**消息里，投影必须把它归回发起调用的那条 assistant 消息；
+  // 否则刷新后官方 ToolGroup 只剩一个空文本气泡。
+  session.messages.push({
+    role: "toolResult",
+    toolCallId: "tc-1",
+    toolName: "current_time",
+    content: [{ type: "text", text: "18:00" }],
+    isError: false,
+    timestamp: 3,
+  } as never);
+  session.messages.push({
+    role: "assistant",
+    content: [{ type: "text", text: "现在是 18:00" }],
+    stopReason: "stop",
+    timestamp: 4,
+  } as never);
+  session.emit({ type: "tool_execution_end", toolCallId: "tc-1", toolName: "current_time", result: "18:00", isError: false });
+
+  sink.frames.length = 0;
+  conv.getState();
+  const snap = sink.frames.find((f) => f.type === "snapshot") as { state: UiState } | undefined;
+  assert.ok(snap, "getState must emit a snapshot");
+  const msgs = snap!.state.messages;
+  assert.equal(msgs.length, 3, "toolResult 不能作为独立消息出现在快照里");
+
+  const toolMsg = msgs[1]!;
+  assert.equal(toolMsg.text, "", "只调工具的一轮本来就没有文本");
+  assert.equal(toolMsg.thinking, "用户想知道时间，应调用 current_time", "思维链不能被 extractText 丢掉");
+  assert.equal(toolMsg.stopReason, "toolUse", "停止原因要随消息下发");
+  assert.equal(toolMsg.calls?.length, 1);
+  assert.equal(toolMsg.calls![0]!.name, "current_time");
+  assert.deepEqual(toolMsg.calls![0]!.args, { tz: "Asia/Shanghai" });
+  assert.equal(toolMsg.calls![0]!.result, "18:00", "结果必须配对回发起调用的那条消息");
+  assert.equal(typeof toolMsg.calls![0]!.durationMs, "number", "耗时由服务端实测带入历史");
+  assert.equal(msgs[2]!.text, "现在是 18:00");
+  hub.dispose();
+});
+
 test("集成：SDK 事件被翻译成协议消息并驱动快照", async () => {
   const agent = makeAgent();
   const hub = new SessionHub(agent, resolveRuntimeConfig());

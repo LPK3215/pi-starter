@@ -54,11 +54,12 @@ assistant-ui 接自定义后端有四条路，这里取 ExternalStore，因为**
 
 ## 已知边界（有意为之，不是遗漏）
 
-- **审批与 HITL 反问不走官方 `toolApproval` / human tool**：那两条都要求工具调用以 tool-call part
-  形式存在于消息里，而后端 `UiMessage` 只有 `role` / `text`。所以按官方对控制面的口径自绘。
-- **工具轨迹是运行级的，且刷新后不保留**：后端快照不持久化工具历史，`tool_status` 只描述"这一刻哪
-  个工具在跑"。多轮 ReAct 里工具恰好在两轮之间执行，那一刻流式尾消息是空的，所以做成独立轨迹条而
-  不是只挂消息。
+- **审批与 HITL 反问自绘卡片**：官方 `toolApproval` / human tool 需要工具调用以带归属信息的
+  tool-call part 挂在消息上，而后端快照只告诉客户端“哪个请求在等人类”，所以这两块自绘。
+- **思维链与工具调用随消息下发**：`UiMessage` 带 `thinking` / `calls`（含配对结果与耗时）/
+  `stopReason`，历史重建是完整的——**刷新后官方 Reasoning / ToolGroup 仍渲染得出来**。
+  `src/pi/client.ts` 里的 `tools` 只是事件帧的实时补位（本轮刚开始、带 toolCall 的那条消息
+  还未落定的那一刻）。
 - **没接 `onEdit` / `onReload` / `setMessages`**（UI 的编辑 / 重生成 / 分支因此自动关闭）：后端
   `edit_message` 的语义是"回滚到该条 + 原文交回输入框、**不自动再发一轮**"，与 assistant-ui 期望的
   "编辑即新一轮"不等价，硬接会得到一条和后端会话树不一致的分支。

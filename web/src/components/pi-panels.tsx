@@ -243,6 +243,44 @@ export function ToolTrace() {
   );
 }
 
+/** 与后端 set_thinking 接受值一致（非法值会被服务端拒）。 */
+const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high"] as const;
+
+/**
+ * 思考档选择器。
+ *
+ * 必须显示**服务端回传的档位**而不是本地点击值：不支持 reasoning 的模型会被 SDK 直接
+ * 回退（实测请求 high 后快照仍是 off），不标注的话用户只会觉得“下拉框坏了”。
+ */
+function ThinkingPicker({ level }: { level: string }) {
+  const [requested, setRequested] = useState<string | null>(null);
+  const clamped = requested !== null && requested !== level;
+  return (
+    <label className="flex items-center gap-1.5">
+      思考
+      <select
+        className="rounded-lg border border-border bg-transparent px-1.5 py-0.5"
+        value={level}
+        onChange={(e) => {
+          setRequested(e.target.value);
+          piClient.setThinking(e.target.value);
+        }}
+      >
+        {[...new Set([level, ...THINKING_LEVELS])].map((lv) => (
+          <option key={lv} value={lv}>
+            {lv}
+          </option>
+        ))}
+      </select>
+      {clamped && (
+        <span className="text-warning" title={`请求的 ${requested} 被服务端回退为 ${level}`}>
+          该模型不支持 {requested}，已回退为 {level}
+        </span>
+      )}
+    </label>
+  );
+}
+
 /** 顶栏控制面：模型 / 思考档 / 计划模式 / 上下文预算与用量。 */
 export function ControlBar() {
   const { models, state } = usePiSnapshot();
@@ -270,7 +308,8 @@ export function ControlBar() {
         )}
       </select>
 
-      <span className="text-muted-foreground">思考 {state.thinkingLevel}</span>
+      {/* 思考档以前只是只读文本，但协议有 set_thinking：选不了就等于思维过程不可控。 */}
+      <ThinkingPicker level={state.thinkingLevel} />
 
       <label className="flex items-center gap-1.5">
         <input

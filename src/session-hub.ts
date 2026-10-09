@@ -44,13 +44,15 @@ import type {
   UiConversation,
   UiMessage,
   UiState,
+  UiToolCall,
 } from "./protocol.js";
 
 type Session = BuiltAgent["session"];
 
 /** 消息投影缓存：保证「仅追加」判定能靠对象引用等同性完成。 */
 type ProjectionCache = WeakMap<AgentMessage, UiMessage | null>;
-
+/** 投影内容签名：签名变 => 必须换新对象（见 projectMessage）。 */
+type ProjectionSig = WeakMap<AgentMessage, string>;
 /**
  * 单份快照最多携带的消息条数。
  *
@@ -72,31 +74,91 @@ function extractText(content: unknown): string {
   return out;
 }
 
+/** SDK 的 toolCall.arguments 正常是半对象；异常形状不进协议。 */
+function asArgs(value: unknown): Record<string, unknown> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  return value as Record<string, unknown>;
+}
+
+/** 一条 assistant 消息里的思维链与工具调用。 */
+function projectParts(content: unknown): { thinking?: string; calls?: UiToolCall[] } {
+  if (!Array.isArray(content)) return {};
+  let thinking = "";
+  const calls: UiToolCall[] = [];
+  for (const part of content) {
+    if (!part || typeof part !== "object") continue;
+    const p = part as { type?: string; thinking?: unknown; id?: unknown; name?: unknown; arguments?: unknown };
+    if (p.type === "thinking" && typeof p.thinking === "string" && p.thinking) {
+      thinking += (thinking ? "\n" : "") + p.thinking;
+    } else if (p.type === "toolCall" && typeof p.id === "string") {
+      const args = asArgs(p.arguments);
+      calls.push({
+        id: p.id,
+        name: typeof p.name === "string" ? p.name : "tool",
+        ...(args ? { args } : {}),
+      });
+    }
+  }
+  return { ...(thinking ? { thinking } : {}), ...(calls.length > 0 ? { calls } : {}) };
+}
+
+/** 已配对的工具结果（按 toolCallId）。 */
+type ToolResults = Map<string, { text: string; isError?: boolean; durationMs?: number }>;
+
 /** Project an SDK AgentMessage to a UI message, or null when it is not a chat message. */
 function projectMessage(
   message: AgentMessage,
   cache: ProjectionCache,
-  entryId?: string,
+  entryId: string | undefined,
+  results: ToolResults,
+  sigs: ProjectionSig,
 ): UiMessage | null {
   const role = (message as { role?: string }).role;
   if (role !== "user" && role !== "assistant") return null;
+  const content = (message as { content?: unknown }).content;
+  const stopReason = (message as { stopReason?: unknown }).stopReason;
+  const timestamp = (message as { timestamp?: number }).timestamp;
+  const parts = projectParts(content);
+  const text = extractText(content);
+  // 签名含所有会影响投影内容的变量。工具结果是在另一条 toolResult 消息里到达的，
+  // 它一到就会改变签名——此时**必须**产出新对象而不是原地改：SnapshotEmitter 的
+  // “仅追加”快路径靠对象引用相等判定，引用不变就永远不会把新到结果发给客户端。
+  const resolved = (parts.calls ?? []).filter((c) => results.has(c.id)).length;
+  const callCount = parts.calls?.length ?? 0;
+  const stop = typeof stopReason === "string" ? stopReason : "";
+  const sig = [
+    text.length,
+    parts.thinking?.length ?? 0,
+    callCount,
+    resolved,
+    stop,
+    entryId ?? "",
+  ].join("|");
   const hit = cache.get(message);
-  if (hit !== undefined) {
-    // 第一条快照可能早于会话条目落盘。补上 id 时换一个对象，避免增量快照一直拿着没有 id 的旧投影。
-    if (hit && entryId && hit.entryId !== entryId) {
-      const next = { ...hit, entryId };
-      cache.set(message, next);
-      return next;
-    }
-    return hit;
-  }
+  if (hit && sigs.get(message) === sig) return hit;
+
+  const calls = (parts.calls ?? []).map((c) => {
+    const r = results.get(c.id);
+    return r
+      ? {
+          ...c,
+          ...(r.text ? { result: r.text } : {}),
+          ...(r.isError ? { isError: true } : {}),
+          ...(r.durationMs !== undefined ? { durationMs: r.durationMs } : {}),
+        }
+      : c;
+  });
   const ui: UiMessage = {
     role,
-    text: extractText((message as { content?: unknown }).content),
-    timestamp: (message as { timestamp?: number }).timestamp,
+    text,
+    ...(parts.thinking ? { thinking: parts.thinking } : {}),
+    ...(calls.length > 0 ? { calls } : {}),
+    ...(role === "assistant" && typeof stopReason === "string" ? { stopReason } : {}),
+    timestamp,
     ...(entryId ? { entryId } : {}),
   };
   cache.set(message, ui);
+  sigs.set(message, sig);
   return ui;
 }
 
@@ -206,6 +268,8 @@ export class Conversation {
   private titleLocked = false;
   deltaSeq = 0;
   streamingText = "";
+  /** 本轮已流出的思维链（与 streamingText 同生命周期，供快照的 streamingMessage 携带）。 */
+  streamingThinking = "";
   lastActiveAt = Date.now();
   promptedSinceActive = false;
   pendingApproval: UiApproval | null = null;
@@ -225,9 +289,18 @@ export class Conversation {
    * 这不是为了方便改字段，而是「压缩后旧投影必须整体失效」本身就是正确性要求。
    */
   private cache: ProjectionCache = new WeakMap();
+  /** 与 cache 配套：投影内容签名，变了才换对象。 */
+  private projectionSig: ProjectionSig = new WeakMap();
   /** Per-message token counts, keyed by the stable projected UiMessage reference. */
   private tokenCache: WeakMap<UiMessage, number> = new WeakMap();
   private readonly toolStartTimes = new Map<string, number>();
+  /**
+   * 工具耗时（按 toolCallId），供历史投影用。
+   *
+   * 不能只靠 `tool_status` 帧：那是一次性的，刷新后就无从得知耗时。
+   * 会话内上限防止长会话下无限增长；溢出时丢弃最早的一条。
+   */
+  private readonly toolDurations = new Map<string, number>();
   /** Called after a turn ends, so the owning ClientSession can refresh its conversation list. */
   private readonly onTurnEnd: (() => void) | undefined;
   private readonly watchdog: ToolWatchdog;
@@ -296,6 +369,9 @@ export class Conversation {
           this.streamingText += ae.delta;
           this.emitDelta("text", ae.delta);
         } else if (ae?.type === "thinking_delta") {
+          // 以前只转发增量、不累加：快照里的 streamingMessage 永远没有思维链，
+          // 前端的“思考过程”在流式期间也无从渲染。
+          this.streamingThinking += ae.delta;
           this.emitDelta("thinking", ae.delta);
         }
         break;
@@ -316,6 +392,15 @@ export class Conversation {
       case "tool_execution_end": {
         const startedAt = this.toolStartTimes.get(event.toolCallId);
         this.toolStartTimes.delete(event.toolCallId);
+        if (startedAt !== undefined) {
+          const elapsed = Date.now() - startedAt;
+          // 有界：长会话下不能无限制累积。Map 保持插入序，满了丢最早的一条。
+          if (this.toolDurations.size >= 500) {
+            const oldest = this.toolDurations.keys().next().value;
+            if (oldest !== undefined) this.toolDurations.delete(oldest);
+          }
+          this.toolDurations.set(event.toolCallId, elapsed);
+        }
         // Always disarm, including on error: a leaked timer would later abort a healthy turn.
         this.watchdog.disarm(event.toolCallId);
         if (event.isError) metrics.inc("toolErrorsTotal");
@@ -339,6 +424,7 @@ export class Conversation {
       }
       case "agent_start": {
         this.streamingText = "";
+        this.streamingThinking = "";
         this.promptedSinceActive = true;
         this.push({ type: "run_start", conversationId: this.id });
         break;
@@ -352,6 +438,7 @@ export class Conversation {
             ? last.stopReason
             : undefined;
         this.streamingText = "";
+        this.streamingThinking = "";
         this.push({
           type: "run_end",
           conversationId: this.id,
@@ -387,6 +474,7 @@ export class Conversation {
       }
       case "message_end": {
         this.streamingText = "";
+        this.streamingThinking = "";
         this.refreshTitleFromSession();
         break;
       }
@@ -545,17 +633,37 @@ export class Conversation {
     if (!state) throw new AppError("internal", "当前会话不能同步消息");
     state.messages = manager.buildSessionContext().messages;
     this.cache = new WeakMap();
+    this.projectionSig = new WeakMap();
     this.tokenCache = new WeakMap();
     this.streamingText = "";
+    this.streamingThinking = "";
     this.getState();
   }
 
   /** Projected chat messages, using the stable-reference projection cache. */
   private currentMessages(): UiMessage[] {
-    const messages: UiMessage[] = [];
     const ids = this.entryIds();
+    // 第一遍：收齐工具结果。SDK 把结果放在独立的 toolResult 消息里，
+    // 而它需要被归回发起调用的那条 assistant 消息，否则历史里只有“调了什么”没有“结果”。
+    const results: ToolResults = new Map();
     for (const message of this.session.messages) {
-      const ui = projectMessage(message, this.cache, ids.get(message));
+      const tr = message as unknown as {
+        role?: string;
+        toolCallId?: string;
+        content?: unknown;
+        isError?: boolean;
+      };
+      if (tr.role !== "toolResult" || !tr.toolCallId) continue;
+      const durationMs = this.toolDurations.get(tr.toolCallId);
+      results.set(tr.toolCallId, {
+        text: extractText(tr.content),
+        ...(tr.isError === true ? { isError: true } : {}),
+        ...(durationMs !== undefined ? { durationMs } : {}),
+      });
+    }
+    const messages: UiMessage[] = [];
+    for (const message of this.session.messages) {
+      const ui = projectMessage(message, this.cache, ids.get(message), results, this.projectionSig);
       if (ui) messages.push(ui);
     }
     return messages;
@@ -597,8 +705,12 @@ export class Conversation {
       messagesTruncated: messages.length < totalMessageCount,
       totalMessages: totalMessageCount,
       streamingMessage:
-        this.streamingText && session.isStreaming
-          ? { role: "assistant", text: this.streamingText }
+        session.isStreaming && (this.streamingText || this.streamingThinking)
+          ? {
+              role: "assistant",
+              text: this.streamingText,
+              ...(this.streamingThinking ? { thinking: this.streamingThinking } : {}),
+            }
           : null,
       isStreaming: session.isStreaming,
       model: { provider: model.provider, id: model.id, name: model.name ?? model.id },
@@ -848,8 +960,10 @@ export class Conversation {
     // 引用没变，就会命中压缩前的投影与 token 数——快照会继续显示被压掉的旧内容。
     // 换新对象时 WeakMap 自然 miss，作废看似多余；但两种实现都存在，所以显式作废。
     this.cache = new WeakMap();
+    this.projectionSig = new WeakMap();
     this.tokenCache = new WeakMap();
     this.streamingText = "";
+    this.streamingThinking = "";
     const after = this.estimateTokensCached(this.boundedMessages(this.currentMessages()));
     this.getState();
     this.push({

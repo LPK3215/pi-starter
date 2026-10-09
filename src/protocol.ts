@@ -19,11 +19,40 @@ export const PROTOCOL_VERSION = 1;
 
 /* ────────────────────────── 快照结构（C 类） ────────────────────────── */
 
+/**
+ * 一条工具调用（含配对回来的结果）。
+ *
+ * 为什么要把结果开在这里而不是只靠 `tool_status`/`tool_delta` 事件帧：
+ * 事件帧是**一次性**的，刷新/重连后客户端就只能看到一条空文本的 assistant 消息（它其实是
+ * “只调工具的一轮”），UI 上表现为一个空白气泡。把调用与结果归到消息本身，历史才能完整重建。
+ */
+export interface UiToolCall {
+  /** SDK 的 toolCall id；与 toolResult 配对靠它。 */
+  id: string;
+  name: string;
+  /** 入参（SDK 原样）。 */
+  args?: Record<string, unknown>;
+  /** 配对到的结果文本；工具尚未结束时为空。 */
+  result?: string;
+  isError?: boolean;
+  /** 执行耗时（服务端在 tool_execution_start/end 实测）。 */
+  durationMs?: number;
+}
+
 /** Light projection of a conversation message for UI rendering. */
 export interface UiMessage {
   role: "user" | "assistant";
   text: string;
   timestamp?: number;
+  /**
+   * 思维链（SDK `thinking` parts 拼接）。以前被 `extractText` 直接丢掉，
+   * 导致前端的“思考过程”无处可取。
+   */
+  thinking?: string;
+  /** 这条 assistant 消息发起的工具调用（结果已按 toolCallId 配对）。 */
+  calls?: UiToolCall[];
+  /** SDK 的停止原因（`toolUse`/`stop`/`error`/`aborted`/`length`），用于区分“失败”与“没说话”。 */
+  stopReason?: string;
   /**
    * 会话树上这条消息的 id。回退、编辑、分叉都用它，不传文件路径。
    * 没有会话树的旧快照可以没有这个字段。

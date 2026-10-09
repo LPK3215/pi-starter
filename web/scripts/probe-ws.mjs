@@ -18,6 +18,15 @@ function finish(reason) {
   const snap = seen.filter((m) => m.type === "snapshot").at(-1);
   console.log("ready:", ready ? { clientId: ready.clientId?.slice(0, 8), protocolVersion: ready.protocolVersion, serverVersion: ready.serverVersion, tools: ready.capabilities.tools.length } : "缺失");
   console.log("snapshot(首帧):", first ? { conversationId: first.state.conversationId?.slice(0, 8), messages: first.state.messages.length, model: `${first.state.model.provider}/${first.state.model.id}`, isStreaming: first.state.isStreaming } : "缺失");
+  // 思考档是否真被服务端接受：看**最后一份**快照回传的值（首帧在 set_thinking 之前），而不是看请求发没发。
+  // （不支持 reasoning 的模型会自己回退，此时 UI 上的下拉必须跟着显示服务端值。）
+  console.log(
+    "thinkingLevel:",
+    snap?.state.thinkingLevel,
+    process.env.PI_SET_THINKING && snap?.state.thinkingLevel !== process.env.PI_SET_THINKING
+      ? `（请求的是 ${process.env.PI_SET_THINKING}，被服务端回退）`
+      : "",
+  );
   console.log("流式增量帧:", types.filter((t) => t === "message_delta").length, "段");
   // 后端权威的逐条消息摘要：用来分辨"空 assistant 气泡"是前端渲染问题还是快照本来就没文本。
   console.log(
@@ -40,6 +49,9 @@ sock.addEventListener("message", (e) => {
   const msg = JSON.parse(e.data);
   seen.push(msg);
   if (msg.type === "ready") {
+    if (process.env.PI_SET_THINKING) {
+      sock.send(JSON.stringify({ type: "set_thinking", level: process.env.PI_SET_THINKING }));
+    }
     sock.send(JSON.stringify({ type: "prompt", text: process.env.PI_PROMPT ?? "只回复四个字：对接成功" }));
   }
   if (msg.type === "run_end" && msg.willRetry !== true) finish("run_end");

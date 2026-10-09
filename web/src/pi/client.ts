@@ -441,9 +441,40 @@ export function projectMessages(snap: PiSnapshot): UiMessage[] {
   const state = snap.state;
   if (!state) return [];
   const messages = [...state.messages];
-  const streaming = state.streamingMessage ?? (snap.streamText ? { role: "assistant" as const, text: snap.streamText } : null);
-  if (state.isStreaming && streaming) messages.push(streaming);
-  return messages;
+  if (state.isStreaming) {
+    // 流式中的思维链以本地增量为准（快照推送频率比 delta 低）。
+    const text = state.streamingMessage?.text ?? snap.streamText;
+    const thinking = snap.streamThinking || state.streamingMessage?.thinking;
+    if (text || thinking) {
+      messages.push({
+        role: "assistant",
+        text,
+        ...(thinking ? { thinking } : {}),
+      });
+    }
+  }
+  // 空内容消息不占气泡（以前会渲染成“（本轮无文本输出）”那种丑占位）。
+  // 失败/中止的轮次要留下来，否则用户只看到“模型没说话”而不是“请求失败了”。
+  const isFailureOnly = (m: UiMessage) =>
+    m.role === "assistant" &&
+    !m.text &&
+    !m.thinking &&
+    (m.calls?.length ?? 0) === 0 &&
+    (m.stopReason === "error" || m.stopReason === "aborted");
+  const kept: UiMessage[] = [];
+  for (const m of messages) {
+    const visible =
+      m.role === "user" || !!m.text || !!m.thinking || (m.calls?.length ?? 0) > 0 || isFailureOnly(m);
+    if (!visible) continue;
+    // 上游持续故障时一轮会留下多条失败记录（重试各落一条），连排四五条失败气泡没信息量。
+    const prev = kept.at(-1);
+    if (isFailureOnly(m) && prev && isFailureOnly(prev)) {
+      kept[kept.length - 1] = m; // 只留最新一条
+      continue;
+    }
+    kept.push(m);
+  }
+  return kept;
 }
 
 export const piClient = new PiWsClient();

@@ -26,33 +26,26 @@
 import { useCallback, useMemo, useSyncExternalStore } from "react";
 import type { AppendMessage, ExternalStoreAdapter, ThreadMessageLike } from "@assistant-ui/react";
 
-import { piClient, projectMessages, type PiSnapshot, type ToolView } from "./client";
-import type { UiConversation, UiMessage } from "@pi/protocol";
+import { piClient, projectMessages, type PiSnapshot } from "./client";
+import type { UiConversation, UiMessage, UiToolCall } from "@pi/protocol";
 
 /** 订阅后端快照（客户端与 React 之间的唯一桥）。 */
 export function usePiSnapshot(): PiSnapshot {
   return useSyncExternalStore(piClient.subscribe, piClient.getSnapshot, piClient.getSnapshot);
 }
 
-/** tool_status/tool_delta 聚合出的轨迹 → assistant-ui 的 tool-call part。 */
-function toolParts(tools: ToolView[]) {
-  return tools.map((t) => ({
+/** 消息自带的工具调用 → assistant-ui 的 tool-call part（官方 ToolGroup / ToolFallback 就吃这个）。 */
+function toolParts(calls: UiToolCall[]) {
+  return calls.map((c) => ({
     type: "tool-call" as const,
-    toolCallId: t.toolCallId,
-    toolName: t.toolName,
-    // 入参后端不下发，argsText 留空，避免编造。
-    argsText: "",
-    // 输出只有长工具会通过 tool_delta 流式回传；瞬时工具没有 output 时不能留空，
-    // 否则官方 ToolFallback 会停在“Waiting on tool”并渲染一个空面板（实测如此）。
-    // 这里只写确实知道的事实：完成状态与耗时，不假装是工具输出。
-    result:
-      t.output ||
-      (t.phase === "end"
-        ? typeof t.durationMs === "number"
-          ? `已完成（${t.durationMs}ms，后端未回传输出）`
-          : "已完成（后端未回传输出）"
-        : undefined),
-    isError: t.isError,
+    toolCallId: c.id,
+    toolName: c.name,
+    // 入参现在是真的了（后端从 SDK toolCall.arguments 投影），不再置空。
+    // 只给 argsText：官方 ToolFallback 展示的就是它；结构化 args 要的是 ReadonlyJSONObject，
+    // 而我们没有注册带类型的 tool renderer，传 args 只会多一道类型妥协。
+    argsText: c.args ? JSON.stringify(c.args) : "",
+    result: c.result,
+    isError: c.isError,
   }));
 }
 
@@ -77,58 +70,50 @@ export function usePiRuntime(): ExternalStoreAdapter<UiMessage> {
   const snap = usePiSnapshot();
   const messages = useMemo(() => projectMessages(snap), [snap]);
 
-  /**
-   * 工具 part 该挂到哪一条消息上。
-   *
-   * 不能只挂「正在流式的尾条」：后端把工具轮存成一条**空文本的 assistant 消息**，
-   * 而 tool_status 到达时那条消息往往已经定稿（不再是流式尾条），结果官方
-   * ToolGroup / chain-of-thought 永远收不到 tool part（实测确实不渲染）。
-   * 按后端的真实形状找：优先最后一条空文本 assistant 消息，没有再退回流式尾条。
-   */
-  const toolHostIdx = useMemo(() => {
-    if (snap.tools.length === 0) return -1;
-    for (let i = messages.length - 1; i >= 0; i--) {
-      const m = messages[i]!;
-      if (m.role === "assistant" && !m.text) return i;
-    }
-    const streaming = snap.runActive || (snap.state?.isStreaming ?? false);
-    for (let i = messages.length - 1; i >= 0; i--) {
-      if (streaming && messages[i]!.role === "assistant") return i;
-    }
-    return -1;
-  }, [messages, snap.tools.length, snap.runActive, snap.state?.isStreaming]);
-
   const convertMessage = useCallback(
     (message: UiMessage, idx: number): ThreadMessageLike => {
       const isStreamingTail = idx === messages.length - 1 && (snap.runActive || (snap.state?.isStreaming ?? false));
-      const parts: MessagePart[] = [];
-      if (message.text) parts.push({ type: "text", text: message.text });
-      // 工具有轨迹只可能挂在 assistant 消息上：runtime 硬性禁止 user/system 带 status，
-      // 而发送后一轮开始时最后一条恰恰是刚发出去的用户消息（快照已含），这里不区分会直接抛错。
+      // runtime 硬性禁止 user/system 带 status；发送后一轮开始时最后一条恰恰是刚发出去的用户消息。
       const isAssistantTail = isStreamingTail && message.role === "assistant";
-      // 工具 part 只给 toolHostIdx 那一条（上面的规则：后端形状里的工具轮）。
-      // 它一旦有 part，就不再用“（本轮无文本输出）”占位：官方 ToolGroup 会直接显示工具名。
-      const tools = idx === toolHostIdx ? snap.tools : [];
-      if (tools.length > 0) {
-        parts.push(...toolParts(tools));
+      const parts: MessagePart[] = [];
+
+      // 思维链：历史里取消息自带的 thinking，流式中取本地增量缓冲。
+      const thinking = message.thinking ?? (isAssistantTail ? snap.streamThinking : "");
+      if (thinking) parts.push({ type: "reasoning", text: thinking } as never);
+      if (message.text) parts.push({ type: "text", text: message.text });
+
+      // 工具调用：现在由消息自身携带（含配对结果），所以刷新/重连后官方 ToolGroup 仍渲染得出来。
+      const calls = [...(message.calls ?? [])];
+      // 本轮刚开始、带 toolCall 的那条 assistant 消息还没落定时，用事件帧兜一下。
+      if (isAssistantTail && calls.length === 0) {
+        for (const t of snap.tools) {
+          calls.push({ id: t.toolCallId, name: t.toolName, result: t.output || undefined, isError: t.isError });
+        }
       }
-      if (snap.streamThinking && isAssistantTail) {
-        parts.unshift({ type: "reasoning", text: snap.streamThinking } as never);
-      }
-      // 只调工具不带文本的 assistant 消息在后端确实是空文本，不留空白气泡。
-      const fallbackText = message.text || (message.role === "assistant" && parts.length === 0 ? "（本轮无文本输出）" : "");
+      if (calls.length > 0) parts.push(...toolParts(calls));
+
+      // 没有任何可见内容的消息不再占一个空气泡；error 停止要有可读的失败提示，
+      // 而不是“（本轮无文本输出）”这种把上游故障说成“模型没说话”的措辞。
+      const empty =
+        message.role === "assistant" && parts.length === 0
+          ? message.stopReason === "error"
+            ? "（本轮模型请求失败，未产出内容）"
+            : message.stopReason === "aborted"
+              ? "（本轮被中止）"
+              : ""
+          : "";
       return {
         // 始终用会话内位置 id，定稿后**不**换成 entryId。
-        // 因为流式尾条没有 entryId，- 一旦定稿就换身份，runtime 会把同一条消息当作两个分支
-        // （BranchPicker 显示 2/2 但箭头全 disabled）。位置在单次快照内是稳定的。
+        // 流式尾条没有 entryId，一旦定稿就换身份会让 runtime 把同一条消息当作两个分支
+        // （BranchPicker 出现 2/2 且箭头全 disabled）。位置在单次快照内是稳定的。
         id: `${snap.state?.conversationId ?? "c"}:${idx}`,
         role: message.role,
         createdAt: message.timestamp ? new Date(message.timestamp) : new Date(),
-        content: parts.length > 0 ? parts : fallbackText,
+        content: parts.length > 0 ? parts : empty,
         status: isAssistantTail ? { type: "running" } : undefined,
       };
     },
-    [messages.length, toolHostIdx, snap.runActive, snap.state?.isStreaming, snap.state?.conversationId, snap.tools, snap.streamThinking],
+    [messages.length, snap.runActive, snap.state?.isStreaming, snap.state?.conversationId, snap.tools, snap.streamThinking],
   );
 
   return useMemo<ExternalStoreAdapter<UiMessage>>(
