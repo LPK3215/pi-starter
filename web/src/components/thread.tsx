@@ -107,43 +107,9 @@ const Composer: FC = () => {
 };
 
 /**
- * 运行级工具轨迹条。
- * 为什么不只挂在消息上：后端把工具描述成**运行级**事件（tool_status/tool_delta 不携带
- * 归属消息 id 与文本消息的对应关系），多轮 ReAct 里工具恰恰在两轮之间跑，
- * 那一刻流式尾消息是空的——只靠“挂到当前流式消息”就会整段看不到工具在跑。
+ * 运行级工具轨迹条由 App 统一渲染（@/components/pi-panels 的 ToolTrace），
+ * 不在这里重复一份：否则换用官方 thread 组件时它会消失，两处都渲染时又会重复。
  */
-const ToolTrace: FC = () => {
-  const { tools, runActive } = usePiSnapshot();
-  if (tools.length === 0) return null;
-  return (
-    <div className="mx-auto mb-2 flex w-full max-w-3xl flex-wrap gap-1.5">
-      {tools.map((t) => (
-        <span
-          key={t.toolCallId}
-          title={t.output || undefined}
-          className={cn(
-            "flex items-center gap-1.5 rounded-full border px-2 py-0.5 font-mono text-[11px]",
-            t.isError
-              ? "border-destructive/40 text-destructive"
-              : t.phase === "start"
-                ? "border-warning/50 text-warning"
-                : "border-border text-muted-foreground",
-          )}
-        >
-          <span
-            className={cn(
-              "size-1.5 rounded-full",
-              t.phase === "start" && runActive ? "animate-pulse bg-warning" : t.isError ? "bg-destructive" : "bg-ok",
-            )}
-          />
-          {t.toolName}
-          {typeof t.durationMs === "number" && <span className="opacity-70">{t.durationMs}ms</span>}
-        </span>
-      ))}
-    </div>
-  );
-};
-
 export const Thread: FC = () => (
   <ThreadPrimitive.Root className="flex h-full flex-col">
     <ThreadPrimitive.Viewport className="flex-1 overflow-y-auto px-4 py-6">
@@ -165,7 +131,6 @@ export const Thread: FC = () => (
     </ThreadPrimitive.Viewport>
 
     <ThreadPrimitive.ViewportFooter className="mx-auto w-full max-w-3xl px-4 pb-4">
-      <ToolTrace />
       <Composer />
     </ThreadPrimitive.ViewportFooter>
   </ThreadPrimitive.Root>

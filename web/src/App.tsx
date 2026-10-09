@@ -1,8 +1,11 @@
 import { Component, useEffect, type ReactNode } from "react";
 import { AssistantRuntimeProvider, useExternalStoreRuntime } from "@assistant-ui/react";
 
-import { ApprovalCard, ConnectionBadge, ControlBar, ConversationList, HitlDialog, NoticeBar } from "@/components/pi-panels";
-import { Thread } from "@/components/thread";
+import { ApprovalCard, ConnectionBadge, ControlBar, ConversationList, HitlDialog, NoticeBar, ToolTrace } from "@/components/pi-panels";
+// 官方 registry 组件（shadcn add @assistant-ui/thread）。我自己的那份留在
+// @/components/thread.tsx 作为回退点，两者可单独换回来对比。
+import { Thread } from "@/components/assistant-ui/elements/thread.aui";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { piClient } from "@/pi/client";
 import { usePiRuntime, usePiSnapshot } from "@/pi/usePiRuntime";
 
@@ -16,10 +19,13 @@ export default function App() {
 
   return (
     <AssistantRuntimeProvider runtime={useExternalStoreRuntime(usePiRuntime())}>
-      <ErrorBoundary>
-        <Shell />
-        <HitlDialog />
-      </ErrorBoundary>
+      {/* Base UI 的 Tooltip 必须有 Provider 祖先，官方 thread 组件里用了 TooltipIconButton。 */}
+      <TooltipProvider>
+        <ErrorBoundary>
+          <Shell />
+          <HitlDialog />
+        </ErrorBoundary>
+      </TooltipProvider>
     </AssistantRuntimeProvider>
   );
 }
@@ -69,6 +75,7 @@ function Shell() {
             <Thread />
           </div>
           <div className="px-4 pb-3">
+            <ToolTrace />
             <ApprovalCard />
           </div>
         </main>

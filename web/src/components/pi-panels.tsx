@@ -10,7 +10,7 @@
  * - 模型 / 思考档 / 计划模式 / 上下文预算：assistant-ui 概念里没有，全部自绘。
  */
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { piClient } from "@/pi/client";
 import { usePiSnapshot } from "@/pi/usePiRuntime";
@@ -203,6 +203,46 @@ export function ConversationList() {
   );
 }
 
+/**
+ * 运行级工具轨迹条。
+ *
+ * 放在面板层而不是某个 Thread 组件内部：官方 registry 的 thread.aui 不含它，
+ * 嵌在自己的 Thread 里就会在换 UI 时整体消失（上一轮实际发生了）。
+ * 工具在后端是**运行级**事件（tool_status/tool_delta 不携带归属消息），多轮 ReAct
+ * 里又恰好在两轮之间执行，那一刻流式尾消息为空，所以不能只挂到消息上。
+ */
+export function ToolTrace() {
+  const { tools, runActive } = usePiSnapshot();
+  if (tools.length === 0) return null;
+  return (
+    <div className="mx-auto mb-2 flex w-full max-w-3xl flex-wrap gap-1.5">
+      {tools.map((t) => (
+        <span
+          key={t.toolCallId}
+          title={t.output || undefined}
+          className={cn(
+            "flex items-center gap-1.5 rounded-full border px-2 py-0.5 font-mono text-[11px]",
+            t.isError
+              ? "border-destructive/40 text-destructive"
+              : t.phase === "start"
+                ? "border-warning/50 text-warning"
+                : "border-border text-muted-foreground",
+          )}
+        >
+          <span
+            className={cn(
+              "size-1.5 rounded-full",
+              t.phase === "start" && runActive ? "animate-pulse bg-warning" : t.isError ? "bg-destructive" : "bg-ok",
+            )}
+          />
+          {t.toolName}
+          {typeof t.durationMs === "number" && <span className="opacity-70">{t.durationMs}ms</span>}
+        </span>
+      ))}
+    </div>
+  );
+}
+
 /** 顶栏控制面：模型 / 思考档 / 计划模式 / 上下文预算与用量。 */
 export function ControlBar() {
   const { models, state } = usePiSnapshot();
@@ -255,10 +295,19 @@ export function ControlBar() {
   );
 }
 
-/** notice / error 帧的提示条。 */
+/** 提示条：自动收起（后端的重连/限流提示是一次性告知，常驻会堆满顶栏）。 */
 export function NoticeBar() {
   const { notices } = usePiSnapshot();
   const latest = notices.at(-1);
+  const at = latest?.at;
+
+  useEffect(() => {
+    if (!at) return;
+    const ttl = 9000 - (Date.now() - at);
+    const t = setTimeout(() => piClient.clearNotices(), Math.max(1500, ttl));
+    return () => clearTimeout(t);
+  }, [at]);
+
   if (!latest) return null;
   return (
     <div

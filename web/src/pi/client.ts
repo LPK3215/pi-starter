@@ -50,14 +50,14 @@ export interface PiSnapshot {
   /** 快照之外累积的流式增量文本（快照到达后被快照覆盖）。 */
   streamText: string;
   streamThinking: string;
-  /** 本轮工具调用轨迹（进行中的挂在流式尾消息上）。 */
-  tools: ToolView[];
   /**
-   * 已定稿的工具轨迹，按消息 entryId 归档。
-   * 后端 UiMessage 不携带工具历史（只有 tool_status/tool_delta 帧描述过程），
-   * 所以「哪条消息调了哪些工具」只能由前端在自己这轮收到时归档下来。
+   * 本轮工具调用轨迹（进行中的同时会挂在流式尾消息上，由官方 ToolGroup 渲染）。
+   *
+   * 只在 run_start 与切会话时清空，**不在 run_end 清**：后端快照不持久化工具历史，
+   * 所以它是“本次连接内最近一轮”的视图。抹掉的话，瞬时工具（几毫秒完事）的轨迹条
+   * 整个人都看不见；试过按消息归档（toolsByEntry），定稿后实际渲染不出来，已删除。
    */
-  toolsByEntry: Record<string, ToolView[]>;
+  tools: ToolView[];
   /** 轮次是否活跃：run_start 置真，run_end（非 willRetry）置假。 */
   runActive: boolean;
   /** 当前 ReAct 迭代序号（turn_start 带）。 */
@@ -79,7 +79,6 @@ const EMPTY_SNAPSHOT: PiSnapshot = {
   streamText: "",
   streamThinking: "",
   tools: [],
-  toolsByEntry: {},
   runActive: false,
   turnIndex: 0,
   conversations: [],
@@ -200,7 +199,6 @@ export class PiWsClient {
           streamText: msg.state.streamingMessage?.text ?? "",
           streamThinking: "",
           runActive: msg.state.isStreaming,
-          tools: this.archiveSettledTools(msg.state),
           uiRequests: this.uiRequestsFor(msg.state),
         });
         break;
@@ -218,16 +216,7 @@ export class PiWsClient {
           return;
         }
         const base = this.snap.state;
-        // 新追加进来的 assistant 消息就是刚定稿的那一条，pending 工具归属于它。
-        // （多轮 ReAct 里“调工具的轮”与“给结论的轮”是两条消息，后者不应显示前者的工具。）
         const appended = [...(base?.messages ?? []), ...msg.appended];
-        let archived = false;
-        msg.appended.forEach((m, i) => {
-          if (m.role === "assistant" && this.snap.tools.length > 0) {
-            this.archiveTo(m.entryId ?? `pos-${msg.conversationId}-${(base?.messages.length ?? 0) + i}`, this.snap.tools);
-            archived = true;
-          }
-        });
         const merged: UiState = {
           ...(base ?? msg.state),
           ...msg.state,
@@ -235,11 +224,7 @@ export class PiWsClient {
           streamingMessage: base?.streamingMessage ?? null,
         };
         this.rev = msg.rev;
-        this.patch({
-          state: merged,
-          conversations: merged.conversations,
-          tools: archived ? [] : this.snap.tools,
-        });
+        this.patch({ state: merged, conversations: merged.conversations });
         break;
       }
       case "message_delta": {
@@ -285,10 +270,8 @@ export class PiWsClient {
         break;
       case "run_end":
         // willRetry 表示 SDK 会自动重试，本轮没真结束，保持 running。
-        this.patch({
-          runActive: msg.willRetry === true,
-          tools: this.snap.state ? this.archiveSettledTools(this.snap.state) : [],
-        });
+        // 工具轨迹**不清空**：留到下一轮 run_start 才清，否则几毫秒完事的工具根本看不见。
+        this.patch({ runActive: msg.willRetry === true });
         break;
       case "turn_start":
         this.patch({ turnIndex: msg.turnIndex });
@@ -315,7 +298,8 @@ export class PiWsClient {
       case "error": {
         const level = msg.type === "error" ? "error" : msg.level;
         const text = msg.type === "error" ? msg.message : msg.text;
-        this.patch({ notices: [...this.snap.notices.slice(-4), { level, text, at: Date.now() }] });
+        // 只留最近 3 条：重连恢复、限流之类提示会连续来，堆成一屏就没法看了。
+        this.patch({ notices: [...this.snap.notices.slice(-2), { level, text, at: Date.now() }] });
         break;
       }
       case "pong":
@@ -330,26 +314,7 @@ export class PiWsClient {
    */
   private resetConversationView(): void {
     this.rev = null;
-    this.patch({ state: null, streamText: "", streamThinking: "", tools: [], toolsByEntry: {}, runActive: false });
-  }
-
-  /**
-   * 全量快照场景下的工具归档：消息数比上一快照增长，且新尾部是已定稿的 assistant 消息时，
-   * 把 pending 工具归到那条消息。返回归档后应保留的 tools（仍在流式且未归档则保留）。
-   */
-  private archiveSettledTools(state: UiState): ToolView[] {
-    if (this.snap.tools.length === 0) return [];
-    const prevCount = this.snap.state?.messages.length ?? 0;
-    const tail = state.messages.at(-1);
-    const grew = state.messages.length > prevCount;
-    if (!tail || tail.role !== "assistant" || !grew || state.streamingMessage) return this.snap.tools;
-    this.archiveTo(tail.entryId ?? `pos-${state.conversationId}-${state.messages.length - 1}`, this.snap.tools);
-    return [];
-  }
-
-  private archiveTo(key: string, tools: ToolView[]): void {
-    if (this.snap.toolsByEntry[key]) return;
-    this.snap = { ...this.snap, toolsByEntry: { ...this.snap.toolsByEntry, [key]: tools } };
+    this.patch({ state: null, streamText: "", streamThinking: "", tools: [], runActive: false });
   }
 
   /**
@@ -452,6 +417,12 @@ export class PiWsClient {
   respondUi(request: UiExtensionRequest, response: UiExtensionResponse) {
     this.send({ type: "extension_ui_response", response });
     this.patch({ uiRequests: this.snap.uiRequests.filter((r) => r.id !== request.id) });
+  }
+
+  /** 收起提示条。notice/error 帧是一次性告知，不自己过期的话只会堆在顶上。 */
+  clearNotices(): void {
+    if (this.snap.notices.length === 0) return;
+    this.patch({ notices: [] });
   }
 }
 

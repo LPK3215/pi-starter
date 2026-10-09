@@ -32,8 +32,13 @@ npm run web        # Express 直接把应用挂在 /，同源提供 /ws（static
 | `src/pi/client.ts` | WS 客户端。`hello`→`ready` 握手、`snapshot` / `snapshot_delta` 的 `rev`/`baseRev` 修订链与断链自愈、`message_delta` 流式缓冲、`tool_status`/`tool_delta` 聚合、退避重连 |
 | `src/pi/usePiRuntime.ts` | 把后端快照翻译成 assistant-ui 的 `ExternalStoreAdapter`（含多对话 `adapters.threadList`） |
 
-其余是 UI：`src/components/thread.tsx`（对话区，基于官方 primitives）、
-`src/components/pi-panels.tsx`（审批卡片、HITL 反问弹窗、控制面、对话列表）。
+其余是 UI：当前用的是 **assistant-ui 官方 registry 组件**（`shadcn add @assistant-ui/thread @assistant-ui/thread-list`，base-nova 主题），
+入口是 `src/components/assistant-ui/elements/thread.aui.tsx`；`src/components/thread.tsx` 是我最初手写的 primitives 版，
+**保留作回退与对照**（在 `App.tsx` 改一行 import 就能切回）。`pi-panels.tsx` 两种 UI 下都在用：运行轨迹条、审批卡片、
+HITL 反问弹窗、控制面、对话列表。
+
+接官方组件时有两个必须知道的坑：它的落盘目录与文件内部 import 基准不一致，要按**每个文件自己的 import 行**归位（直接
+搬到一个目录会得到一批 TS2307）；Base UI 的 Tooltip 必须有 Provider 祖先，所以 `App.tsx` 里包了一层 `TooltipProvider`。
 
 **线协议不重复定义。** `tsconfig.app.json` 把仓库根的 `src/protocol.ts` 映射成 `@pi/protocol`，
 前后端共用同一份类型；后端 `npm run typecheck` 会连带校验它。
@@ -56,9 +61,9 @@ assistant-ui 接自定义后端有四条路，这里取 ExternalStore，因为**
 - **没接 `onEdit` / `onReload` / `setMessages`**（UI 的编辑 / 重生成 / 分支因此自动关闭）：后端
   `edit_message` 的语义是"回滚到该条 + 原文交回输入框、**不自动再发一轮**"，与 assistant-ui 期望的
   "编辑即新一轮"不等价，硬接会得到一条和后端会话树不一致的分支。
-- **主题是我手写的 Tailwind token**（`src/index.css` 的 `@theme`），官方 registry 组件尚未接入。
-  要换官方那套：在**交互式终端**里跑 `npx assistant-ui@latest init`，它需要回答 CLI 的确认提示；
-  拿到组件后可直接覆盖 `src/components/`，`src/pi/` 那层一行都不用改。
+- **颜色 token 分工**：语义色板由 `src/index.css` 里 shadcn 官方主题（Nova / neutral）提供；Tailwind v4 的 `@theme` 后声明者胜，
+  不要在本文件前面再写一份同名 token（会被默默覆盖）。只有 `--color-ok` / `--color-warning` 是官方表里没有的自定义状态色。
+- **深浅色**：官方预设默认浅色，深色靠 `<html class="dark">` 切换，不会自动跟随系统。
 
 ## 一个别踩的代理坑
 

@@ -76,10 +76,11 @@ export function usePiRuntime(): ExternalStoreAdapter<UiMessage> {
       // 工具有轨迹只可能挂在 assistant 消息上：runtime 硬性禁止 user/system 带 status，
       // 而发送后一轮开始时最后一条恰恰是刚发出去的用户消息（快照已含），这里不区分会直接抛错。
       const isAssistantTail = isStreamingTail && message.role === "assistant";
-      // 进行中的挂在流式尾消息；定稿后从归档里取（后端 UI 快照不存工具历史）。
-      const entryKey = message.entryId ?? `pos-${snap.state?.conversationId ?? "c"}-${idx}`;
-      const tools = isAssistantTail ? snap.tools : (snap.toolsByEntry[entryKey] ?? []);
-      if (message.role === "assistant" && tools.length > 0) {
+      // 工具只挂在**正在流式的那条** assistant 消息上（官方 ToolGroup / Reasoning 因此生效）。
+      // 定稿后消息里不再有 tool part（后端不持久化工具历史），运行轨迹改由 App 层的
+      // ToolTrace 常驻显示，不在这里伪造“知道哪条消息调了什么”的归属。
+      const tools = isAssistantTail ? snap.tools : [];
+      if (tools.length > 0) {
         parts.push(...toolParts(tools));
       }
       if (snap.streamThinking && isAssistantTail) {
@@ -88,14 +89,17 @@ export function usePiRuntime(): ExternalStoreAdapter<UiMessage> {
       // 只调工具不带文本的 assistant 消息在后端确实是空文本，不留空白气泡。
       const fallbackText = message.text || (message.role === "assistant" && parts.length === 0 ? "（本轮无文本输出）" : "");
       return {
-        id: message.entryId ?? `${snap.state?.conversationId ?? "c"}-${idx}`,
+        // 始终用会话内位置 id，定稿后**不**换成 entryId。
+        // 因为流式尾条没有 entryId，- 一旦定稿就换身份，runtime 会把同一条消息当作两个分支
+        // （BranchPicker 显示 2/2 但箭头全 disabled）。位置在单次快照内是稳定的。
+        id: `${snap.state?.conversationId ?? "c"}:${idx}`,
         role: message.role,
         createdAt: message.timestamp ? new Date(message.timestamp) : new Date(),
         content: parts.length > 0 ? parts : fallbackText,
         status: isAssistantTail ? { type: "running" } : undefined,
       };
     },
-    [messages.length, snap.runActive, snap.state?.isStreaming, snap.state?.conversationId, snap.tools, snap.toolsByEntry, snap.streamThinking],
+    [messages.length, snap.runActive, snap.state?.isStreaming, snap.state?.conversationId, snap.tools, snap.streamThinking],
   );
 
   return useMemo<ExternalStoreAdapter<UiMessage>>(
