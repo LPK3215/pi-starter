@@ -214,6 +214,18 @@ test("快照回填 streamThinking（思维链不丢半截）", () => {
   assert.equal(client.getSnapshot().streamText, "部分文本");
 });
 
+test("prompt 携带 replaceEntryId（编辑 / 重新生成的原子入口）", () => {
+  const { client, ws } = connected();
+  ws.sent.length = 0;
+
+  client.prompt("改过的文本", undefined, "entry-9");
+
+  const frame = JSON.parse(ws.sent[0]!) as { type: string; text: string; replaceEntryId?: string };
+  assert.equal(frame.type, "prompt");
+  assert.equal(frame.text, "改过的文本");
+  assert.equal(frame.replaceEntryId, "entry-9", "不带它就会变成追加一轮而不是替换重发");
+});
+
 test("离线时 send 返回 false、给出提示，且不擅自清空视图", () => {
   installGlobals();
   FakeWebSocket.instances = [];

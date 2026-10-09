@@ -232,7 +232,22 @@ export type ClientMessage =
   | { type: "get_state" }
   | { type: "ping" }
   // 对话运行
-  | { type: "prompt"; text: string; images?: { mimeType: string; data: string }[] }
+  /**
+   * 发一轮。
+   *
+   * `replaceEntryId` 是**原子**的"替换并重发"：先把该用户消息移出当前路径（连同它之后的内容），
+   * 再用 `text` 发一条新的。
+   *
+   * 官方 ExternalStore 的 `onEdit` / `onReload` 都是这个语义（"替换该消息并重跑"）。
+   * 之所以做成一条命令而不是让客户端发 `edit_message` + `prompt`：两条命令之间任何一次失败
+   * （正在生成、条目已不在路径上）都会留下一条**重复的用户消息**，而这种不一致很难被发现。
+   */
+  | {
+      type: "prompt";
+      text: string;
+      images?: { mimeType: string; data: string }[];
+      replaceEntryId?: string;
+    }
   | { type: "abort" }
   /**
    * 主动压缩上下文。

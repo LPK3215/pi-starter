@@ -69,6 +69,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`src/secret-files.ts`**：敏感文件名策略的中性模块，供 HTTP 文件服务与 `guard` 共用（不让扩展层反向依赖 `files/service.ts`）；`files/service.ts` 继续 re-export 原有符号，既有引用与二次开发不受影响。
 - **本轮新增回归测试**：guard 钩子拒绝 agent 读写敏感文件（含普通文件与 `read SKILL.md` 白名单不受影响的对照）、root 内符号链接绕过 `denyNames`（读 + 列表预览）、`clientErrorMessage` 脱敏边界、`isDeniedName` 通配与名单契约、MCP 生命周期、sqlite 向量库 `0o600`、设置 `thinkingLevel` 枚举、子代理截断不超上限。`npm test` **364 通过 / 0 失败**（42 个测试文件）。
 - **前端首个测试 + 把它接进验证链（`web/src/pi/client.test.ts`，7 个用例）**：覆盖跨会话帧过滤（快照 / 增量 / 流式文本 / 工具轨迹 / run 状态）、切换会话期间只接受目标会话的快照、修订链断裂触发 `get_state` 自愈、快照回填 `streamThinking`、离线 `send` 不改视图且给提示。**不引入任何新依赖**——复用根项目已有的 `tsx --test`，用 `FakeWebSocket` + `location` / `localStorage` 替身驱动（`client.ts` 不依赖 React/DOM）。新增 `npm run test:web` 并纳入 `npm run verify`；`web/tsconfig.test.json` 单独一份（测试要 node 类型，而浏览器 app 引入 node 全局会污染 `setTimeout` 的返回类型），`tsconfig.app.json` 排除 `**/*.test.ts`。
+- **原子"替换并重发"：打通官方的编辑与重新生成（`prompt.replaceEntryId`）**：官方 ExternalStore 的 `onEdit` / `onReload` 都要求"替换该消息并**重跑**"，而后端原先无法一次表达这件事——`edit_message` 只把用户消息移出路径、把原文交回输入框（不重发），`rollback_conversation` 又保留该条目。让客户端发两条命令（`edit_message` + `prompt`）拼出来是不安全的：两次之间任何一次失败都会留下**重复的用户消息**。
+  现在 `prompt` 增加可选 `replaceEntryId`：在同一个处理函数里先 `editUserMessage`（该用户消息及其后内容离开当前路径）再走正常一轮，**原子**完成；生成中拒绝，非用户消息明确报错。
+  前端据此提供 `onEdit`（用官方 `AppendMessage.sourceId`——其类型注释即"The ID of the message that was edited"——定位被编辑的那条）与 `onReload`（官方 `startRun` 的实现是"保留到 `config.parentId` 为止"，所以 `parentId` 就是要重跑的那条用户消息），两者都收敛到 `prompt(replaceEntryId)` 这一个入口。**用户消息编辑与"重新生成"按钮自此可用**；`setMessages` 仍未提供（消息状态的唯一权威是后端快照，让 runtime 往里写会与随后到达的快照冲突），因此**分支切换保持关闭**。
+  回归测试：后端 3 例（原子性 / 生成中拒绝且不动树 / 非用户消息报错）+ 前端 1 例（命令必须携带 `replaceEntryId`）。
 
 
 - **会话真删除（`delete_conversation`）+ 前端批量管理入口**：验收过程中积了几十条测试会话，而现有 `close_conversation` **不是删除**——它先 `rememberConversation` 再 dispose，索引还在，刷新后又是一条磁盘态条目，“关掉又冒出来”。

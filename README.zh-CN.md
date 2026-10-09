@@ -47,7 +47,7 @@
 | HTTP | [Express](https://expressjs.com/) | `^5.2.1` | 单进程；Web 端每连接多对话并发 |
 | Schema | [TypeBox](https://www.npmjs.com/package/typebox) | `^1.1.39` | 工具 `parameters` 定义 |
 | WebSocket | [ws](https://www.npmjs.com/package/ws) | `^8.18.0` | 快照驱动的双向传输（`transport/ws.ts`） |
-| 测试 | Node 内置 test runner，走 `tsx --test` | `^4.22.4` | 42 个测试文件 · 364 用例 + 前端 7 用例，不调模型 |
+| 测试 | Node 内置 test runner，走 `tsx --test` | `^4.22.4` | 42 个测试文件 · 367 用例 + 前端 8 用例，不调模型 |
 | 构建 | `tsc -p tsconfig.build.json` + `scripts/dist-assets.cjs` | `^5.6.0` | 把 `prompts/`、`skills/`、`prompt-templates/`、`knowledge/` 拷到 `dist/` |
 
 上面这张表的单一真源是 [`package.json`](package.json)。版本变更时，代码与本表同步；架构 SVG 自动刷新（`node scripts/visualization/generate_architecture.mjs`）。
@@ -325,8 +325,8 @@ pi-starter/
 契约类冒烟测试（不调模型、不写真实 `~/.pi/agent`）：
 
 ```bash
-npm test            # 后端：364 个单测 / 集成测试
-npm run test:web    # 前端：7 个 WS 客户端测试（复用 tsx，零新依赖）
+npm test            # 后端：367 个单测 / 集成测试
+npm run test:web    # 前端：8 个 WS 客户端测试（复用 tsx，零新依赖）
 npm run typecheck
 npm run build
 ```

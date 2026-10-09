@@ -476,8 +476,12 @@ export class PiWsClient {
 
   /* ────────────── 类型化命令面（A 类） ────────────── */
 
-  prompt(text: string, images?: { mimeType: string; data: string }[]) {
-    this.send({ type: "prompt", text, images });
+  /**
+   * 发一轮。`replaceEntryId` = 原子"替换并重发"：先把该用户消息移出路径，再用 `text` 发一条新的。
+   * 官方的编辑 / 重新生成（`onEdit` / `onReload`）都落在这一个入口上。
+   */
+  prompt(text: string, images?: { mimeType: string; data: string }[], replaceEntryId?: string) {
+    this.send({ type: "prompt", text, images, replaceEntryId });
   }
   abort() {
     this.send({ type: "abort" });

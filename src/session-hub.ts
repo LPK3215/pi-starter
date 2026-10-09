@@ -808,7 +808,17 @@ export class Conversation {
     return this.session;
   }
 
-  async prompt(text: string, images?: ImageContent[]): Promise<void> {
+  async prompt(text: string, images?: ImageContent[], replaceEntryId?: string): Promise<void> {
+    if (replaceEntryId) {
+      // 原子"替换并重发"（官方 onEdit / onReload 的落点）：先把该用户消息移出当前路径，
+      // 再走下面正常的一轮。生成中拒绝——树状态会和正在跑的那一轮打架。
+      if (this.session.isStreaming) {
+        throw new AppError("conflict", "对话正在生成，先停掉再重发", { expose: true });
+      }
+      const manager = this.requireManager();
+      editUserMessage(manager, replaceEntryId);
+      this.adoptTree(manager);
+    }
     if (this.title === "New conversation" && text.trim()) this.title = deriveTitle(text);
     this.lastActiveAt = Date.now();
     // AI 运行观测：只记提示词摘要与长度（红线：完整正文不落盘），并起时戳供 run 耗时。
@@ -1492,9 +1502,9 @@ export class ClientSession {
 
   /* ─────────────── 命令转发 ─────────────── */
 
-  async prompt(text: string, images?: ImageContent[]): Promise<void> {
+  async prompt(text: string, images?: ImageContent[], replaceEntryId?: string): Promise<void> {
     const conv = this.active ?? (await this.newConversation());
-    await conv.prompt(text, images);
+    await conv.prompt(text, images, replaceEntryId);
   }
 
   async steer(text: string, images?: ImageContent[]): Promise<void> {

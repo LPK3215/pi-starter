@@ -226,6 +226,12 @@ class TreeSession {
     return [];
   }
 
+  /** 官方 prompt 的测试替身：把用户消息追加进会话树（叶子随之移动）。 */
+  async prompt(text: string): Promise<void> {
+    this.sessionManager.appendMessage({ role: "user", content: text, timestamp: Date.now() } as never);
+    this.agent.state.messages = this.sessionManager.buildSessionContext().messages;
+  }
+
   /** 官方 navigateTree 的测试替身：记下调用、挪叶子、刷新模型看到的消息。 */
   readonly navigateTreeCalls: Array<{ id: string; options?: unknown }> = [];
   navigateTree(
@@ -254,6 +260,56 @@ function conversation(manager: SessionManager): { conv: Conversation; frames: Se
   });
   return { conv, frames };
 }
+
+/**
+ * 原子"替换并重发"——官方 `onEdit` / `onReload` 的落点。
+ *
+ * 这条测试锁的是**原子性**：如果实现改成让客户端发 `edit_message` + `prompt` 两条命令，
+ * 两次之间任何一次失败都会留下重复的用户消息；这里要求"移除 + 重发"是一次调用完成。
+ */
+test("原子替换并重发：replaceEntryId 先把该用户消息移出路径，再用新文本重发", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "pi-edit-"));
+  const dir = join(cwd, "sessions");
+  mkdirSync(dir);
+  const { manager, ids } = transcript(dir, cwd); // u1 → a1 → u2 → a2
+  const { conv } = conversation(manager);
+
+  await conv.prompt("改过的第二句", undefined, ids.u2);
+
+  // u2 与它之后的 a2 离开当前路径，新内容接在原来的位置。
+  assert.deepEqual(texts(manager), ["第一句", "第一答", "改过的第二句"]);
+  const leaf = manager.getLeafEntry();
+  assert.equal(leaf?.type, "message", "重发之后叶子应是新追加的用户消息");
+  if (leaf?.type === "message") assert.equal(leaf.message.role, "user");
+  // 旧路径没被删掉，只是不在当前路径上（可回退）。
+  assert.ok(manager.getEntry(ids.a2), "被移出路径的记录仍在文件里");
+});
+
+test("原子替换并重发：正在生成时拒绝，且会话树原样不动", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "pi-edit-"));
+  const dir = join(cwd, "sessions");
+  mkdirSync(dir);
+  const { manager, ids } = transcript(dir, cwd);
+  const { conv } = conversation(manager);
+  (conv as unknown as { session: TreeSession }).session.isStreaming = true;
+
+  await assert.rejects(
+    () => conv.prompt("改过的第二句", undefined, ids.u2),
+    (err: unknown) => err instanceof AppError && err.code === "conflict",
+  );
+  assert.deepEqual(texts(manager), ["第一句", "第一答", "第二句", "第二答"], "拒绝时不能动会话树");
+});
+
+test("原子替换并重发：只接受用户消息（助手消息走回退，不是编辑）", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "pi-edit-"));
+  const dir = join(cwd, "sessions");
+  mkdirSync(dir);
+  const { manager, ids } = transcript(dir, cwd);
+  const { conv } = conversation(manager);
+
+  await assert.rejects(() => conv.prompt("x", undefined, ids.a2), /只能编辑用户消息/);
+  assert.deepEqual(texts(manager), ["第一句", "第一答", "第二句", "第二答"]);
+});
 
 test("对话上的回退会换掉模型看到的消息，正在生成时拒绝且不写标记", async () => {
   const cwd = mkdtempSync(join(tmpdir(), "pi-edit-"));

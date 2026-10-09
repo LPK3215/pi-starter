@@ -17,10 +17,11 @@
  *       带 approval 元数据的 tool-call part 上，而 UiMessage 里根本没有 tool part。
  *   models / capabilities / settings      → 控制面自绘，assistant-ui 不接管
  *
- * 没有提供的回调（onEdit / onReload / setMessages）＝ 对应 UI 能力自动关闭，这是
- * ExternalStore 的设计：功能按回调存在与否开启。不硬凑的原因是后端语义不同——
- * `edit_message` 是"回滚到该条 + 把原文交回输入框、不自动再发一轮"，
- * 而 assistant-ui 期望编辑即产生新一轮；凑上去会得到一条和后端树状态不一致的分支。
+ *   onEdit / onReload                      → prompt(replaceEntryId)
+ *
+ * 没有提供的回调（setMessages / onAddToolResult / onResumeToolCall）＝ 对应 UI 能力自动关闭，
+ * 这是 ExternalStore 的设计：功能按回调存在与否开启。`setMessages` 尤其不能提供——消息状态的
+ * 唯一权威是后端快照，让 runtime 往里写会与随后到达的快照冲突（因此分支切换保持关闭）。
  */
 
 import { useCallback, useMemo, useSyncExternalStore } from "react";
@@ -65,6 +66,21 @@ function appendText(message: AppendMessage): { text: string; images: { mimeType:
 
 /** content 的可变片段形式（ThreadMessageLike.content 是 string | readonly part[]，这里需要 push）。 */
 type MessagePart = Exclude<ThreadMessageLike["content"], string>[number];
+
+/**
+ * 运行时消息 id → 那条快照消息。
+ *
+ * id 是位置式的 `${conversationId}:${idx}`（见 convertMessage：定稿后刻意**不**换成 entryId，
+ * 否则 runtime 会把同一条消息当成两个分支）。位置在**同一份 messages** 内是稳定的，
+ * 所以用当前渲染的这一份反查可靠；查不到就返回 undefined —— 绝不猜一条去改。
+ */
+function messageAt(messages: readonly UiMessage[], runtimeId: string | null): UiMessage | undefined {
+  if (!runtimeId) return undefined;
+  const parsed = Number(runtimeId.slice(runtimeId.lastIndexOf(":") + 1));
+  if (!Number.isInteger(parsed) || parsed < 0) return undefined;
+  const hit: UiMessage | undefined = messages[parsed];
+  return hit;
+}
 
 export function usePiRuntime(): ExternalStoreAdapter<UiMessage> {
   const snap = usePiSnapshot();
@@ -132,6 +148,27 @@ export function usePiRuntime(): ExternalStoreAdapter<UiMessage> {
       },
       onCancel: async () => {
         piClient.abort();
+      },
+
+      /**
+       * 编辑一条用户消息：官方契约是"用编辑后的内容替换该消息并**重跑**"。
+       * `sourceId` 是被编辑那条的 id（官方类型注释：The ID of the message that was edited）。
+       */
+      onEdit: async (message) => {
+        const target = messageAt(messages, message.sourceId);
+        const { text, images } = appendText(message);
+        if (!target?.entryId || target.role !== "user" || (!text && images.length === 0)) return;
+        piClient.prompt(text, images.length > 0 ? images : undefined, target.entryId);
+      },
+
+      /**
+       * 重新生成：官方 `startRun` 的实现是"保留到 `parentId` 为止（含），之后重跑"，
+       * 所以 `parentId` 就是那条要重跑的用户消息——移除它并用**原文**重发，等于"再答一次"。
+       */
+      onReload: async (parentId) => {
+        const target = messageAt(messages, parentId);
+        if (!target?.entryId || target.role !== "user") return;
+        piClient.prompt(target.text, undefined, target.entryId);
       },
 
       adapters: {

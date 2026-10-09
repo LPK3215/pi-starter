@@ -387,7 +387,7 @@ class ClientConn {
             break;
           }
           this.metrics.inc("promptsTotal");
-          await this.cs?.prompt(msg.text, parsePromptImages(msg.images));
+          await this.cs?.prompt(msg.text, parsePromptImages(msg.images), msg.replaceEntryId);
           break;
         case "steer":
           if (!msg.text?.trim()) {

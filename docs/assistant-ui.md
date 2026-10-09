@@ -113,7 +113,7 @@ export function Chat() {
 | **`approval_request`** | **`toolApproval` + `respondToApproval`** |
 | **`extension_ui_request`**（ask_user_question） | **human tool `human()` / `resume()`** |
 | `conversations` / `new/open/switch/rename/close` | `ExternalStoreThreadListAdapter` |
-| `edit_message` / `rollback` / `fork` | `onEdit` / `onReload` / `setMessages`(分支) |
+| `prompt(replaceEntryId)`（原子"替换并重发"）/ `rollback` / `fork` | `onEdit` / `onReload` / `setMessages`(分支) |
 | prompt images | `adapters.attachments` |
 | `models` / `capabilities` / `settings_state` | 控制面：assistant-ui 不管，你自绘面板（React 组件） |
 
