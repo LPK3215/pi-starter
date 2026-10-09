@@ -25,7 +25,7 @@ import type { BuiltAgent } from "./agent.js";
 import type { RuntimeConfig } from "./config.js";
 import { SnapshotEmitter } from "./snapshot.js";
 import { computeSoftCap, contextUsageRatio, estimateTokens, planContextTrim, type TrimPlan } from "./context/budget.js";
-import { getLogger } from "./log.js";
+import { getLogger, type Logger } from "./log.js";
 import { AppError, badRequest } from "./http/errors.js";
 import { assertSessionFileAllowed, type SessionCatalog, type StoredConversation } from "./sessions/store.js";
 import {
@@ -170,6 +170,17 @@ function deriveTitle(text: string): string {
 }
 
 /**
+ * Prompt digest for the log: collapse whitespace and keep at most 200 chars.
+ * The red line forbids persisting full prompt bodies, so only a short summary is logged;
+ * the exact length is carried in a separate field by the caller.
+ */
+function summarizePrompt(text: string): string {
+  const flat = text.replace(/\s+/g, " ").trim();
+  if (!flat) return "";
+  return flat.length > 200 ? `${flat.slice(0, 200)}...[+${flat.length - 200} chars]` : flat;
+}
+
+/**
  * Pull displayable text out of a tool's `partialResult`.
  *
  * The field is typed `any` by the SDK and its shape varies per tool (plain string, content
@@ -281,6 +292,10 @@ export class Conversation {
    */
   private turnIndex = 0;
   private readonly planMode: PlanModeController | undefined;
+  /** Per-conversation structured logger (carries component + conversationId). */
+  private readonly log!: Logger;
+  /** High-res start of the current run, set on prompt dispatch; used for run durationMs. */
+  private runStartedAt = 0;
 
   private push: (msg: ServerMessage) => void;
   private readonly unsubscribe: () => void;
@@ -324,7 +339,7 @@ export class Conversation {
     this.keepRecent = opts.keepRecent ?? (() => 6);
     this.planMode = opts.planMode;
     this.id = opts.session.sessionId;
-    const log = getLogger().child({ component: "conversation", conversationId: this.id });
+    const log = (this.log = getLogger().child({ component: "conversation", conversationId: this.id }));
     const timeout = opts.toolTimeoutMs ?? 0;
     // A hung tool blocks the turn with no signal; the watchdog aborts it after the timeout.
     this.watchdog =
@@ -404,6 +419,13 @@ export class Conversation {
         // Always disarm, including on error: a leaked timer would later abort a healthy turn.
         this.watchdog.disarm(event.toolCallId);
         if (event.isError) metrics.inc("toolErrorsTotal");
+        const toolDurationMs = startedAt !== undefined ? Date.now() - startedAt : undefined;
+        this.log.info("tool executed", {
+          toolName: event.toolName,
+          toolCallId: event.toolCallId,
+          isError: event.isError === true,
+          ...(toolDurationMs !== undefined ? { durationMs: toolDurationMs } : {}),
+        });
         this.push({
           type: "tool_status",
           conversationId: this.id,
@@ -411,7 +433,7 @@ export class Conversation {
           toolName: event.toolName,
           phase: "end",
           isError: event.isError,
-          durationMs: startedAt !== undefined ? Date.now() - startedAt : undefined,
+          durationMs: toolDurationMs,
         });
         break;
       }
@@ -447,6 +469,7 @@ export class Conversation {
           aborted: stopReason === "aborted" || undefined,
         });
         // A finished turn changes the conversation list (title, ordering), so refresh it.
+        this.logRunSummary(stopReason, event.willRetry === true);
         this.onTurnEnd?.();
         break;
       }
@@ -778,6 +801,15 @@ export class Conversation {
   async prompt(text: string, images?: ImageContent[]): Promise<void> {
     if (this.title === "New conversation" && text.trim()) this.title = deriveTitle(text);
     this.lastActiveAt = Date.now();
+    // AI 运行观测：只记提示词摘要与长度（红线：完整正文不落盘），并起时戳供 run 耗时。
+    this.runStartedAt = performance.now();
+    const runModel = this.session.model ?? this.fallbackModel;
+    this.log.info("model run started", {
+      model: `${runModel.provider}/${runModel.id}`,
+      promptLength: text.length,
+      promptSummary: summarizePrompt(text),
+      imageCount: images?.length ?? 0,
+    });
     // preflightResult 在 prompt() resolve 之前回调一次：false = 被预检拒绝（未开始一轮）。
     // SDK 此时不抛错、只静默返回，所以这里把它翻成明确的类型化错误，让 WS/REST 给出反馈
     // 而不是让调用方以为已经发了。
@@ -791,6 +823,36 @@ export class Conversation {
     if (!accepted) {
       throw new AppError("conflict", "消息被拒绝，未开始处理", { expose: true });
     }
+  }
+
+  /**
+   * Run summary for AI observability: model, tokens, cost, context usage and whether the
+   * context is over the trim budget. All values are read from the same session/estimator the
+   * snapshot uses, so the log cannot drift from what the client sees. Bypass-only logging.
+   */
+  private logRunSummary(stopReason: string | undefined, willRetry: boolean): void {
+    const model = this.session.model ?? this.fallbackModel;
+    const stats = this.session.getSessionStats();
+    const messages = this.boundedMessages(this.currentMessages());
+    const softCap = computeSoftCap(model.contextWindow ?? 0);
+    const contextTokens = this.estimateTokensCached(messages);
+    const usage = contextUsageRatio(contextTokens, softCap);
+    const durationMs = this.runStartedAt ? Math.round((performance.now() - this.runStartedAt) * 1000) / 1000 : undefined;
+    this.log.info("model run finished", {
+      model: `${model.provider}/${model.id}`,
+      stopReason,
+      willRetry,
+      turnIndex: this.turnIndex,
+      ...(durationMs !== undefined ? { durationMs } : {}),
+      inputTokens: stats.tokens.input,
+      outputTokens: stats.tokens.output,
+      totalTokens: stats.tokens.total,
+      cost: stats.cost,
+      contextTokens,
+      contextUsage: usage,
+      contextTruncated: usage >= 1,
+    });
+    this.runStartedAt = 0;
   }
 
   /**

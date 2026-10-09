@@ -30,14 +30,22 @@ import { allTools } from "./tools/index.js";
 import { execRegistrySpecs } from "./tools/exec.js";
 import { SettingsService, fileSettingsPort, defaultSettingsFile, sanitizeSettings } from "./settings.js";
 import { createPersistentRulesStore } from "./approval/rules.js";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { FileService } from "./files/service.js";
 import { ApprovalGate, approvalExtension } from "./approval/gate.js";
 import { createExtensionUiBridge } from "./extension-ui-bridge.js";
 import { attachWebSocket, type WsServer } from "./transport/ws.js";
 import { applyServerTimeouts } from "./http/hardening.js";
-import { getLogger } from "./log.js";
+import {
+  configureLog,
+  createCompositeSink,
+  getLogger,
+  resolveLogLevel,
+  stdoutSink,
+} from "./log.js";
+import { createRotatingFileSink, type RotatingFileSink } from "./log-sink-file.js";
+import { resolveLogConfig } from "./config.js";
 import { createGracefulShutdown } from "./graceful.js";
 import type { UiApproval, UiExtensionRequest } from "./protocol.js";
 import { McpBridge } from "./mcp/bridge.js";
@@ -50,6 +58,24 @@ const SERVER_VERSION = "0.2.0";
 const flags = parseCliFlags(process.argv.slice(2));
 const PORT = flags.port ?? 3000;
 const runtime = resolveRuntimeConfig();
+
+// Configure log sinks BEFORE grabbing the logger, so every child logger derived downstream
+// (agent / hub / ws / http) writes to stdout + rotating file, not the stdout-only default.
+const logConfig = resolveLogConfig();
+const logDirAbs = resolve(logConfig.dir);
+let fileSink: RotatingFileSink | undefined;
+if (logConfig.toFile) {
+  fileSink = createRotatingFileSink({
+    dir: logDirAbs,
+    maxBytes: logConfig.maxSizeMb * 1024 * 1024,
+    retentionDays: logConfig.retentionDays,
+  });
+  configureLog({
+    level: resolveLogLevel(),
+    sink: createCompositeSink([stdoutSink, fileSink.sink]),
+  });
+}
+
 const logger = getLogger();
 
 // No authentication is built in (by design, for a local scaffold). Binding anywhere but
@@ -307,6 +333,8 @@ const { app, dispose, addDisposer } = createApp({
   agent,
   registry,
   settings,
+  // Expose read-only log retrieval over the same directory the file sink writes to.
+  logQuery: fileSink ? { dir: logDirAbs } : undefined,
   // Route REST model switches through the hub so REST and WS never disagree on the model.
   hub,
   // Rate limits on by default here: `npm run web` is a long-running process, unlike a
@@ -396,6 +424,11 @@ const shutdown = createGracefulShutdown({
     { name: "websocket", run: () => ws.close() },
     { name: "session-hub", run: () => hub.dispose() },
     { name: "app", run: () => dispose() },
+    // Flush the log file sink last, after every shutdown step has logged, so those
+    // final lines are actually persisted before the stream closes.
+    ...(fileSink
+      ? [{ name: "log-file", run: () => void fileSink.dispose() }]
+      : []),
   ],
   closeServer: () =>
     new Promise<void>((resolve) => {

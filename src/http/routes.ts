@@ -15,7 +15,7 @@ import type { Express, Request, Response } from "express";
 import { readFile } from "node:fs/promises";
 import { scanReadOnlySql } from "../db/index.js";
 import { AppError, badRequest, errorHandler, notFound, validationFailed } from "./errors.js";
-import { getLogger } from "../log.js";
+import { getRequestLogger } from "./request-context.js";
 import { Metrics } from "../metrics.js";
 import type { BuiltAgent } from "../agent.js";
 import type { ToolRegistry } from "../tools/registry.js";
@@ -341,12 +341,14 @@ export function registerControlRoutes(
 
 /** Mount the typed error handler. Must be registered after every route. */
 export function registerErrorHandler(app: Express): void {
-  const log = getLogger().child({ component: "http" });
-  app.use(errorHandler((fields) => {
+  app.use(errorHandler((fields, req) => {
+    // Bind the request's request_id (and component) so the error-detail line lands in the
+    // same request_id chain as its entry/exit access lines.
+    const log = getRequestLogger(req);
     // Severity by class: a 4xx is the caller's mistake and is expected traffic, so logging
     // it at `error` would make real 5xx incidents invisible in the noise. 5xx means we failed.
     const status = typeof fields.httpStatus === "number" ? fields.httpStatus : 500;
-    if (status >= 500) log.error("请求处理失败", fields);
-    else log.warn("请求被拒绝", fields);
+    if (status >= 500) log.error("http request failed", fields);
+    else log.warn("http request rejected", fields);
   }));
 }

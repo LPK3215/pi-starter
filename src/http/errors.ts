@@ -117,18 +117,40 @@ export class AppError extends Error {
     return GENERIC_MESSAGE[this.httpStatus] ?? GENERIC_MESSAGE[500]!;
   }
 
-  /** Everything for the server log: code, message, details, cause. */
+  /** Everything for the server log: code, message, **full stack**, cause chain, details. */
   toLogFields(): Record<string, unknown> {
-    const cause = this.cause;
     return {
       code: this.code,
       httpStatus: this.httpStatus,
       // The real message is logged even when the client sees a generic one.
       message: this.message,
+      // Full stack of the AppError itself; secrets inside frames get value-redacted by the logger.
+      stack: this.stack,
       details: this.details,
-      ...(cause instanceof Error ? { cause: { name: cause.name, message: cause.message } } : {}),
+      ...(this.cause !== undefined ? { cause: serializeCause(this.cause, 0) } : {}),
     };
   }
+}
+
+/**
+ * Serialize a cause chain into plain objects, keeping each level's name/message/stack.
+ * Bounded to 3 levels to avoid runaway on cyclic/deep wraps; the logger redacts secrets in text.
+ */
+function serializeCause(
+  err: unknown,
+  depth: number,
+): { name: string; message: string; stack?: string; cause?: unknown } | string | undefined {
+  if (err instanceof Error) {
+    const nested = (err as { cause?: unknown }).cause;
+    return {
+      name: err.name,
+      message: err.message,
+      ...(typeof err.stack === "string" ? { stack: err.stack } : {}),
+      ...(nested !== undefined && depth < 2 ? { cause: serializeCause(nested, depth + 1) } : {}),
+    };
+  }
+  if (typeof err === "string") return err;
+  return undefined;
 }
 
 /** Convenience constructors for the common cases. */
@@ -150,15 +172,18 @@ export function toAppError(err: unknown, fallbackCode: AppErrorCode = "internal"
 }
 
 /** Express error-handling middleware. Mount LAST, after all routes. */
-export function errorHandler(logError: (fields: Record<string, unknown>) => void) {
-  return (err: unknown, _req: unknown, res: import("express").Response, next: import("express").NextFunction): void => {
+export function errorHandler(
+  logError: (fields: Record<string, unknown>, req: import("express").Request) => void,
+) {
+  return (err: unknown, req: import("express").Request, res: import("express").Response, next: import("express").NextFunction): void => {
     // Headers already sent → the response is committed; hand off to Express to close it.
     if (res.headersSent) {
       next(err);
       return;
     }
     const appErr = toAppError(err);
-    logError(appErr.toLogFields());
+    // req is passed so the caller can bind the request's request_id to this error line.
+    logError(appErr.toLogFields(), req);
     res.status(appErr.httpStatus).json({ error: appErr.clientMessage() });
   };
 }

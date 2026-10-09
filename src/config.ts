@@ -137,6 +137,42 @@ function intOptFromEnv(raw: string | undefined): number | undefined {
   return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : undefined;
 }
 
+/**
+ * 文件日志落盘配置（补齐 log.ts 缺失的落盘环节，级别仍走 PI_LOG_LEVEL）。
+ * 全部可配、不硬编码：开发可关文件只留 stdout，生产默认开并限大小/留存。
+ */
+export interface LogConfig {
+  /** 是否把日志落盘到文件（默认 true；关则只 stdout）。 */
+  toFile: boolean;
+  /** 落盘目录（相对路径按进程 cwd 解析，默认 ./logs）。 */
+  dir: string;
+  /** 单文件轮转上限 MB（0 = 不按大小轮转）。 */
+  maxSizeMb: number;
+  /** 归档保留天数（0 = 不清理）。 */
+  retentionDays: number;
+}
+
+export const LOG_DEFAULTS: LogConfig = {
+  toFile: true,
+  dir: "./logs",
+  // 50 MB 单日足够容纳一次事故排障，又不至于吃满磁盘。
+  maxSizeMb: 50,
+  retentionDays: 14,
+};
+
+/** 从 env 解析日志配置，非法值回落默认。 */
+export function resolveLogConfig(
+  env: Record<string, string | undefined> = process.env,
+): LogConfig {
+  return {
+    // 只显式关闭（PI_LOG_TO_FILE=false/0/off）才落盘关闭；未设 = 默认开。
+    toFile: boolFromEnv(env.PI_LOG_TO_FILE) ?? LOG_DEFAULTS.toFile,
+    dir: clean(env.PI_LOG_DIR) ?? LOG_DEFAULTS.dir,
+    maxSizeMb: intOptFromEnv(env.PI_LOG_MAX_SIZE_MB) ?? LOG_DEFAULTS.maxSizeMb,
+    retentionDays: intOptFromEnv(env.PI_LOG_RETENTION_DAYS) ?? LOG_DEFAULTS.retentionDays,
+  };
+}
+
 /** 逗号分隔列表：未设或空 → undefined。 */
 function listFromEnv(raw: string | undefined): string[] | undefined {
   const value = clean(raw);

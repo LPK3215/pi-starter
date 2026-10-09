@@ -4,6 +4,9 @@ dist/
 .env.local
 .env.*.local
 *.log
+# Rotating log sink (JSONL + gzip archives): never commit, never publish.
+*.log.gz
+/logs/
 npm-debug.log*
 .piapi/
 

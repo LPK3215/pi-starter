@@ -1,7 +1,8 @@
-import { Component, useEffect, type ReactNode } from "react";
+import { Component, useEffect, useState, type ReactNode } from "react";
 import { AssistantRuntimeProvider, useExternalStoreRuntime } from "@assistant-ui/react";
 
 import { ApprovalCard, ConnectionBadge, ControlBar, HitlDialog, NoticeBar, ThreadManager, ToolTrace } from "@/components/pi-panels";
+import { LogPanel } from "@/components/log-panel";
 // 官方 registry 组件（shadcn add @assistant-ui/thread）。我自己的那份留在
 // @/components/thread.tsx 作为回退点，两者可单独换回来对比。
 import { Thread } from "@/components/assistant-ui/elements/thread.aui";
@@ -62,12 +63,21 @@ function Shell() {
   // 计数读 conversations（由 `conversations` 帧与快照共同维护的列表），不读 state.conversations：
   // 后者只随快照刷新，删完会话后会比实际值旧一帧（两处计数不一致就是这么来的）。
   const { conversations } = usePiSnapshot();
+  // 日志面板开关：面板只在挂载时轮询，关闭即卸载 → 不留后台轮询。
+  const [logOpen, setLogOpen] = useState(false);
   return (
     <div className="flex h-screen flex-col bg-background text-foreground">
       <header className="flex items-center gap-3 border-b border-border bg-card px-4 py-2">
         <span className="text-sm font-semibold">Pi Starter</span>
         <ConnectionBadge />
         <span className="truncate text-xs text-muted-foreground">{conversations.length} 个对话</span>
+        <button
+          className="ml-auto rounded-lg border border-border px-2.5 py-1 text-xs hover:bg-muted"
+          onClick={() => setLogOpen((v) => !v)}
+          aria-pressed={logOpen}
+        >
+          日志
+        </button>
       </header>
       <NoticeBar />
       <ControlBar />
@@ -92,6 +102,8 @@ function Shell() {
             <ApprovalCard />
           </div>
         </main>
+        {/* 右侧停靠日志列：参与 flex 布局挤占宽度而非浮层，打开时不遮挡对话区。 */}
+        {logOpen && <LogPanel onClose={() => setLogOpen(false)} />}
       </div>
     </div>
   );

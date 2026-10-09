@@ -47,6 +47,9 @@ const SECRET_KEYS = [
 
 /** 单条日志允许的最大字符串长度，防止把整段提示词/响应写进日志。 */
 const MAX_VALUE_LENGTH = 2000;
+/** 提示词类字段：只留摘要与长度（红线：完整正文不落盘），比通用截断更严。 */
+const PROMPT_KEYS = ["prompt", "promptbody", "prompttext", "promptsummary", "systemprompt", "userprompt"];
+const PROMPT_MAX = 200;
 
 /** 判断字段名是否敏感。 */
 export function isSecretKey(key: string): boolean {
@@ -54,13 +57,50 @@ export function isSecretKey(key: string): boolean {
   return SECRET_KEYS.some((needle) => lower.includes(needle));
 }
 
-/** 脱敏单个值：命中敏感名则整体打码，否则截断超长字符串。 */
+/** 是否为提示词类字段（应只留摘要与长度）。 */
+export function isPromptKey(key: string): boolean {
+  const lower = key.toLowerCase();
+  return PROMPT_KEYS.some((needle) => lower.includes(needle));
+}
+
+/* 值级密钥特征：密钥名常常不是字段名，而是内联在自由文本/异常消息/URL 里。 */
+const SECRET_INLINE =
+  /\b(api[_-]?key|apikey|access[_-]?token|refresh[_-]?token|auth[_-]?token|token|password|passwd|secret|client[_-]?secret|authorization)\b([\s]*[:=][\s]*)([^\s,;'"`&]+)/gi;
+const SK_KEY = /\bsk-[A-Za-z0-9_\-]{6,}/g;
+const BEARER = /\bbearer\s+[A-Za-z0-9._\-]{6,}/gi;
+const EMAIL = /[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}/g;
+const CN_ID = /(?<!\d)\d{17}[\dXx](?!\d)/g;
+const CN_MOBILE = /(?<!\d)1[3-9]\d{9}(?!\d)/g;
+
+/**
+ * 对任意字符串值做密钥/联系方式脱敏：命中内联 key=value、sk- 前缀、Bearer、邮箱、
+ * 18 位身份证、11 位手机号则打码。安全优先，宁可多打码；普通模板文本不受影响。
+ */
+export function redactSecrets(text: string): string {
+  if (!text) return text;
+  return text
+    .replace(SECRET_INLINE, (_m, name) => `${name}=[redacted]`)
+    .replace(SK_KEY, "sk-[redacted]")
+    .replace(BEARER, "bearer [redacted]")
+    .replace(EMAIL, "[redacted:email]")
+    .replace(CN_ID, "[redacted:id]")
+    .replace(CN_MOBILE, "[redacted:phone]");
+}
+
+/** 脱敏单个值：命中敏感名整体打码；提示词类字段只留摘要与长度；其余字符串值级脱敏 + 超长截断。 */
 function sanitizeValue(key: string, value: unknown): unknown {
   if (isSecretKey(key)) return "[redacted]";
-  if (typeof value === "string" && value.length > MAX_VALUE_LENGTH) {
-    return `${value.slice(0, MAX_VALUE_LENGTH)}…[truncated ${value.length - MAX_VALUE_LENGTH}]`;
+  if (typeof value !== "string") return value;
+  if (isPromptKey(key)) {
+    const len = value.length;
+    const head = redactSecrets(value.slice(0, PROMPT_MAX));
+    return len > PROMPT_MAX ? `${head}…[prompt omitted: ${len} chars]` : head;
   }
-  return value;
+  const redacted = redactSecrets(value);
+  if (redacted.length > MAX_VALUE_LENGTH) {
+    return `${redacted.slice(0, MAX_VALUE_LENGTH)}…[truncated ${redacted.length - MAX_VALUE_LENGTH}]`;
+  }
+  return redacted;
 }
 
 /** 递归脱敏对象（深度受限，防止循环引用打爆栈）。 */
@@ -107,6 +147,25 @@ function serializeError(err: Error): Record<string, unknown> {
 
 /** 日志输出目的地。 */
 export type LogSink = (line: string) => void;
+
+/** 默认 stdout sink（保持向后兼容：库嵌入方未接管时行为不变）。 */
+export const stdoutSink: LogSink = (line) => console.log(line);
+
+/**
+ * 组合多个 sink（如 stdout + 文件），返回一个把同一行分发到各目标的 sink。
+ * 任一子 sink 抛错都不影响其它 sink——落盘失败绝不能拖垮标准输出或主流程。
+ */
+export function createCompositeSink(sinks: readonly LogSink[]): LogSink {
+  return (line) => {
+    for (const sink of sinks) {
+      try {
+        sink(line);
+      } catch {
+        /* one sink failing must not break the others or the caller */
+      }
+    }
+  };
+}
 
 export interface LoggerOptions {
   /** 最小级别，低于此级别不输出。默认 info。 */
@@ -171,13 +230,15 @@ export class Logger {
   private write(level: Exclude<LogLevel, "silent">, message: string, fields?: Record<string, unknown>): void {
     if (!this.isEnabled(level)) return;
     const merged = sanitizeFields({ ...this.base, ...(fields ?? {}) });
+    // msg 也过一遗脱敏：异常正文常把密钥/提示词内嵌在 message 文本里。
+    const safeMsg = redactSecrets(message);
     const ts = new Date().toISOString();
     if (this.json) {
-      this.sink(JSON.stringify({ ts, level, msg: message, ...merged }));
+      this.sink(JSON.stringify({ ts, level, msg: safeMsg, ...merged }));
       return;
     }
     const extra = Object.keys(merged).length > 0 ? ` ${JSON.stringify(merged)}` : "";
-    this.sink(`${ts} ${level.toUpperCase().padEnd(5)} ${message}${extra}`);
+    this.sink(`${ts} ${level.toUpperCase().padEnd(5)} ${safeMsg}${extra}`);
   }
 }
 

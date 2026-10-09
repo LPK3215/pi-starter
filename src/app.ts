@@ -39,6 +39,8 @@ import { AppError, badRequest, busy as busyError, toAppError } from "./http/erro
 import { registerFileRoutes } from "./http/file-routes.js";
 import { registerApprovalRoutes } from "./http/approval-routes.js";
 import { registerProviderKeyRoutes } from "./http/provider-key-routes.js";
+import { getRequestLogger, requestContext } from "./http/request-context.js";
+import { registerLogRoutes } from "./http/log-routes.js";
 import type { ApprovalRulesStore } from "./approval/rules.js";
 import type { FileService } from "./files/service.js";
 import type { CompactionOutcome } from "./session-hub.js";
@@ -128,6 +130,12 @@ export interface CreateAppOptions {
   applyActiveKey?: (provider: string) => Promise<void>;
   rateLimit?: boolean | Record<string, RateLimitRule>;
   /**
+   * 日志检索目录。提供后开放 `/logs` 与 `/logs/stats`（只读，按天分片流式扫描）。
+   *
+   * 省略则不注册——能翻查历史日志是敏感能力，不该默认开启；长驻服务装配时注入。
+   */
+  logQuery?: { dir: string };
+  /**
    * Proxies whose X-Forwarded-For may be trusted (e.g. ["loopback"] behind a local nginx).
    * Anything else has the header ignored, because it is client-controlled and would
    * otherwise let any caller bypass the limit by forging the header.
@@ -203,6 +211,10 @@ export function createApp(options: CreateAppOptions): CreateAppResult {
   }
 
   // Probes / resources / db / control routes live in src/http/routes.ts.
+  // Request lifecycle context (request_id + access log) mounts before every route so
+  // REST and SSE share one correlation id. Bypass-only: it never alters response/timing.
+  app.use(requestContext());
+
   registerProbeRoutes(app, options.agent, {
     currentModel,
     isBusy: () => busy,
@@ -222,6 +234,9 @@ export function createApp(options: CreateAppOptions): CreateAppResult {
       applyActive: options.applyActiveKey,
     });
   }
+
+  // Read-only log retrieval over the rotating JSONL files (opt-in via logQuery.dir).
+  if (options.logQuery) registerLogRoutes(app, { dir: options.logQuery.dir });
 
   // Rich capability/inventory snapshot (superset of the old /health body).
   app.get("/info", async (_req, res) => {
@@ -400,7 +415,7 @@ export function createApp(options: CreateAppOptions): CreateAppResult {
       // server-side. `code` is added for the caller to branch on; the message only passes
       // through for codes we intentionally write for the caller (see ALWAYS_EXPOSED).
       const appErr = toAppError(err);
-      getLogger().child({ component: "http" }).error("SSE 对话轮次失败", appErr.toLogFields());
+      getRequestLogger(req).error("sse conversation turn failed", appErr.toLogFields());
       try {
         const clientMessage = appErr.clientMessage();
         res.write(

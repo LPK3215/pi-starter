@@ -79,11 +79,15 @@ test("toAppError 保留 AppError 身份，未知异常一律视为内部错误",
   assert.match(wrapped.toLogFields().message as string, /secret/, "log keeps the detail");
 });
 
-test("cause 链在日志字段里保留", () => {
+test("cause 链在日志字段里保留（含各自的堆栈）", () => {
   const root = new Error("root cause");
   const err = new AppError("internal", "wrapper", { cause: root });
   const fields = err.toLogFields();
-  assert.deepEqual(fields.cause, { name: "Error", message: "root cause" });
+  const cause = fields.cause as { name: string; message: string; stack?: string };
+  assert.equal(cause.name, "Error");
+  assert.equal(cause.message, "root cause");
+  assert.ok(typeof cause.stack === "string" && cause.stack.length > 0, "cause keeps its own stack");
+  assert.ok(typeof fields.stack === "string" && (fields.stack as string).length > 0, "AppError keeps its own stack");
 });
 
 test("details 只进日志，不进客户端文案", () => {

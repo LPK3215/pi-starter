@@ -39,6 +39,11 @@ import { Metrics, metrics as defaultMetrics } from "../metrics.js";
 import { getLogger } from "../log.js";
 import { AppError } from "../http/errors.js";
 
+/** 把毫秒耗时收成 3 位小数，用于日志（避免浮点噪声刷屏）。 */
+function roundMs(ms: number): number {
+  return Math.round(ms * 1000) / 1000;
+}
+
 /** 运行期依赖（由 server 入口装配后传入）。 */
 export interface WsRuntime {
   agent: BuiltAgent;
@@ -303,12 +308,25 @@ class ClientConn {
 
   private async dispatch(msg: ClientMessage): Promise<void> {
     const { runtime } = this;
+    // Per-command correlation id + access line, so a full WS request can be pulled by request_id.
+    const requestId = randomUUID();
+    const startedAt = performance.now();
+    const cmdLog = getLogger().child({
+      component: "ws",
+      clientId: this.clientId || "unattached",
+      requestId,
+    });
+    cmdLog.debug("ws command received", { command: msg.type });
 
     // Extension point: business-registered commands. Built-ins are decided by the union in
     // protocol.ts, so a custom type can never shadow one — that keeps protocol behaviour
     // predictable no matter what the embedder registers.
     if (!BUILTIN_COMMAND_TYPES.has(msg.type)) {
-      await this.runCustom(msg.type, msg);
+      try {
+        await this.runCustom(msg.type, msg);
+      } finally {
+        cmdLog.info("ws command completed", { command: msg.type, durationMs: roundMs(performance.now() - startedAt) });
+      }
       return;
     }
 
@@ -656,10 +674,14 @@ class ClientConn {
       // Never let one bad command kill the connection: report and keep serving.
       this.metrics.inc("dispatchErrorsTotal");
       const message = err instanceof Error ? err.message : String(err);
-      getLogger()
-        .child({ component: "ws", clientId: this.clientId || "unattached" })
-        .error("命令处理失败", { command: msg.type, error: message });
+      cmdLog.error("ws command failed", {
+        command: msg.type,
+        error: message,
+        durationMs: roundMs(performance.now() - startedAt),
+      });
       this.send({ type: "error", message });
+    } finally {
+      cmdLog.info("ws command completed", { command: msg.type, durationMs: roundMs(performance.now() - startedAt) });
     }
   }
 

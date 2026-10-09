@@ -27,6 +27,9 @@ export default defineConfig({
       //   而浏览器 Origin 仍是 localhost:5173，不等即 403。
       //   透传原始 Host 后两者相等，校验自然通过；非浏览器客户端不带 Origin，本来也放行。
       '/ws': { target: backend, ws: true },
+      // 日志检索走 REST（GET /logs、/logs/stats，见 src/http/log-routes.ts）。
+      // 开发期前端与后端不同源，代理转发；生产期前端由后端同源静态托管，直接可达。
+      '/logs': { target: backend },
     },
   },
 })
