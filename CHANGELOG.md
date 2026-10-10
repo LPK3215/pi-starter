@@ -16,9 +16,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **不假装能搜**：后端没有 `search()` 时**不注册** `web_search`（与 `rag:smoke` 打印 SKIP 同一原则）；默认的 DuckDuckGo 无 JS 版解析是 best-effort，抽不到就如实说「没有命中」。
   - 能力标签 `net` → `inferRisk` 判 `medium`；与 `exec` 同口径**不进 `allTools`**，开了才登记进 `ToolRegistry`。`SECURITY.md` / `.env.example` / 两份 README 都已注明「未被缓解的部分」（URL 由模型决定，DNS 解析与建连之间存在 TOCTOU 窗口）。
 
+- **进程执行的工具层测试**（`src/tools/exec.test.ts`，13 例，`exec.ts` 79% → **100%**）：`src/exec/runner.ts` 有测试，但**工具层完全没有** —— 也就是「参数怎么翻译成 runner 调用」与「结果怎么呈现给模型」这两段从未被执行过，而它们恰好是模型直接看到的部分。覆盖：只有 coding 档且给了环境才装配（`off` / `readonly` / 缺环境一律空）、`exec_jobs` 的能力必须是手写的 `shell.observe`（按名字推断会推错）、非零退出与超时必须标成 `isError`、后台任务立即返回 id 并提示下一步用哪个工具、输出截断必须说出来、**非法 `timeout_seconds` 在调用 runner 之前就被拦下**（断言 `runs.length === 0`）、`AbortSignal` 原样透传、超长命令在列表里截断而不是撑爆一行。
 - **联网抓取的真实路径测试**（`web.test.ts` 11 → 23 例，`web.ts` 77% → **92.95%**）：此前只测了假后端，`fetchPage` 里的字节上限、重定向、超时、content-type 判定**全都没被真实执行过**。现在起本地 HTTP 服务跑真实抓取，覆盖：HTML 转纯文本 / JSON 不被拍平、正文恰好等于上限时 `truncated=false`、超限截断、404 与 `image/png` 翻成可读 `WebError`、正常跟随重定向且**每一跳都过策略**、302 到被禁主机时请求不发出、超过 `MAX_REDIRECTS` 即停、超时翻成 `timeout`、注入放行策略后非 http/https 仍被拒、重定向目标是非法 URL 时报错而不是崩在 `new URL`。
 - **WS 分派层的畸形输入测试**（`integration.test.ts`，`ws.ts` 76% → **83.42%**）：这一层此前只有跨进程的 `npm run smoke` 覆盖（那些覆盖率不进 `npm test` 统计），而它最容易「一个坏输入打死整条连接」。覆盖：`prompt` 带 `data:` 前缀 / 非白名单 MIME / 超过 4 张图片、`set_label`·`edit_message`·`rollback_conversation` 缺 `entryId`、`rename_conversation` 缺 `title`、打开或删除不存在的会话、非法思考档位、未知命令名（走「未注册命令」分支并带提示，而不是静默丢弃）、空串与纯空白 `type` 在协议层被拒 —— 以及**一连串畸形输入之后 `ping` 仍必须得到 `pong`**。
-- **五个「未覆盖即未验证」模块的测试**（本轮第二批，48 个测试文件 / 443 用例，覆盖率 90.45% → **92.26%**）：
+- **五个「未覆盖即未验证」模块的测试**（本轮第二批，49 个测试文件 / 456 用例，覆盖率 90.45% → **92.53%**）：
   - `src/prompt-images.test.ts`（6 例，44% → 100%）：`parsePromptImages` 是 `prompt` / `steer` / `follow_up` 三条 WS 命令共用的唯一入口校验，此前只被间接带到 —— 等于「模型收到一张损坏的图」这条路径从未验证过。覆盖 MIME 白名单（`image/svg+xml` 拒收）、`data:` 前缀、非法 base64、**正则过得了但解码为 0 字节**（单字符 `"a"`）与恰好等于上限的边界。
   - `src/extensions/audit.test.ts`（6 例，56% → 100%）：这个扩展的价值全在「记什么、不记什么」上。核心断言是**日志里绝不能出现参数值**（含 `sk-` 密钥与 SQL 原文），只记字段名；以及失败的调用走 `warn`、`logArgKeys=false` 时连字段名都不记、超出 256 条进行中调用时最早的被淘汰。
   - `src/tools/ask-user-question.test.ts`（5 例，56% → 100%）：HITL 工具出错不是「答得不对」而是「整轮卡死」或「悄悄跳过」。覆盖无 UI 时**绝不假装等待且不调用任何 ui 方法**、`AbortSignal` 必须透传（否则桥那头无法取消）、`confirm` 选「否」与取消一样算未作答。
