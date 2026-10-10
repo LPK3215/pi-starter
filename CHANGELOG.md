@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-10-10
+
 ### Added
 
 - **开源规范补齐**：新增 `CODE_OF_CONDUCT.md`（Contributor Covenant 2.1，英文单版）与 `.github/dependabot.yml`。dependabot **刻意不自动升 `@earendil-works/*` 三件套**——它们钉版本是设计（升级必须走 `verify:all` 的完整门禁 + 人看 diff），并在文件里注明「GitHub Actions 本账号跑不起来，绿勾不等于远端跑过」。`.gitattributes` 补：`*.svg text eol=lf`（架构图现在被 `docs:svg:check` 按字节比对，行尾被规范化会在一个系统上报假漂移）、`hooks/pre-commit text eol=lf`（CRLF 会打断 shebang）、`web/package-lock.json` 与 `web/dist/**` 标 `linguist-generated`、`*.tgz binary`。`package.json` 的 `files` 增加 `README.zh-CN.md` / `CHANGELOG.md` / `AUTHORS`（原来只发英文 README，中文主版和作者信息不在包里），`description` 与 `keywords` 补齐现有能力面（记忆 / MCP / 计划模式 / 子代理 / RAG / 四入口）。
@@ -419,7 +421,8 @@ Initial public scaffold release.
 - **Sample chat page** (`public/index.html`): local-only reference UI for trying the HTTP/SSE endpoints.
 - **Build pipeline** (`npm run build`, `scripts/dist-assets.cjs`): compiles TypeScript to `dist/` and copies prompt / skill / knowledge assets alongside the emitted JS.
 
-[Unreleased]: https://github.com/LPK3215/pi-starter/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/LPK3215/pi-starter/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/LPK3215/pi-starter/releases/tag/v0.4.1
 [0.4.0]: https://github.com/LPK3215/pi-starter/releases/tag/v0.4.0
 [0.3.0]: https://github.com/LPK3215/pi-starter/releases/tag/v0.3.0
 [0.2.0]: https://github.com/LPK3215/pi-starter/releases/tag/v0.2.0
