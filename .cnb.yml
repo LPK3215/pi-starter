@@ -1,0 +1,30 @@
+# CNB 流水线（cnb.cool）。GitHub Actions 在本仓因账号计费锁定跑不起来（见
+# pipeline.config.json 的 _localPublish说明），所以远端门禁由这里承担。
+#
+# 只做一件事：在 PR 与 main 的 push 上跑 `npm run verify`（typecheck + 死代码检查 +
+# 后端测试 + 前端 WS 客户端测试 + 运行时冒烟 + 构建 + 嵌入路径自检）。这条命令就是
+# scripts/verify.mjs / release.mjs 用的同一份门禁，不另立一套。
+#
+# 刻意**不**跑 `npm --prefix web run build`：那要先装 web/node_modules（两万多个文件），
+# 让每次 PR 多花数分钟；前端构建目前只在需要出包时由本地 `npm run ui:build` 负责。
+# 需要时再补一条独立 pipeline，别把这里的门禁拖慢。
+
+main:
+  pull_request:
+    - name: verify
+      docker:
+        image: node:24
+      stages:
+        - name: install
+          script: npm ci
+        - name: verify
+          script: npm run verify
+  push:
+    - name: verify
+      docker:
+        image: node:24
+      stages:
+        - name: install
+          script: npm ci
+        - name: verify
+          script: npm run verify

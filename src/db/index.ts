@@ -285,10 +285,11 @@ export function openDatabase(options: OpenDatabaseOptions = {}): DatabaseStore {
       return { ok: true, driver: "sqlite", path };
     },
     listNotes() {
-      const rows = db.prepare("SELECT id, title, body FROM notes ORDER BY id").all() as Record<
-        string,
-        SQLOutputValue
-      >[];
+      // 与 query() 同一口径加行数上限：notes 可被 insertNote 无界写入，整表进响应会把内存与
+      // 延迟放大成外部输入的函数（GET /db/notes 此前没有 LIMIT）。
+      const rows = db
+        .prepare("SELECT id, title, body FROM notes ORDER BY id LIMIT ?")
+        .all(DEFAULT_MAX_ROWS) as Record<string, SQLOutputValue>[];
       return rows.map((row) => asNote(row)).filter((row): row is NoteRow => Boolean(row));
     },
     getNote(id) {

@@ -71,6 +71,14 @@ export interface TrimPlanInput {
   keepRecent?: number;
   /** 是否始终保留首条 user（任务定义）。默认 true。 */
   keepFirstUser?: boolean;
+  /**
+   * 已算好的总 token（单位与 `estimateConversationTokens` 一致）。
+   *
+   * 调用方若已经持有逐条缓存（见 `Conversation.estimateTokensCached`）就把它传进来：快照
+   * 周期性地只为判断 `trimmed` 而调这里，不传就会把所有消息按**字符**重算一遍
+   * （n = 会话总字符数，且这个函数在热路径上每 2s 调用一次）。
+   */
+  estimatedTokens?: number;
 }
 
 export interface TrimPlan {
@@ -99,7 +107,7 @@ export function planContextTrim(input: TrimPlanInput): TrimPlan {
   const keepRecent = Math.max(input.keepRecent ?? 6, 1);
   const keepFirstUser = input.keepFirstUser !== false;
 
-  const estimated = estimateConversationTokens(messages);
+  const estimated = input.estimatedTokens ?? estimateConversationTokens(messages);
   if (estimated <= maxTokens) {
     return {
       drop: [],

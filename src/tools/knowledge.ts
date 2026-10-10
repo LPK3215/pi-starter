@@ -9,6 +9,10 @@ import { defineTool } from "@earendil-works/pi-coding-agent";
 import type { KnowledgeDoc } from "../knowledge/index.js";
 import type { Retriever } from "../knowledge/retrieval.js";
 
+/** 检索条数的默认值与硬上限——上限挡的是"模型把整库正文塞进上下文"。 */
+const DEFAULT_SEARCH_LIMIT = 5;
+const MAX_SEARCH_LIMIT = 50;
+
 /**
  * 检索工具——官方规定的 RAG 入口（`pi.registerTool` 一个可搜索工具）。
  * 只依赖 `Retriever`：背后是关键词还是向量库对模型透明；检索是 async。
@@ -24,7 +28,13 @@ export function createSearchKnowledgeTool(retriever: Retriever) {
       limit: Type.Optional(Type.Number({ description: "最多返回几条，默认 5" })),
     }),
     async execute(_id, params: { query: string; limit?: number }) {
-      const hits = await retriever.search(params.query, params.limit ?? 5);
+      // limit 来自模型（外部可控）：不设上界时一句 `limit: 100000` 就能把整库正文拖进一轮
+      // 上下文。非数值 / 越界一律夹到 [1, MAX_SEARCH_LIMIT]。
+      const raw = Number(params.limit ?? DEFAULT_SEARCH_LIMIT);
+      const limit = Number.isFinite(raw)
+        ? Math.min(Math.max(Math.trunc(raw), 1), MAX_SEARCH_LIMIT)
+        : DEFAULT_SEARCH_LIMIT;
+      const hits = await retriever.search(params.query, limit);
       if (hits.length === 0) {
         return {
           content: [{ type: "text", text: `知识库没有匹配「${params.query}」的文档。` }],

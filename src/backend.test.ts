@@ -15,6 +15,7 @@ import {
   applyTrim,
   computeSoftCap,
   contextUsageRatio,
+  estimateConversationTokens,
   estimateTokens,
   planContextTrim,
 } from "./context/budget.js";
@@ -95,6 +96,54 @@ test("D1 conversationOf 能定位到真正拥有该请求的会话", () => {
   // enabled=false 时不会产生 pending，这里只断言接口不抛。
   assert.equal(gate.conversationOf("nope"), undefined);
   gate.dispose();
+});
+
+test("D1 会话策略表有上限，不会随进程生命周期无界增长", () => {
+  const gate = new ApprovalGate({
+    rules: () => [],
+    enabled: () => false,
+    defaultPolicy: () => ({ mode: "off", categories: [] }),
+    onRequest: () => {},
+  });
+
+  // 上限是 1024（ApprovalGate.MAX_POLICIES）：策略表按 key 懒建且从不删除，
+  // 不设上限就会随进程内出现过的 sessionId 单调增长。
+  for (let i = 0; i < 1024; i += 1) gate.policyFor(`conv-${i}`);
+  gate.setPolicy("conv-0", { mode: "all", categories: ["bash.rm-rf"] });
+  assert.equal(gate.policyFor("conv-0").mode, "all");
+
+  // 越过上限：插入新 key 必须挤掉最早的一条，而不是让表继续长。
+  gate.policyFor("conv-overflow");
+  assert.equal(gate.policyFor("conv-0").mode, "off", "最早的一条应被挤出，回落到默认策略");
+
+  gate.dispose();
+});
+
+test("D4 传入已算好的 estimatedTokens 时不再逐字符重算", () => {
+  const messages = [
+    { role: "user", text: "task" },
+    { role: "assistant", text: "x".repeat(4000) },
+  ];
+  const own = estimateConversationTokens(messages);
+
+  // 同一套口径：缓存值传进去必须得到与自算完全一致的结论（否则快照里的 overBudget 会说谎）。
+  const withCache = planContextTrim({ messages, maxTokens: own, estimatedTokens: own });
+  const without = planContextTrim({ messages, maxTokens: own });
+  assert.equal(withCache.trimmed, without.trimmed);
+  assert.equal(withCache.estimatedTokens, without.estimatedTokens);
+
+  // 传入值确实参与判定（而不是被忽略后回退到自算）：同一输入下把估算抬高，结论必须随之改变。
+  // 若参数被忽略，这两次调用会得到完全一样的结果。
+  const trimmable = [
+    { role: "user", text: "task" },
+    { role: "assistant", text: "a".repeat(4000) },
+    { role: "assistant", text: "b".repeat(4000) },
+  ];
+  const passed = planContextTrim({ messages: trimmable, maxTokens: 1200, keepRecent: 1, estimatedTokens: 5000 });
+  const auto = planContextTrim({ messages: trimmable, maxTokens: 1200, keepRecent: 1 });
+  assert.equal(auto.withinBudget, true, "自算（约 2000）丢一条即可回到预算内");
+  assert.equal(passed.withinBudget, false, "用传入的 5000 判，丢一条仍超预算");
+  assert.notEqual(passed.estimatedTokens, auto.estimatedTokens, "传入的估算必须被采用");
 });
 
 test("D1 非法 / 缺失的审批 decision 一律判拒绝，不能变成放行", async () => {

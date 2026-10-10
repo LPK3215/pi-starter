@@ -50,8 +50,9 @@
     "rag:smoke": "tsx scripts/rag-smoke.mjs",
     "e2e": "tsx scripts/e2e-restart.mjs",
     "verify:embed": "node scripts/verify-embed.mjs",
-    "verify": "npm run typecheck && npm test && npm run test:web && npm run smoke && npm run build && npm run verify:embed",
+    "verify": "npm run typecheck && npm run lint:unused && npm test && npm run test:web && npm run smoke && npm run build && npm run verify:embed",
     "verify:all": "npm run verify && npm run e2e",
+    "probe:providers": "node scripts/probe-providers.mjs",
     "lint:unused": "tsc --noEmit --noUnusedLocals --noUnusedParameters",
     "release": "node scripts/release.mjs",
     "publish:local": "node scripts/publish-local.mjs"

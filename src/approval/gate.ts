@@ -73,6 +73,8 @@ interface PendingEntry {
 }
 
 export class ApprovalGate {
+  /** 会话策略表的上限（防无界增长，见 `policyFor`）。 */
+  private static readonly MAX_POLICIES = 1024;
   private readonly pending = new Map<string, PendingEntry>();
   private readonly policies = new Map<string, ApprovalPolicy>();
   private seq = 0;
@@ -91,6 +93,13 @@ export class ApprovalGate {
       const base = this.opts.defaultPolicy?.() ?? defaultApprovalPolicy();
       // Copy so a shared default object is never mutated by a later per-conversation choice.
       policy = { mode: base.mode, categories: [...base.categories] };
+      // 策略表按会话 key 懒建且从不删除，不设上限就会随进程生命周期单调增长（每个曾开启的
+      // sessionId 留一条）。溢出时丢最早建立的那条：代价顶多是那条早已关闭的会话重新问一次
+      // （新会话仍会继承 `defaultPolicy()`），不涉及安全——deny 是硬闸门，不受策略影响。
+      if (this.policies.size >= ApprovalGate.MAX_POLICIES) {
+        const oldest = this.policies.keys().next();
+        if (!oldest.done) this.policies.delete(oldest.value);
+      }
       this.policies.set(key, policy);
     }
     return policy;

@@ -179,6 +179,7 @@ export function createRotatingFileSink(options: FileSinkOptions): RotatingFileSi
     closeAndArchiveCurrent();
     rotated += 1;
     openSegment(nextKey, 0);
+    sweepRetention();
   }
 
   /** 同日超大小：归档当前分段，开同日期下一序号的分段（不重名，避开占用）。 */
@@ -187,6 +188,9 @@ export function createRotatingFileSink(options: FileSinkOptions): RotatingFileSi
     closeAndArchiveCurrent();
     rotated += 1;
     openSegment(currentDate, nextSeq);
+    // 轮转时顺带清理：只在启动跑一次的话，长跑进程里 `retentionDays` 形同虚设——分段文件会
+    // 在同一进程生命周期内无限累积（单文件受 maxSize 限，但**段数**不受限）。
+    sweepRetention();
   }
 
   /** 删除超出保留期的历史文件（.log 与 .log.gz 都算）。 */

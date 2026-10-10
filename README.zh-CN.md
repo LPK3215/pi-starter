@@ -47,7 +47,7 @@
 | HTTP | [Express](https://expressjs.com/) | `^5.2.1` | 单进程；Web 端每连接多对话并发 |
 | Schema | [TypeBox](https://www.npmjs.com/package/typebox) | `^1.1.39` | 工具 `parameters` 定义 |
 | WebSocket | [ws](https://www.npmjs.com/package/ws) | `^8.18.0` | 快照驱动的双向传输（`transport/ws.ts`） |
-| 测试 | Node 内置 test runner，走 `tsx --test` | `^4.22.4` | 42 个测试文件 · 370 用例 + 前端 8 用例，不调模型 |
+| 测试 | Node 内置 test runner，走 `tsx --test` | `^4.22.4` | 42 个测试文件 · 376 用例 + 前端 11 用例，不调模型 |
 | 构建 | `tsc -p tsconfig.build.json` + `scripts/dist-assets.cjs` | `^5.6.0` | 把 `prompts/`、`skills/`、`prompt-templates/`、`knowledge/` 拷到 `dist/` |
 
 上面这张表的单一真源是 [`package.json`](package.json)。版本变更时，代码与本表同步；架构 SVG 自动刷新（`node scripts/visualization/generate_architecture.mjs`）。
@@ -258,7 +258,7 @@ pi-starter/
 │   ├── index.ts          # CLI 入口（交互对话）
 │   ├── server.ts         # Web 入口：解析命令行、listen
 │   ├── app.ts            # ★ HTTP 应用：/health /skills /knowledge /db /model /chat
-│   ├── lib.ts            # 库导出（buildAgent / createApp / setup）
+│   ├── lib.ts            # 库导出（buildAgent / createApp / setupPiAgentDir …）
 │   ├── setup.ts          # npm run setup：merge 写入 ~/.pi/agent/
 │   ├── agent.ts          # ★ 组装层：模型 + 人设 + 工具 + 扩展 → session
 │   ├── config.ts         # 配置层：命令行 / .env / 内置工具档位
@@ -313,22 +313,28 @@ pi-starter/
 │   ├── 项目分析报告.md  #   工程体检报告
 │   └── 嵌入指南.md      #   把 Agent 装进已有 Express 服务
 ├── .github/workflows/
-│   └── ci.yml            # typecheck + test + build，矩阵跨 ubuntu / windows / macos
+│   ├── ci.yml            # typecheck + unused + test + test:web + smoke + e2e + audit + build，矩阵跨 ubuntu / windows / macos
+│   └── publish.yml       # tag 触发的出包（本仓 Actions 不可用 —— 见 pipeline.config.json）
 ├── web/                  # 产品前端（独立 package.json：Vite + React + assistant-ui）
 │   └── src/pi/           #   唯一手写的胶水：WS 客户端 + ExternalStore 适配
 ├── Dockerfile            # 开箱即用的沙箱镜像（见 SECURITY.md / README 高级模式）
 ├── LICENSE  README.md  README.zh-CN.md  CONTRIBUTING.md  SECURITY.md
 ├── CHANGELOG.md  FAQ.md  AUTHORS  .gitignore  .gitattributes
-└── package.json  tsconfig.json  tsconfig.build.json  .env.example  .dockerignore
+└── package.json  tsconfig.json  tsconfig.build.json  .env.example  .dockerignore  .cnb.yml
 ```
 
 契约类冒烟测试（不调模型、不写真实 `~/.pi/agent`）：
 
 ```bash
-npm test            # 后端：370 个单测 / 集成测试
-npm run test:web    # 前端：8 个 WS 客户端测试（复用 tsx，零新依赖）
-npm run typecheck
+npm test            # 后端：376 个单测 / 集成测试
+npm run test:web    # 前端：11 个 WS 客户端测试（复用 tsx，零新依赖）
+npm run smoke       # 23 项真实 WebSocket 端到端检查
+npm run typecheck   # 类型 + 协议完整性
+npm run lint:unused # 死代码门禁（"声明了但没接线"那一类）
 npm run build
+npm run verify      # 上面这条链，按序执行：typecheck → lint:unused → test → test:web → smoke → build → verify:embed
+npm run e2e         # 真进程：重启 / 恢复 / 设置往返（不需 API Key）——CI 会跑，verify 不跑
+npm run rag:smoke   # 可选：本地进程内向量 RAG 实机自检（离线打 SKIP）
 ```
 
 ## 二次开发：业务从接口进来

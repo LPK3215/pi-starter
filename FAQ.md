@@ -30,7 +30,7 @@ dotenv does not support continuation lines. Keep all entries on one physical lin
 
 ### Where are my API keys actually stored?
 
-`npm run setup` merges them into `~/.pi/agent/auth.json` (mode `0o600`). Runtime requests read from that file via the SDK. `PI_API_KEY` in `.env` is only consumed by `setup` and never sits in the request path — you can safely delete it from `.env` after running `setup` if you want.
+`npm run setup` merges them into `~/.pi/agent/auth.json` (mode `0o600`), and that file is what the SDK authenticates with at runtime — so it is the authoritative copy. Note that `.env` is *also* loaded into the server's own `process.env` (`loadEnvFile`), so `PI_API_KEY` genuinely does sit in the server process; deleting it from `.env` is fine for authentication, but do not expect it to be absent from the process environment. It is deliberately not inherited by child processes: `exec` and MCP spawns get a filtered environment (`src/child-env.ts`), so a `bash` command can no longer read the key.
 
 ### `npm run setup` overwrote my existing key. Was that expected?
 

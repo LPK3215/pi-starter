@@ -47,7 +47,7 @@ Every `POST /chat` follows the same lifecycle: HTTP body → busy guard → `ses
 | HTTP | [Express](https://expressjs.com/) | `^5.2.1` | single process; REST shares one session, WS runs several conversations per client (cap + LRU) |
 | Schema | [TypeBox](https://www.npmjs.com/package/typebox) | `^1.1.39` | tool `parameters` definitions |
 | WebSocket | [ws](https://www.npmjs.com/package/ws) | `^8.18.0` | snapshot-driven bidirectional transport (`transport/ws.ts`) |
-| Test runner | Node built-in test runner via `tsx --test` | `^4.22.4` | 42 test files · 370 cases + 8 frontend cases, no model calls |
+| Test runner | Node built-in test runner via `tsx --test` | `^4.22.4` | 42 test files · 376 cases + 11 frontend cases, no model calls |
 | Build | `tsc -p tsconfig.build.json` + `scripts/dist-assets.cjs` | `^5.6.0` | copies `prompts/ skills/ prompt-templates/ knowledge/` into `dist/` |
 
 Truth source for the table above: [`package.json`](package.json). When versions change, update the code and this table together (the Architecture SVG refreshes automatically via `node scripts/visualization/generate_architecture.mjs`).
@@ -278,7 +278,7 @@ pi-starter/
 │   ├── index.ts          # CLI entry (interactive chat)
 │   ├── server.ts         # Web entry: parse args, listen
 │   ├── app.ts            # ★ HTTP app: /health /skills /knowledge /db /model /chat
-│   ├── lib.ts            # library export (buildAgent / createApp / setup)
+│   ├── lib.ts            # library export (buildAgent / createApp / setupPiAgentDir …)
 │   ├── setup.ts          # npm run setup: merge-write into ~/.pi/agent/
 │   ├── agent.ts          # ★ assembly: model + persona + tools + extensions → session
 │   ├── config.ts         # config layer: CLI / .env / built-in-tools tier
@@ -333,26 +333,27 @@ pi-starter/
 │   ├── 项目分析报告.md  #   engineering review
 │   └── 嵌入指南.md      #   embedding into an existing Express service
 ├── .github/workflows/
-│   └── ci.yml            # typecheck + unused + test + smoke + audit + build (ubuntu/win/mac)
+│   ├── ci.yml            # typecheck + unused + test + test:web + smoke + e2e + audit + build (ubuntu/win/mac)
+│   └── publish.yml       # tag-triggered release build (Actions unavailable in this repo — see pipeline.config.json)
 ├── web/                  # product frontend (own package.json, Vite + React + assistant-ui)
 │   └── src/pi/           #   the only hand-written glue: WS client + ExternalStore adapter
 ├── Dockerfile            # ready-to-run sandbox image (see SECURITY.md / README advanced)
 ├── LICENSE  README.md  README.zh-CN.md  CONTRIBUTING.md  SECURITY.md
 ├── CHANGELOG.md  FAQ.md  AUTHORS  .gitignore  .gitattributes
-└── package.json  tsconfig.json  tsconfig.build.json  .env.example  .dockerignore
+└── package.json  tsconfig.json  tsconfig.build.json  .env.example  .dockerignore  .cnb.yml
 ```
 
 Contract smoke tests (no model calls, never touch the real `~/.pi/agent`):
 
 ```bash
-npm test            # 370 unit + integration tests
-npm run test:web    # 8 frontend (WS client) tests — reuses tsx, adds no dependency
-npm run smoke       # 21 real WebSocket end-to-end checks
+npm test            # 376 unit + integration tests
+npm run test:web    # 11 frontend (WS client) tests — reuses tsx, adds no dependency
+npm run smoke       # 23 real WebSocket end-to-end checks
 npm run typecheck   # types + protocol completeness
 npm run lint:unused # dead code gate (the "declared but never wired" class of bug)
 npm run build
-npm run verify      # all of the above, in order — same gates as CI
-npm run e2e         # real process: restart/resume/settings round-trip (no API key)
+npm run verify      # the chain above, in order: typecheck → lint:unused → test → test:web → smoke → build → verify:embed
+npm run e2e         # real process: restart/resume/settings round-trip (no API key) — CI runs it, verify does not
 npm run rag:smoke   # optional: live check of local in-process vector RAG (SKIPs if offline)
 ```
 

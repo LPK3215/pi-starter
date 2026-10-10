@@ -43,7 +43,7 @@ Read this before running pi-starter anywhere but your own machine:
 - **Single-user session.** One process holds one agent session, and concurrent `/chat` calls return 429. Multi-user deployments need one `buildAgent()` per user with an independent session.
 - **`PI_BUILTIN_TOOLS=coding` hands disk edits and shell execution to the model**, including `exec` (process execution: stdout/stderr, background jobs, kill the process tree). It is not a sandbox and not an interactive terminal. Only enable this in environments where the model is trusted and the working directory is disposable.
 - **SQL is read-only** (`POST /db/query` accepts `SELECT` only, `db_query` tool refuses writes) — but the DB file itself is a plain `node:sqlite` file; protect it with your OS's file permissions if you use `PI_DATABASE_PATH`.
-- **API keys in `.env`** are only consumed by `npm run setup`; they are copied into `~/.pi/agent/auth.json` and are not otherwise read at runtime. Still, treat `.env` as a secret file — never commit it (`.gitignore` already excludes it).
+- **API keys in `.env`**: `npm run setup` copies them into `~/.pi/agent/auth.json` (mode `0o600`), and the SDK authenticates from that file. `.env` is additionally loaded into the server's own `process.env` (`loadEnvFile`), so the raw key value **is** present in the server process — which is precisely why it is stripped from every child environment (`src/child-env.ts`), so `exec` and MCP spawns cannot read it. Raw key values are never returned by the HTTP API or the WS protocol. Still, treat `.env` as a secret file — never commit it (`.gitignore` already excludes it).
 
 ## Dependencies
 

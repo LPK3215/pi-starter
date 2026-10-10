@@ -91,14 +91,14 @@ npm run sync:official    # 按 registry 声明的路径与内容原样重写
 
 为什么需要：`shadcn add` 会改写 import 路径并把文件平铺到 `src/components/`，实测第一次比对出 15 处差异
 （包含一处 Base UI `render` 与官方 `asChild` 的组件风味差异）。先跑 `sync:official` 再跑 `check:official`，
-应得到“一致 17 / 内容不同 0 / 本地缺失 0”。shadcn 内置件（button/skeleton/tooltip 等）不属本 registry，不比对。
+应得到“内容不同 0 / 本地缺失 0”（registry 当前共 20 个文件）。shadcn 内置件（button/skeleton/tooltip 等）不属本 registry，不比对。
 
 ## 链路自检
 
 ```bash
 npm run dev &                 # 先起前端（或直接起后端 3000）
-node scripts/probe-ws.mjs     # 默认连 ws://localhost:5173/ws，走 Vite 代理
-PI_WS=ws://127.0.0.1:3000/ws node scripts/probe-ws.mjs   # 直连后端
+npm run probe:ws              # 默认连 ws://localhost:5173/ws，走 Vite 代理
+PI_WS=ws://127.0.0.1:3000/ws npm run probe:ws   # 直连后端
 ```
 
 它会真发一轮 prompt，打印帧序列、流式增量段数、逐条消息的角色与文本长度、以及后端 stats。

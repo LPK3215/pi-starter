@@ -37,7 +37,7 @@ See the [Project Structure](README.md#project-structure) section of the README f
 - Assembly layer: `src/agent.ts` (model + prompts + tools + extensions)
 - HTTP layer: `src/app.ts` (endpoints) + `src/sse.ts` (SSE protocol)
 - Shared config: `src/config.ts` (CLI > `.env` > defaults)
-- Library entry: `src/lib.ts` — exports `buildAgent`, `createApp`, `setup`
+- Library entry: `src/lib.ts` — exports `buildAgent`, `createApp`, `setupPiAgentDir` (not `setup`)
 
 ## Making changes
 
@@ -58,10 +58,12 @@ See the [Project Structure](README.md#project-structure) section of the README f
 5. **Self-check** before opening a PR (same gates as CI):
 
    ```bash
-   npm run verify   # typecheck + test + smoke + lint:unused + build + verify:embed
+   npm run verify   # typecheck + lint:unused + test + test:web + smoke + build + verify:embed
    # or run them individually:
    npm run typecheck
+   npm run lint:unused
    npm test
+   npm run test:web
    npm run build
    ```
 

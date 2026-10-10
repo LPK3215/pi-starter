@@ -401,6 +401,12 @@ export class Conversation {
         break;
       }
       case "tool_execution_start": {
+        // 有界：正常配对的 tool_execution_end 会删掉它，但 abort 打断工具时 end 帧可能永远
+        // 不来，条目就按 toolCallId 在会话内泄漏。与 toolDurations 同一口径（500，丢最早）。
+        if (this.toolStartTimes.size >= 500) {
+          const oldest = this.toolStartTimes.keys().next().value;
+          if (oldest !== undefined) this.toolStartTimes.delete(oldest);
+        }
         this.toolStartTimes.set(event.toolCallId, Date.now());
         this.watchdog.arm(event.toolCallId, event.toolName);
         metrics.inc("toolCallsTotal");
@@ -623,13 +629,15 @@ export class Conversation {
    * summarization path (`compact()` / auto-compaction). Callers use this to decide *whether* to
    * compact, and to show the user how much is at stake — the plan itself is a pure function.
    */
-  planTrim(messages: readonly UiMessage[] = this.currentMessages()): TrimPlan {
+  planTrim(messages: readonly UiMessage[] = this.currentMessages(), estimatedTokens?: number): TrimPlan {
     const model = this.session.model ?? this.fallbackModel;
     const softCap = computeSoftCap(model.contextWindow ?? 0);
     return planContextTrim({
       messages,
       maxTokens: softCap,
       keepRecent: this.keepRecent(),
+      // 调用方持有逐条 token 缓存时把它传进来，避免这里按字符重算全量（热路径）。
+      ...(estimatedTokens !== undefined ? { estimatedTokens } : {}),
     });
   }
 
@@ -766,7 +774,10 @@ export class Conversation {
           // trim planner would also propose dropping messages — no second source of truth.
           // 复用本次已投影好的 `allMessages`，避免每个快照周期再全量投影一遍（原先这里
           // 会再调一次 `currentMessages()`，等于每周期做两遍投影 + 两遍会话树遍历）。
-          overBudget: this.planTrim(allMessages).trimmed,
+          // 注意这里刻意用**未截断**的 `allMessages`：预算是真实上下文的属性，不该被
+          // 「快照最多 500 条」这个 UI 投影上限掩盖。但判断 trim 不必逐字符重算——
+          // 逐条缓存与 `estimateConversationTokens` 是同一套公式，直接把总数传进去。
+          overBudget: this.planTrim(allMessages, this.estimateTokensCached(allMessages)).trimmed,
         },
       },
       pendingApproval: this.pendingApproval,
