@@ -303,3 +303,99 @@ assistant-ui + Tailwind 4。手写代码只有一层胶水 `web/src/pi/`：
 | `shadcn` 是**运行时 CSS 源**，不是纯 CLI | `src/index.css` 第 3 行 `@import "shadcn/tailwind.css"`，Tailwind v4 在**编译 CSS 时**解析它（自定义变体 `data-open` / `data-closed` 等只在这里定义，实测产物 CSS 里存在）。同时 `check:official` 又把 `shadcn` 当 CLI 调。所以它既不是纯运行时依赖、也不是纯开发依赖——但产物已内联进 `web/dist`，**构建期依赖**才是它的准确归类 | `web/package.json`：`shadcn` 从 `dependencies` 移到 `devDependencies`（构建阶段 `npm ci --prefix web` 与 Dockerfile 的 web-builder 都装全量依赖，不受影响） |
 | 依赖审计缺一个「只对新增报错」的闸门 | 恒红的闸门等于没有闸门。改为与 `check-registry-sync.mjs` 同款的**基线化**门禁 | 新增 `web/scripts/check-audit.mjs` + `web/scripts/audit-baseline.json`：生产依赖（`--omit=dev`）必须 0 高危（硬门）；开发依赖里的已知通告登记后放过、只对**新增**或**影响范围变化**报错 |
 | `npm run verify` 与远端门禁口径不一致 | 远端有审计步骤、本地没有——这个不对称本身就是隐患 | 新增 `scripts/verify-audit.mjs`（根包 + `web/` 两段审计，缺 `web/node_modules` 时明确 SKIP），并接进 `npm run verify` |
+
+## 13. 并发开对话时容量上限被突破（2026-10-10 第三轮，基线 `05ad53b`）
+
+### 症状
+
+同一连接并发发 `new_conversation`，`ClientSession` 承诺的「每客户端最多
+`DEFAULT_MAX_OPEN_CONVERSATIONS`（8）个打开对话、有界资源」在并发下不成立：同时在册的
+`AgentSession` 数会短暂达到 **cap + 1**。
+
+### 根因（逐行核实 + 实测复现）
+
+`src/client-session.ts` 的 `addConversation()` 原先这样写：
+
+```
+this.evictForCapacity();                       // ① 插入前收一次
+const session = await factory(...);            // ② await 窗口
+this.evictForCapacity();                       // ③ 注释说「分配完成后补收一次」
+...
+this.convs.set(conv.id, conv);                 // ④ 新对话到这一行才入册
+```
+
+③ 跑在 ④ 之前，而 `evictForCapacity()` 只遍历 `this.convs`。**这一次刚 `await` 出来的
+session 不在遍历集合里，③ 不可能收到它自己** —— 它只能收到「旧的那些」。并发 N 个
+`new_conversation` 时，每个请求都从各自的 `await` 回来、各自分配一个 session，而彼此在
+对方的 `convs` 里都还不存在，于是谁也看不见谁。
+
+触发不需要恶意构造：`src/transport/ws.ts` 是 `void this.dispatch(msg)`，WS 命令本就并行；
+客户端快速连点「新对话」即可。
+
+### 实测证据
+
+直接驱动真身 `ClientSession` 类（只在 SDK 边界注入替身 session 与 push 出口）。cap = 4，
+并发 8 次 `newConversation()`，工厂带 4ms 延迟：
+
+```
+conversationCount()  = 4      ← 计数看起来正常
+分配出的 session 数   = 8
+同时存活峰值         = 5      ← 超过 cap 4
+```
+
+逐次分配打点，超限发生在第 5 次分配返回时：
+
+```
+[alloc] sess-4 返回；此刻存活的 session 有 5 个: 4,5,6,7,8
+[alloc] sess-5 返回；此刻存活的 session 有 5 个: 3,4,5,6,7
+```
+
+三种时序（均匀延迟 / 逆序延迟 / 同时返回）**都能复现 `peak = cap + 1`**。
+
+### 一处必须更正的上轮判断
+
+本 Issue 里上一轮（第三轮开工前）的诊断把这条记成了「**已经有部分 AgentSession 永远没人
+dispose**」的泄漏，并给出了「被 dispose 的 id = 1,2,3,4 / 从未被 dispose 的 id = 5,6,7,8」
+的观测。**那个判断是错的。** 复测后确认：结束时仍然存活的恰好是**当时在册**的会话，它们不该
+在那时被 dispose；峰值超限之后每次分配返回都会触发一轮淘汰，所以容量**最终会收敛**到 cap。
+把「在册会话尚未释放」读成「泄漏」，是把两个不同的东西混在一起了。
+
+准确的问题定性是：**并发下容量被瞬时突破**（peak = cap + 1），而不是永久泄漏。这条更正一并
+记在这里，避免后续排查沿用错误结论。
+
+### 修法
+
+容量必须**在分配之前显式占住**，而不是靠分配之后回头补收。改动集中在
+`src/client-session.ts`：
+
+1. 新增 `inFlight` 字段 = 已占名额但尚未入册的分配数。容量判定从「只看 `convs.size`」
+   改成 `convs.size + inFlight`，`evictForCapacity()` 的循环条件与日志同步跟上。
+2. 新增 `reserveSlot()` / `releaseSlot()`：`reserveSlot()` 先淘汰腾位，腾不出就**等**前一个
+   占用归还（并发涌进来时 `convs` 可能还是空的，淘汰无从下手，此时唯一正确的动作是排队，
+   而不是继续分配）；占位在分配前完成，`inFlight += 1` 与判定之间没有 `await`，所以是原子的。
+3. `addConversation()` 用 `try / finally` 包住「分配 → 包装 → 入册」，用 `handedOff` 标记
+   所有权是否已交给 `convs`：成功入册后 `finally` 不回收；任何失败路径都把刚拿到手的
+   session 显式 `dispose()` 再归还名额——否则它就是没人持有、也没人释放的孤儿。
+
+保留原有语义：仍然**淘汰而非拒绝**（客户端点了新对话，给报错比静默退休一条冷对话更糟），
+活动对话永不淘汰。
+
+### 复验
+
+| 命令 | 结果 |
+|---|---|
+| `npx tsx --test src/client-session.test.ts` | **7/7 通过**（新增文件） |
+| 反向验证 | 把 `reserveSlot()` 退回「只见 `convs.size`」的旧语义 → **5 条变红**（峰值 5/4/3 分别超 4/3/2）；恢复 → 全绿。证明确实拦得住，不是恰好为绿 |
+
+改动后三种时序实测 `peak = cap`（4/3/2 各档均守住），且无游离 session。
+
+### 边界覆盖
+
+并发回归之外，另外四条边界都实测过（同一组用例驱动真身类）：
+
+| 边界 | 行为 |
+|---|---|
+| 分配失败（工厂抛错） | 名额归还，失败调用不永久吃掉一个容量位 |
+| 入册阶段抛错（工厂成功但包装/快照失败） | 刚拿到的 session 被显式 `dispose()`，不留孤儿 |
+| `dispose()` 时仍有请求在排队 | 唤醒全部等待者并清空 `inFlight`，不留永久挂起的 Promise |
+| 串行开对话 | 淘汰与上限行为不变 |

@@ -17,7 +17,7 @@ import { AppError, badRequest } from "./errors.js";
 import { assertSessionFileAllowed, type StoredConversation } from "./sessions/store.js";
 import type { PlanModeController } from "./modes/plan-mode.js";
 import type { ServerMessage, UiApproval, UiConversation } from "./protocol.js";
-import { Conversation, type CompactionOutcome } from "./conversation/conversation.js";
+import { Conversation, type CompactionOutcome, type Session } from "./conversation/conversation.js";
 
 export interface ClientSessionOptions {
   clientId: string;
@@ -88,6 +88,18 @@ export class ClientSession {
   private dormantCache:
     | { index: readonly StoredConversation[]; liveKey: string; items: UiConversation[] }
     | undefined;
+  /**
+   * 已经获准分配、但还没入册的对话数。
+   *
+   * `addConversation()` 在 `await factory()` 期间不能把名额先记进 `convs`（新对话的对象
+   * 还没造出来），而 `evictForCapacity()` 只看得见 `convs`。并发开对话时每个请求都在
+   * 自己的 await 窗口里，彼此在对方的 `convs` 里都不存在，于是「按 convs.size 判定」
+   * 会同时放行多个请求，同时存活的 AgentSession 峰值达到 cap + 并发度。
+   *
+   * 每个 AgentSession 都带完整 loader、工具表与事件订阅，所以容量必须**在分配之前
+   * 声明式占住**，而不是靠分配之后回头补收。这个计数就是那份占位。
+   */
+  private inFlight = 0;
 
   constructor(options: ClientSessionOptions) {
     this.clientId = options.clientId;
@@ -169,46 +181,54 @@ export class ClientSession {
       }
     }
 
-    // Enforce the cap BEFORE allocating: each conversation owns a full AgentSession, so
-    // allocating first and trimming after would briefly exceed the budget we are protecting.
-    this.evictForCapacity();
+    // 容量必须在分配**之前**占住：每个对话都持有一个完整 AgentSession（loader + 工具 +
+    // 事件订阅），先分配再补收会让同时在册的对象数冲破上限。占位计入 `inFlight`，
+    // 所以「本请求自己的 await 窗口」对并发请求是可见的——这正是原先缺的那一环。
+    await this.reserveSlot();
+    let session: Session | undefined;
+    let handedOff = false;
+    try {
+      session = factory
+        ? await factory(resumeFrom ? { resumeFrom } : undefined)
+        : this.agent.session;
 
-    const session = factory
-      ? await factory(resumeFrom ? { resumeFrom } : undefined)
-      : this.agent.session;
-    // 上面的检查与这里的插入之间隔着 `await`：两个并发 `new_conversation`（WS 是 `void dispatch`，
-    // 命令会并行）都能先通过检查、再各自插入，把 size 抬到 cap+1——每个对话都持有一个完整
-    // AgentSession。分配完成后补收一次，确保上限是真正的上限。
-    this.evictForCapacity();
-    let conv!: Conversation;
-    conv = new Conversation({
-      clientId: this.clientId,
-      session,
-      fallbackModel: this.agent.model,
-      cwd: this.cwd,
-      cfg: this.cfg,
-      push: (msg) => this.emit(msg),
-      listConversations: () => this.listConversations(),
-      onTurnEnd: () => {
-        this.rememberConversation?.(conv);
-        this.emitConversations();
-      },
-      keepRecent: this.keepRecent,
-      toolTimeoutMs: this.toolTimeoutMs(),
-      planMode: this.planMode,
-      ownsSession: Boolean(factory),
-    });
-    const saved = this.persistedConversations().find((entry) => entry.sessionId === conv.id);
-    conv.adoptSavedTitle(saved?.title);
-    this.rememberConversation?.(conv);
-    // Defensive: never leave a live wrapper for the same id behind (it would keep its subscription).
-    const collision = this.convs.get(conv.id);
-    if (collision && collision !== conv) collision.dispose();
-    this.convs.set(conv.id, conv);
-    this.activeId = conv.id;
-    this.emitConversations();
-    conv.getState();
-    return conv;
+      let conv!: Conversation;
+      conv = new Conversation({
+        clientId: this.clientId,
+        session,
+        fallbackModel: this.agent.model,
+        cwd: this.cwd,
+        cfg: this.cfg,
+        push: (msg) => this.emit(msg),
+        listConversations: () => this.listConversations(),
+        onTurnEnd: () => {
+          this.rememberConversation?.(conv);
+          this.emitConversations();
+        },
+        keepRecent: this.keepRecent,
+        toolTimeoutMs: this.toolTimeoutMs(),
+        planMode: this.planMode,
+        ownsSession: Boolean(factory),
+      });
+      const saved = this.persistedConversations().find((entry) => entry.sessionId === conv.id);
+      conv.adoptSavedTitle(saved?.title);
+      this.rememberConversation?.(conv);
+      // Defensive: never leave a live wrapper for the same id behind (it would keep its subscription).
+      const collision = this.convs.get(conv.id);
+      if (collision && collision !== conv) collision.dispose();
+      this.convs.set(conv.id, conv);
+      this.activeId = conv.id;
+      this.emitConversations();
+      conv.getState();
+      // 会话所有权已经交给 `convs`，后面的 finally 不再回收它。
+      handedOff = true;
+      return conv;
+    } finally {
+      // 分配成功之后（已入册）不能 dispose；任何失败路径都必须把刚拿到手的 session 放掉，
+      // 否则它就是本次占位之外新造出来的孤儿——没人持有、也没人释放。
+      if (!handedOff && session && factory) session.dispose();
+      this.releaseSlot();
+    }
   }
 
   /**
@@ -219,7 +239,9 @@ export class ClientSession {
    * conversation is never evicted, and we never drop below one.
    */
   private evictForCapacity(): void {
-    while (this.convs.size >= this.maxOpenConversations) {
+    // 判定口径是「在册对话 + 在途分配」，不是只看 `convs.size`：并发的 `addConversation()`
+    // 在 await 工厂时已经占了名额，必须一并计入，否则多个请求会同时放行。
+    while (this.convs.size + this.inFlight >= this.maxOpenConversations) {
       // Candidates: everything except the active one.
       const candidates = [...this.convs.values()].filter((conv) => conv.id !== this.activeId);
       if (candidates.length === 0) break; // only the active one remains — cannot evict
@@ -231,6 +253,7 @@ export class ClientSession {
         .debug("超出并发会话上限，回收最久未活动的对话", {
           victimId: victim.id,
           open: this.convs.size,
+          inFlight: this.inFlight,
           cap: this.maxOpenConversations,
         });
       this.rememberConversation?.(victim);
@@ -238,6 +261,42 @@ export class ClientSession {
       this.convs.delete(victim.id);
     }
   }
+
+  /**
+   * 占住一个名额；名额用尽时排队等，等到了才返回。调用方必须在 `finally` 里 `releaseSlot()`。
+   *
+   * 为什么不能只靠 `evictForCapacity()`：淘汰只在 `convs` 里找得到候选时有用，而并发的
+   * `newConversation()`（WS 是 `void dispatch`，命令本就并行）在 `await` 工厂期间
+   * `convs` 里还看不到彼此。旧写法「分配完再补收一次」补不到**自己刚分配的这个** ——
+   * 补收时它还没入册。所以容量必须**在分配之前**声明显式占住，这就是 `inFlight`。
+   *
+   * 名额真的用尽时（`convs` 里非 active 的对话已全部收完）唯一正确的动作是**等**，
+   * 不是继续分配 —— 继续分配就是超出上限本身。
+   */
+  private async reserveSlot(): Promise<void> {
+    while (this.convs.size + this.inFlight >= this.maxOpenConversations) {
+      // 先尝试淘汰腾位；一轮下来仍无位置，就只能等前一个占用归还。
+      this.evictForCapacity();
+      if (this.convs.size + this.inFlight < this.maxOpenConversations) break;
+      await new Promise<void>((resolve) => this.slotWaiters.push(resolve));
+    }
+    this.inFlight += 1;
+  }
+
+  /**
+   * 释放一次占用。
+   *
+   * `inFlight` 必须减一：这个名额此后要么已经变成 `convs` 里的对话（入册路径），
+   * 要么被彻底放弃（失败路径），两种结局都不该继续占着位置。
+   * 有等待者时唤醒一位，由它重走一遍判定（它会自己把 `inFlight` 加回去）。
+   */
+  private releaseSlot(): void {
+    this.inFlight -= 1;
+    const next = this.slotWaiters.shift();
+    if (next) next();
+  }
+
+  private readonly slotWaiters: Array<() => void> = [];
 
   get active(): Conversation | undefined {
     return this.convs.get(this.activeId);
@@ -442,5 +501,11 @@ export class ClientSession {
     this.convs.clear();
     this.activeId = "";
     this.dormantCache = undefined;
+    // 还挂着等的请求必须唤醒：连接已经拆了，再没有谁会归还名额，让它们挂在一个永远不会
+    // 被兑现的 Promise 上就是泄漏。唤醒后它们会重走判定 —— 此时 `convs` 已空、`inFlight`
+    // 归零，于是各自拿到名额继续分配；调用方的生命周期由它自己的 await 决定。
+    this.inFlight = 0;
+    const waiters = this.slotWaiters.splice(0, this.slotWaiters.length);
+    for (const resolve of waiters) resolve();
   }
 }
