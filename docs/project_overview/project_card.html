@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=860">
+<title>pi-starter · Project Card</title>
+<meta name="description" content="pi-starter — one-page project card, exportable as a shareable PNG long image.">
+<style>
+/* Palette and type scale are taken from ./style.css so the card and the full overview
+   read as one product. No Google Fonts: a CDN webfont can be missing at export time, and
+   a PNG with fallback metrics looks broken in a way nobody notices until it is shared. */
+:root {
+  --bg: #0b1220;
+  --panel: #141d31;
+  --panel-2: #1b2740;
+  --stroke: #26344f;
+  --text: #e6edf7;
+  --muted: #93a3bd;
+  --accent: #22c55e;
+  --accent-2: #38bdf8;
+  --accent-3: #facc15;
+  --pink: #f472b6;
+  --violet: #a78bfa;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  background: #05080f;
+  color: var(--text);
+  font-family: var(--sans);
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+}
+#card-content {
+  width: 800px;
+  margin: 0 auto;
+  background: var(--bg);
+  border-left: 1px solid var(--stroke);
+  border-right: 1px solid var(--stroke);
+  padding: 0 0 28px;
+}
+section { padding: 26px 36px; border-bottom: 1px solid var(--stroke); }
+section:last-of-type { border-bottom: none; }
+h2 {
+  margin: 0 0 14px;
+  font-size: 12px;
+  letter-spacing: 1.6px;
+  text-transform: uppercase;
+  color: var(--accent-2);
+  font-weight: 700;
+}
+
+/* ---------- hero ---------- */
+.hero { padding: 34px 36px 26px; background: var(--panel); border-bottom: 3px solid var(--accent); }
+.kicker { margin: 0 0 8px; font-size: 11px; letter-spacing: 2px; text-transform: uppercase; color: var(--accent-2); font-weight: 700; }
+.hero h1 { margin: 0; font-size: 54px; line-height: 1.05; font-weight: 800; letter-spacing: -1.5px; }
+.hero h1 .pi { color: var(--accent); }
+.tagline { margin: 12px 0 0; font-size: 17px; max-width: 690px; }
+.tagline strong { color: var(--text); }
+.hero-chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 18px 0 0; padding: 0; list-style: none; }
+.hero-chips li {
+  font-family: var(--mono); font-size: 12.5px; color: var(--text);
+  background: var(--panel-2); border: 1px solid var(--stroke); border-radius: 999px; padding: 5px 12px;
+}
+.hero-chips .bl { color: var(--muted); }
+
+/* ---------- value ---------- */
+.value { display: block; gap: 14px; }
+.value-item { margin-bottom: 12px; }
+.value-item:last-child { margin-bottom: 0; }
+.value-item h3 { margin: 0 0 3px; font-size: 14.5px; color: var(--accent-3); font-weight: 700; }
+.value-item p { margin: 0; font-size: 14.5px; color: var(--muted); }
+.value-item p code { font-family: var(--mono); font-size: 13px; color: var(--text); }
+
+/* ---------- diagram ---------- */
+.diagram { padding: 22px 20px 18px; }
+.diagram svg { display: block; width: 740px; height: auto; margin: 0 auto; }
+.diagram figcaption { margin: 12px auto 0; width: 740px; font-size: 12.5px; color: var(--muted); }
+
+/* ---------- pills ---------- */
+.pills { display: flex; flex-wrap: wrap; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.pills li {
+  font-size: 13.5px; color: var(--text); background: var(--panel);
+  border: 1px solid var(--stroke); border-radius: 999px; padding: 7px 14px;
+}
+.pills li.lead { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+
+/* ---------- highlights ---------- */
+ul.highlights { margin: 0; padding: 0; list-style: none; }
+ul.highlights li {
+  position: relative; padding: 0 0 0 22px; margin-bottom: 11px; font-size: 14.5px; color: var(--text);
+}
+ul.highlights li:last-child { margin-bottom: 0; }
+ul.highlights li::before { content: ""; position: absolute; left: 0; top: 8px; width: 9px; height: 9px; border-radius: 50%; background: var(--accent); }
+ul.highlights code { font-family: var(--mono); font-size: 13px; color: var(--accent-2); }
+
+/* ---------- metrics ---------- */
+.metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+.metric { background: var(--panel); border: 1px solid var(--stroke); border-radius: 14px; padding: 16px 12px; text-align: center; }
+.metric .num { display: block; font-size: 32px; font-weight: 800; color: var(--accent); line-height: 1.1; letter-spacing: -1px; }
+.metric .label { display: block; margin-top: 5px; font-size: 11.5px; color: var(--muted); line-height: 1.35; }
+
+/* ---------- quickstart ---------- */
+pre.cmd {
+  margin: 0; padding: 14px 16px; background: #060b16; border: 1px solid var(--stroke); border-radius: 12px;
+  font-family: var(--mono); font-size: 13px; line-height: 1.85; color: #cfe3ff; white-space: pre; overflow: hidden;
+}
+pre.cmd .cm { color: #6b7f9e; }
+
+/* ---------- footer ---------- */
+.foot { padding: 20px 36px 0; display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; font-size: 12.5px; color: var(--muted); }
+.foot .lic { font-family: var(--mono); }
+.foot a { color: var(--accent-2); text-decoration: none; }
+
+/* ---------- actions (never part of the exported image) ---------- */
+#actions { width: 800px; margin: 18px auto 40px; display: flex; gap: 10px; align-items: center; }
+#actions button, #actions a.btn {
+  font: inherit; font-size: 14px; cursor: pointer; text-decoration: none;
+  color: #06131f; background: linear-gradient(90deg, var(--accent), var(--accent-2));
+  border: none; border-radius: 11px; padding: 10px 18px; font-weight: 700;
+}
+#actions a.btn { background: var(--panel-2); color: var(--text); border: 1px solid var(--stroke); font-weight: 500; }
+#status { font-size: 13px; color: var(--muted); margin-left: auto; font-family: var(--mono); }
+#status.ok { color: var(--accent); }
+#status.bad { color: var(--pink); }
+</style>
+</head>
+<body>
+
+<div id="card-content">
+
+  <header class="hero">
+    <p class="kicker">Agent scaffold · built on the pi-agent SDK</p>
+    <h1><span class="pi">π</span>-starter</h1>
+    <p class="tagline">Clone it and it runs. Add tools, extensions, skills, knowledge, or a new persona — and it becomes a <strong>vertical agent</strong>.</p>
+    <!-- BEGIN:generated-card-chips -->
+<ul class="hero-chips">
+      <li><span class="bl">release</span> v0.4.1</li>
+      <li><span class="bl">node</span> &gt;=22.19</li>
+      <li><span class="bl">license</span> MIT</li>
+      <li><span class="bl">upstream</span> pi-coding-agent 0.83.0</li>
+    </ul>
+<!-- END:generated-card-chips -->
+  </header>
+
+  <section class="value">
+    <h2>What it solves</h2>
+    <div class="value-item">
+      <h3>A runnable skeleton, not a demo</h3>
+      <p>The SDK's <code>createAgentSession</code> is wrapped once into <code>buildAgent()</code>; HTTP+SSE, WebSocket, an in-process CLI and the official RPC stdio transport all sit behind that single core.</p>
+    </div>
+    <div class="value-item">
+      <h3>Vertical by injection, not by fork</h3>
+      <p>Business logic enters through <code>extraTools</code>, <code>extraSkillPaths</code>, <code>extraKnowledgeDirs</code>, <code>extraExtensions</code>. User-level <code>~/.pi</code> scanning stays off, so nothing leaks into a deployed agent.</p>
+    </div>
+    <div class="value-item">
+      <h3>Safety is a first-class axis</h3>
+      <p>Three built-in-tool tiers, a fail-closed path guard, read-only SQL, and an approval gate whose <code>deny</code> rules cannot be overridden and whose timeout closes the turn.</p>
+    </div>
+  </section>
+
+  <figure class="diagram">
+    <h2>Architecture</h2>
+    <svg viewBox="0 0 740 372" width="740" height="372" role="img" aria-label="pi-starter layered architecture, simplified">
+      <text x="0" y="12" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Arial, sans-serif" font-size="11" font-weight="700" fill="#93a3bd">TRANSPORTS — ONE CORE BEHIND ALL OF THEM</text>
+      <g font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Arial, sans-serif" font-size="13" text-anchor="middle">
+        <rect x="0" y="20" width="134" height="38" rx="9" fill="#141d31" stroke="#26344f"/><text x="67" y="44" fill="#e6edf7">CLI</text>
+        <rect x="149" y="20" width="134" height="38" rx="9" fill="#141d31" stroke="#26344f"/><text x="216" y="44" fill="#e6edf7">HTTP + SSE</text>
+        <rect x="298" y="20" width="134" height="38" rx="9" fill="#141d31" stroke="#26344f"/><text x="365" y="44" fill="#e6edf7">WebSocket</text>
+        <rect x="447" y="20" width="134" height="38" rx="9" fill="#141d31" stroke="#26344f"/><text x="514" y="44" fill="#e6edf7">Library</text>
+        <rect x="596" y="20" width="144" height="38" rx="9" fill="#141d31" stroke="#26344f"/><text x="668" y="44" fill="#e6edf7">RPC stdio</text>
+      </g>
+      <line x1="370" y1="62" x2="370" y2="76" stroke="#26344f" stroke-width="2"/><polygon points="363,76 377,76 370,86" fill="#38bdf8"/>
+
+      <text x="0" y="102" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Arial, sans-serif" font-size="11" font-weight="700" fill="#93a3bd">ASSEMBLY</text>
+      <rect x="0" y="110" width="740" height="40" rx="9" fill="#1b2740" stroke="#22c55e"/>
+      <text x="370" y="135" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Arial, sans-serif" font-size="15" font-weight="700" fill="#22c55e">buildAgent() — one assembly core, one conversation</text>
+      <line x1="370" y1="154" x2="370" y2="166" stroke="#26344f" stroke-width="2"/><polygon points="363,166 377,166 370,176" fill="#38bdf8"/>
+
+      <text x="0" y="192" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Arial, sans-serif" font-size="11" font-weight="700" fill="#93a3bd">INJECTABLE RESOURCES</text>
+      <g font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Arial, sans-serif" font-size="11.5" text-anchor="middle">
+        <rect x="0" y="200" width="85" height="34" rx="8" fill="#141d31" stroke="#26344f"/><text x="42" y="221" fill="#e6edf7">model</text>
+        <rect x="93" y="200" width="85" height="34" rx="8" fill="#141d31" stroke="#26344f"/><text x="135" y="221" fill="#e6edf7">prompts</text>
+        <rect x="186" y="200" width="85" height="34" rx="8" fill="#141d31" stroke="#26344f"/><text x="228" y="221" fill="#e6edf7">tools</text>
+        <rect x="279" y="200" width="85" height="34" rx="8" fill="#141d31" stroke="#26344f"/><text x="321" y="221" fill="#e6edf7">skills</text>
+        <rect x="372" y="200" width="85" height="34" rx="8" fill="#141d31" stroke="#26344f"/><text x="414" y="221" fill="#e6edf7">knowledge</text>
+        <rect x="465" y="200" width="85" height="34" rx="8" fill="#141d31" stroke="#26344f"/><text x="507" y="221" fill="#e6edf7">memory</text>
+        <rect x="558" y="200" width="85" height="34" rx="8" fill="#141d31" stroke="#26344f"/><text x="600" y="221" fill="#e6edf7">database</text>
+        <rect x="651" y="200" width="89" height="34" rx="8" fill="#141d31" stroke="#26344f"/><text x="695" y="221" fill="#e6edf7">extensions</text>
+      </g>
+      <line x1="370" y1="238" x2="370" y2="250" stroke="#26344f" stroke-width="2"/><polygon points="363,250 377,250 370,260" fill="#38bdf8"/>
+
+      <rect x="0" y="264" width="740" height="40" rx="9" fill="#141d31" stroke="#38bdf8"/>
+      <text x="370" y="289" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Arial, sans-serif" font-size="14" fill="#e6edf7">AgentSession — @earendil-works/pi-coding-agent</text>
+      <line x1="370" y1="308" x2="370" y2="320" stroke="#26344f" stroke-width="2"/><polygon points="363,320 377,320 370,330" fill="#38bdf8"/>
+
+      <rect x="0" y="334" width="740" height="34" rx="9" fill="#141d31" stroke="#26344f"/>
+      <text x="370" y="356" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Arial, sans-serif" font-size="13" fill="#93a3bd">snapshot protocol with a rev chain — web/ React UI speaks the same frames</text>
+    </svg>
+    <figcaption>Simplified from <code>docs/architecture.svg</code>, which is generated from source; the full page keeps every layer and count.</figcaption>
+  </figure>
+
+  <section>
+    <h2>Tech stack</h2>
+    <ul class="pills">
+      <li class="lead">TypeScript, strict ESM</li>
+      <li>Node.js (built-in node:sqlite)</li>
+      <li>@earendil-works/pi-agent SDK</li>
+      <li>Express</li>
+      <li>ws</li>
+      <li>TypeBox</li>
+      <li>React + Vite frontend</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>What stands out</h2>
+    <ul class="highlights">
+      <li>One <code>buildAgent()</code> core behind CLI, HTTP+SSE, WebSocket, library and official RPC.</li>
+      <li>Pluggable RAG: zero-dependency keyword search, opt-in vector retrieval with swappable embedder and store.</li>
+      <li>Approval gate with non-overridable deny rules, a watchdog, and cross-session memory at owner-only file modes.</li>
+      <li>MCP bridge, plan mode, subagents, web tools, process execution — all optional, all injectable.</li>
+      <li>Docs are code: every number on this card is generated from source and re-checked in CI.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>By the numbers</h2>
+    <div class="metrics">
+      <!-- BEGIN:generated-card-metrics -->
+<div class="metric"><span class="num">505</span><span class="label">test cases, offline, no real model call</span></div>
+      <div class="metric"><span class="num">47</span><span class="label">HTTP route handlers</span></div>
+      <div class="metric"><span class="num">84</span><span class="label">backend source files</span></div>
+      <div class="metric"><span class="num">9</span><span class="label">gates in npm run verify</span></div>
+<!-- END:generated-card-metrics -->
+    </div>
+  </section>
+
+  <section>
+    <h2>Quickstart</h2>
+    <pre class="cmd">npm install
+cp .env.example .env      <span class="cm"># fill PI_API_KEY / PI_MODEL</span>
+npm run setup &amp;&amp; npm run dev      <span class="cm"># CLI — or npm run web for HTTP + SSE + the built UI</span></pre>
+  </section>
+
+  <div class="foot">
+    <!-- BEGIN:generated-card-license -->
+<span class="lic">MIT License © 2026 LPK3215 · github.com/LPK3215/pi-starter</span>
+<!-- END:generated-card-license -->
+    <span>Full overview: <a href="./index.html">docs/project_overview/index.html</a></span>
+  </div>
+
+</div>
+
+<div id="actions">
+  <button type="button" id="export-btn">Export as PNG</button>
+  <a class="btn" href="./index.html">Open full overview</a>
+  <span id="status">loading html2canvas…</span>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/html2canvas@1/dist/html2canvas.min.js" onerror="window.__h2cFailed = true"></script>
+<script>
+(function () {
+  "use strict";
+
+  var statusEl = document.getElementById("status");
+  var button = document.getElementById("export-btn");
+  var card = document.getElementById("card-content");
+  var actions = document.getElementById("actions");
+  var ready = typeof window.html2canvas === "function";
+
+  function setStatus(text, cls) {
+    statusEl.textContent = text;
+    statusEl.className = cls || "";
+  }
+
+  function stamp() {
+    return new Date().toISOString().slice(0, 10);
+  }
+
+  /* Warm-up: render a throwaway frame right after load so the first real click does not pay
+     the clone-and-layout cost cold. Deliberately small — the whole card at 2x would make the
+     page feel slow before anyone asked for an image. */
+  function warmUp() {
+    if (!ready) return;
+    try {
+      window.html2canvas(card, { scale: 0.4, backgroundColor: null, logging: false });
+    } catch (e) {
+      /* A failed warm-up says nothing about the real capture; the button reports its own state. */
+    }
+  }
+
+  function exportPng() {
+    if (!ready) {
+      setStatus("html2canvas unavailable — use a browser or system screenshot", "bad");
+      return;
+    }
+    setStatus("rendering…", "");
+    button.disabled = true;
+    /* The action bar sits outside #card-content, but the page background does not: hide it so a
+       reflow during capture can never drag the button into the image. */
+    var previous = actions.style.display;
+    actions.style.display = "none";
+    window.html2canvas(card, {
+      scale: 2,
+      useCORS: true,
+      backgroundColor: "#0b1220",
+      scrollY: -window.scrollY,
+      logging: false
+    }).then(function (canvas) {
+      var link = document.createElement("a");
+      link.download = "pi-starter_card_" + stamp() + ".png";
+      link.href = canvas.toDataURL("image/png");
+      link.click();
+      setStatus("saved pi-starter_card_" + stamp() + ".png", "ok");
+    }, function (err) {
+      setStatus("export failed: " + (err && err.message ? err.message : "unknown"), "bad");
+    }).then(function () {
+      actions.style.display = previous;
+      button.disabled = false;
+    });
+  }
+
+  button.addEventListener("click", exportPng);
+
+  if (ready) {
+    setStatus("ready", "ok");
+    if (document.readyState === "complete") warmUp();
+    else window.addEventListener("load", warmUp);
+  } else {
+    window.addEventListener("load", function () {
+      ready = typeof window.html2canvas === "function";
+      setStatus(ready ? "ready" : window.__h2cFailed
+        ? "CDN blocked — use a browser or system screenshot"
+        : "html2canvas not loaded — use a browser or system screenshot", ready ? "ok" : "bad");
+      if (ready) warmUp();
+    });
+  }
+})();
+</script>
+<!-- Project card for pi-starter. Self-contained: CSS and JS are inline, the only external
+     dependency is html2canvas over https. The chips, the metric cards and the license line
+     between the BEGIN/END markers are written by scripts/visualization/generate_overview.mjs
+     (`npm run docs:overview`) from scripts/visualization/metrics.mjs — the same source behind
+     docs/project_overview/index.html, so the two pages can never report different numbers.
+     Palette comes from ./style.css. English end to end, including the exported PNG. -->
+</body>
+</html>

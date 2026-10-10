@@ -4,7 +4,7 @@
  * 为什么存在：README 的指标表和 `docs/project_overview/` 的页面数字原先各抄一份。
  * 手抄的结局是页面上挂着 `37 files · 308 cases`——这组数在代码里早就不成立了，而 CI 抓不到，
  * 因为它没有任何真源可比。现在所有计数从这里出：`generate_readme_numbers.mjs` 写 README 表格，
- * `generate_overview.mjs` 写全景页的 METRICS 块，口径只有一份。
+ * `generate_overview.mjs` 写全景页的 METRICS 块与名片页 `project_card.html` 的生成区，口径只有一份。
  *
  * 口径（刻意写死在这里，改口径就改这里，两条下游会一起跟着变）：
  *   - 用例数 = `package.json` 的 `test` / `test:web` 清单里每个文件顶层 `test(` 的声明数。
@@ -147,6 +147,8 @@ export function collectMetrics() {
   return {
     version: pkg.version,
     license: pkg.license,
+    copyright: literal("LICENSE", /^Copyright \(c\) (.+)$/m, "LICENSE copyright line"),
+    repoSlug: String(pkg.repository.url).replace(/^git\+/, "").replace(/\.git$/, "").replace(/^https?:\/\//, ""),
     enginesNode: pkg.engines.node,
     deps: {
       sdk: pkg.dependencies["@earendil-works/pi-coding-agent"],

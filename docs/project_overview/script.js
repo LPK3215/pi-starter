@@ -14,6 +14,8 @@
   "version": "0.4.1",
   "releaseTag": "v0.4.1",
   "license": "MIT",
+  "copyright": "2026 LPK3215",
+  "repoSlug": "github.com/LPK3215/pi-starter",
   "enginesNode": ">=22.19",
   "sdkVersion": "0.83.0",
   "expressVersion": "^5.2.1",

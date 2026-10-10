@@ -372,7 +372,7 @@ pi-starter/
 │   ├── architecture.svg
 │   ├── sse-protocol.svg
 │   ├── knowledge-retrieval.svg # pluggable RAG retrieval pipeline
-│   ├── project_overview/ #   static HTML overview page (index.html + script.js + style.css); docs/index.html redirects here — the layout GitHub Pages classic mode serves from `docs/`, not enabled on this repo yet
+│   ├── project_overview/ #   static HTML overview page (index.html + script.js + style.css + project_card.html, the exportable one-image card); docs/index.html redirects here — the layout GitHub Pages classic mode serves from `docs/`, not enabled on this repo yet
 │   ├── 使用指南.md      #   getting started: three shapes, adding business logic, troubleshooting (Chinese)
 │   ├── 参考手册.md      #   GENERATED: WS protocol / REST / tools / env vars / npm scripts
 │   ├── 能力与边界.md    #   capability matrix & boundaries vs the SDK
@@ -678,6 +678,7 @@ Grouped by the question you are trying to answer. Read this index first, then pi
 | [`FAQ.md`](FAQ.md) | Setup, runtime, model switching, deployment, development Q&A |
 | [`README.zh-CN.md`](README.zh-CN.md) | Chinese companion, mirrored section by section; Quick Start and secondary development live there too |
 | [`docs/project_overview/index.html`](docs/project_overview/index.html) | Interactive one-page panorama of the whole project (architecture, stack, capabilities, routes, quality). Its numbers, file lists, route table and gate list are generated from source by `npm run docs:overview` |
+| [`docs/project_overview/project_card.html`](docs/project_overview/project_card.html) | The same story as one shareable image: an 800 px card that exports itself to a 2x PNG. Its numbers come from the same generator, so the two pages cannot disagree |
 
 **The interface: what it actually exposes**
 

@@ -16,9 +16,12 @@
  *      所以**关掉 JS 也和开着 JS 一致**，而 CI 能发现两者不同；
  *   3. `BEGIN/END:generated-*` 标记区：src 顶层文件清单、docs / scripts / 根目录清单、
  *      完整 REST 路由表、`npm run verify` 的门禁列表；
- *   4. 断言：`src/` 的每个子目录都在结构树里、每个 `docs/*.md` 都在文档索引里、
+ *   4. 名片页 `project_card.html`（一键导出 PNG 的长图）的徽章、数字卡与许可行——
+ *      它和全景页读同一份 metrics，所以两份页面上的同一个数**永远相等**，
+ *      不靠「记得两边一起改」；
+ *   5. 断言：`src/` 的每个子目录都在结构树里、每个 `docs/*.md` 都在文档索引里、
  *      每条真实路由都归入且只归入一个分组（漏一条就红）、每个本地引用文件都存在、
- *      引用路径全部相对且外部链接一律 https。
+ *      引用路径全部相对且外部链接一律 https、两份页面都是纯英文。
  *
  * 用法：
  *   node scripts/visualization/generate_overview.mjs           # 写入
@@ -40,6 +43,7 @@ import { collectMetrics, ROOT } from "./metrics.mjs";
 const DIR = join(ROOT, "docs", "project_overview");
 const HTML_FILE = join(DIR, "index.html");
 const JS_FILE = join(DIR, "script.js");
+const CARD_FILE = join(DIR, "project_card.html");
 
 const METRICS_BEGIN = "/* BEGIN:generated-metrics */";
 const METRICS_END = "/* END:generated-metrics */";
@@ -257,13 +261,13 @@ function apiTable(handlers) {
  * 替换 `<!-- BEGIN:name -->` 与 `<!-- END:name -->` 之间的内容。
  * 标记丢失时不猜位置：静默插入一份副本，页面上就会出现两个「唯一」的清单。
  */
-function replaceRegion(html, name, content) {
+function replaceRegion(html, name, content, where = "index.html") {
   const begin = `<!-- BEGIN:${name} -->`;
   const end = `<!-- END:${name} -->`;
   const from = html.indexOf(begin);
   const to = html.indexOf(end);
   if (from < 0 || to < 0 || to < from) {
-    fail(`index.html is missing the ${begin} / ${end} region`);
+    fail(`${where} is missing the ${begin} / ${end} region`);
     return html;
   }
   return `${html.slice(0, from + begin.length)}\n${content}\n${html.slice(to)}`;
@@ -298,6 +302,31 @@ const regionContent = {
   "generated-api-table": (m) => apiTable(m.routeHandlers),
 };
 
+/**
+ * 名片页（`project_card.html`）的生成区。
+ *
+ * 数值与全景页同源：两处读的都是同一份 metrics，所以「名片上 505、全景页上 600」
+ * 这种事在结构上就不可能出现——而不是靠人记得两边一起改。
+ */
+const cardRegions = {
+  "generated-card-chips": (m) =>
+    `<ul class="hero-chips">
+      <li><span class="bl">release</span> ${esc(m.releaseTag)}</li>
+      <li><span class="bl">node</span> ${esc(m.enginesNode)}</li>
+      <li><span class="bl">license</span> ${esc(m.license)}</li>
+      <li><span class="bl">upstream</span> pi-coding-agent ${esc(m.sdkVersion)}</li>
+    </ul>`,
+  "generated-card-metrics": (m) =>
+    [
+      `<div class="metric"><span class="num">${m.testCases}</span><span class="label">test cases, offline, no real model call</span></div>`,
+      `<div class="metric"><span class="num">${m.routes}</span><span class="label">HTTP route handlers</span></div>`,
+      `<div class="metric"><span class="num">${m.srcFiles}</span><span class="label">backend source files</span></div>`,
+      `<div class="metric"><span class="num">${m.gateCount}</span><span class="label">gates in npm run verify</span></div>`,
+    ].join("\n      "),
+  "generated-card-license": (m) =>
+    `<span class="lic">${esc(m.license)} License © ${esc(m.copyright)} · ${esc(m.repoSlug)}</span>`,
+};
+
 /** `tsconfig.build.json` 的排除项 —— 用来标出「源码里有但包里不带」的测试助手。 */
 function shippedExcludes() {
   const config = JSON.parse(readFileSync(join(ROOT, "tsconfig.build.json"), "utf8"));
@@ -320,6 +349,8 @@ function buildMetrics(m) {
     version: m.version,
     releaseTag: `v${m.version}`,
     license: m.license,
+    copyright: m.copyright,
+    repoSlug: m.repoSlug,
     enginesNode: m.enginesNode,
     sdkVersion: m.deps.sdk,
     expressVersion: m.deps.express,
@@ -441,19 +472,30 @@ function assertDocsIndexedListed(html, metrics) {
 }
 
 /** 相对路径 / https / 本地引用存在 —— GitHub Pages 经典模式下的三类常见断链。 */
-function assertReferences(html) {
+function assertReferences(html, where) {
   for (const match of html.matchAll(/(?:href|src)="([^"]+)"/g)) {
     const value = match[1];
     if (value.startsWith("#") || value.startsWith("mailto:")) continue;
-    if (value.includes("\\")) fail(`reference uses a backslash: ${value}`);
+    if (value.includes("\\")) fail(`${where}: reference uses a backslash: ${value}`);
     if (/^[a-z]+:\/\//i.test(value)) {
-      if (!value.startsWith("https://")) fail(`external reference is not https: ${value}`);
+      if (!value.startsWith("https://")) fail(`${where}: external reference is not https: ${value}`);
       continue;
     }
-    if (value.startsWith("/")) fail(`reference is absolute, which breaks under a Pages subpath: ${value}`);
+    if (value.startsWith("/")) fail(`${where}: reference is absolute, which breaks under a Pages subpath: ${value}`);
     const target = join(DIR, value);
-    if (!existsSync(target) || !statSync(target).isFile()) fail(`local reference does not exist: ${value}`);
+    if (!existsSync(target) || !statSync(target).isFile()) fail(`${where}: local reference does not exist: ${value}`);
   }
+}
+
+/**
+ * 名片与全景页同为英文页（`<html lang="en">`，导出的 PNG 同理）。
+ *
+ * 只禁 CJK 字符与全角标点：`—`、`©`、`·` 这些是排版符号，不是中文，
+ * 把它们也算进去只会让人把检查关掉。
+ */
+function assertEnglishPage(html, where) {
+  const cjk = html.match(/[\u3000-\u303f\u3400-\u4dbf\u4e00-\u9fff\uff00-\uffef]/g);
+  if (cjk) fail(`${where} must stay English-only (found: ${[...new Set(cjk)].slice(0, 8).join(" ")})`);
 }
 
 // ---------- main ----------
@@ -472,12 +514,12 @@ function lineSample(before, after, limit = 3) {
 }
 
 /**
- * 漂移时报出**是哪一块**变了。
+ * 漂移时报出**是哪一块、哪一个文件**变了。
  *
  * 只说「drift」的门禁在远端等于没说：CI 日志里看不到上下文，只能靠猜。
- * 这次就是靠把 METRICS 键名与标记区名字打出来，才在一条日志里定位到 git 的路径转义。
+ * 上一轮就是靠把 METRICS 键名与标记区名字打出来，才在一条日志里定位到 git 的路径转义。
  */
-function describeDrift(beforeHtml, afterHtml, beforeJs, afterJs) {
+function describeDrift(pages, beforeJs, afterJs) {
   const report = [];
   const oldMetrics = readExistingMetrics(beforeJs);
   const newMetrics = readExistingMetrics(afterJs);
@@ -488,15 +530,21 @@ function describeDrift(beforeHtml, afterHtml, beforeJs, afterJs) {
       report.push(`  METRICS changed: ${changed.map((k) => `${k} ${oldMetrics[k]} -> ${newMetrics[k]}`).join(", ")}`);
     }
   }
-  for (const name of Object.keys(regionContent)) {
-    const re = new RegExp(`<!-- BEGIN:${name} -->([\\s\\S]*?)<!-- END:${name} -->`);
-    const a = re.exec(beforeHtml)?.[1];
-    const b = re.exec(afterHtml)?.[1];
-    if (a !== undefined && b !== undefined && a !== b) report.push(`  region ${name} changed`);
+  for (const page of pages) {
+    for (const name of page.regions) {
+      const re = new RegExp(`<!-- BEGIN:${name} -->([\\s\\S]*?)<!-- END:${name} -->`);
+      const a = re.exec(page.before)?.[1];
+      const b = re.exec(page.after)?.[1];
+      if (a !== undefined && b !== undefined && a !== b) report.push(`  ${page.label}: region ${name} changed`);
+    }
+    if (page.before !== page.after && report.length === 0) report.push(`  ${page.label}: text changed`);
   }
   if (beforeJs !== afterJs && !report.some((r) => r.includes("METRICS"))) report.push("  METRICS block changed");
-  if (report.length === 0) report.push("  page text changed (data-metric fallbacks or prose outside a region)");
-  report.push(lineSample(beforeHtml, afterHtml), lineSample(beforeJs, afterJs));
+  if (report.length === 0) report.push("  no generated content changed (line-ending or marker drift)");
+  for (const page of pages) {
+    if (page.before !== page.after) report.push(lineSample(page.before, page.after));
+  }
+  report.push(lineSample(beforeJs, afterJs));
   return report.join("\n");
 }
 
@@ -514,8 +562,10 @@ const metrics = buildMetrics(raw);
 
 let html = readLf(HTML_FILE);
 let js = readLf(JS_FILE);
+let card = readLf(CARD_FILE);
 const baseHtml = html;
 const baseJs = js;
+const baseCard = card;
 
 for (const [name, build] of Object.entries(regionContent)) {
   html = replaceRegion(html, name, build(raw));
@@ -524,10 +574,20 @@ const applied = applyMetricsBlock(js, metrics);
 js = applied.js;
 const fallbacks = applyFallbacks(html, applied.metrics);
 html = fallbacks.html;
+for (const [name, build] of Object.entries(cardRegions)) {
+  card = replaceRegion(card, name, build(applied.metrics), "project_card.html");
+}
 
 assertDirsMatchTree(html, raw);
 assertDocsIndexedListed(html, raw);
-assertReferences(html);
+assertReferences(html, "index.html");
+assertReferences(card, "project_card.html");
+assertEnglishPage(card, "project_card.html");
+
+const pages = [
+  { label: "index.html", before: baseHtml, after: html, regions: Object.keys(regionContent) },
+  { label: "project_card.html", before: baseCard, after: card, regions: Object.keys(cardRegions) },
+];
 
 if (problems.length > 0) {
   console.error("generate_overview: assertions failed");
@@ -535,11 +595,11 @@ if (problems.length > 0) {
   process.exit(2);
 }
 
-const drifted = js !== baseJs || html !== baseHtml;
+const drifted = js !== baseJs || pages.some((page) => page.after !== page.before);
 if (check) {
   if (drifted) {
     console.error("drift: docs/project_overview no longer matches the source — run npm run docs:overview");
-    console.error(describeDrift(baseHtml, html, baseJs, js));
+    console.error(describeDrift(pages, baseJs, js));
     process.exit(1);
   }
   console.log("in sync: docs/project_overview (numbers, file lists, route table and gate list come from source)");
@@ -553,8 +613,9 @@ if (!drifted) {
 
 writeFileSync(JS_FILE, js);
 writeFileSync(HTML_FILE, html);
+writeFileSync(CARD_FILE, card);
 console.log(
   `updated: docs/project_overview — ${Object.keys(applied.metrics).length} metrics, ` +
     `${metrics.routes} routes, ${raw.gates.length} gates, ${fallbacks.changed} fallback values written`,
 );
-console.log(describeDrift(baseHtml, html, baseJs, js));
+console.log(describeDrift(pages, baseJs, js));
