@@ -84,6 +84,10 @@ export const DEFAULT_FETCH_MAX_BYTES = 256 * 1024;
 export const MAX_FETCH_MAX_BYTES = 2 * 1024 * 1024;
 export const DEFAULT_FETCH_TIMEOUT_MS = 15_000;
 export const MAX_FETCH_TIMEOUT_MS = 60_000;
+/** 重定向最多跟几跳。每一跳都要过 host 策略，所以这个上限同时也是 SSRF 面的上限。 */
+export const MAX_REDIRECTS = 5;
+/** 默认 UA：标明是自己，不伪装浏览器。 */
+const DEFAULT_USER_AGENT = "pi-starter (+https://github.com/LPK3215/pi-starter)";
 export const DEFAULT_SEARCH_LIMIT = 5;
 export const MAX_SEARCH_LIMIT = 20;
 /** 单次搜索能接受的响应体上限（避免搜索后端回一个巨型页面）。 */
@@ -152,7 +156,7 @@ export function isPrivateAddress(ip: string): boolean {
  * 局限：解析与真正建连之间有 TOCTOU 窗口（DNS rebinding），要彻底封住得把解析结果
  * 固定下来再连。对「本地优先、默认关闭」的脚手架来说这个强度够用，此处显式记录。
  */
-export async function assertPublicUrl(raw: string): Promise<URL> {
+export function parseHttpUrl(raw: string): URL {
   let url: URL;
   try {
     url = new URL(raw);
@@ -162,14 +166,27 @@ export async function assertPublicUrl(raw: string): Promise<URL> {
   if (url.protocol !== "http:" && url.protocol !== "https:") {
     throw new WebError(`只支持 http/https，收到：${url.protocol}`, "bad_url");
   }
+  if (!url.hostname) throw new WebError("URL 缺少主机名", "bad_url");
+  return url;
+}
+
+/**
+ * host 策略。默认 {@link assertPublicUrl}（只允许公网）。
+ *
+ * 可注入是有意的：内网部署 / 走自有出口代理时需要放行，测试也需要能连本地服务。
+ * **换掉它等于关掉 SSRF 防护**，所以只在明确知道网络边界的场景替换。
+ */
+export type UrlGuard = (url: URL) => Promise<void>;
+
+/** 只查 host——协议已由 {@link parseHttpUrl} 保证，所以这个检查无法被注入绕过。 */
+export async function assertPublicHost(url: URL): Promise<void> {
   const host = url.hostname.replace(/^\[|\]$/g, "").toLowerCase();
-  if (!host) throw new WebError("URL 缺少主机名", "bad_url");
   if (BLOCKED_HOSTNAMES.has(host) || host.endsWith(".localhost")) {
     throw new WebError(`拒绝访问本机地址：${host}`, "blocked_host");
   }
   if (isIP(host)) {
     if (isPrivateAddress(host)) throw new WebError(`拒绝访问内网地址：${host}`, "blocked_host");
-    return url;
+    return;
   }
   let records: Array<{ address: string }>;
   try {
@@ -180,6 +197,11 @@ export async function assertPublicUrl(raw: string): Promise<URL> {
   if (records.length === 0) throw new WebError(`域名没有解析结果：${host}`, "network");
   const bad = records.find((record) => isPrivateAddress(record.address));
   if (bad) throw new WebError(`域名 ${host} 解析到内网地址 ${bad.address}，已拒绝`, "blocked_host");
+}
+
+export async function assertPublicUrl(raw: string): Promise<URL> {
+  const url = parseHttpUrl(raw);
+  await assertPublicHost(url);
   return url;
 }
 
@@ -225,7 +247,9 @@ async function readCapped(response: Response, maxBytes: number): Promise<{ bytes
       const { done, value } = await reader.read();
       if (done) break;
       if (!value || value.length === 0) continue;
-      if (total + value.length >= maxBytes) {
+      // 必须是 `>` 而不是 `>=`：正文**恰好等于**上限时一个字都没丢，报 truncated 就是撒谎，
+      // 模型会以为还有后半截没看到。
+      if (total + value.length > maxBytes) {
         chunks.push(value.subarray(0, Math.max(maxBytes - total, 0)));
         total = maxBytes;
         truncated = true;
@@ -272,25 +296,40 @@ export function clampWebNumber(raw: unknown, fallback: number, min: number, max:
 
 /* ────────────────────────── 默认实现 ────────────────────────── */
 
+export interface HttpWebClientOptions {
+  /** 默认字节上限；可被单次调用覆盖（仍会被 MAX_FETCH_MAX_BYTES 夹住）。 */
+  maxBytes?: number;
+  /** 默认超时；可被单次调用覆盖。 */
+  timeoutMs?: number;
+  /** 自定义 User-Agent；默认标明是自己（不伪装浏览器）。 */
+  userAgent?: string;
+  /** 搜索端点（给一个查询词，返回可抓取的 URL）；不传则用 DuckDuckGo 无 JS 版。 */
+  searchEndpoint?: (query: string) => string;
+  /** host 策略；默认只允许公网（{@link assertPublicHost}）。换掉它等于关掉 SSRF 防护。 */
+  urlGuard?: UrlGuard;
+}
+
+/** 这个响应是不是一个还要继续跟的重定向。 */
+function redirectLocation(response: Response): string | undefined {
+  if (![301, 302, 303, 307, 308].includes(response.status)) return undefined;
+  const location = response.headers.get("location");
+  return location && location.trim() !== "" ? location.trim() : undefined;
+}
+
 /** 默认联网后端：`fetch` + SSRF 防护 + 字节上限。零依赖（Node 18+ 自带 fetch）。 */
 export class HttpWebClient implements WebClient {
   readonly kind = "http";
 
-  constructor(
-    private readonly options: {
-      /** 默认字节上限；可被单次调用覆盖（仍会被 MAX_FETCH_MAX_BYTES 夹住）。 */
-      maxBytes?: number;
-      /** 默认超时；可被单次调用覆盖。 */
-      timeoutMs?: number;
-      /** 自定义 User-Agent；默认标明是自己（不伪装浏览器）。 */
-      userAgent?: string;
-      /** 搜索端点（给一个查询词，返回可抓取的 URL）；不传则用 DuckDuckGo 无 JS 版。 */
-      searchEndpoint?: (query: string) => string;
-    } = {},
-  ) {}
+  constructor(private readonly options: HttpWebClientOptions = {}) {}
+
+  /** host 策略；默认只允许公网。 */
+  private get guard(): UrlGuard {
+    return this.options.urlGuard ?? assertPublicHost;
+  }
 
   async fetchPage(raw: string, options: WebFetchOptions = {}): Promise<FetchedPage> {
-    const url = await assertPublicUrl(raw);
+    // 协议校验在这里、且**不经过 urlGuard** —— 注入 host 策略也换不掉「只允许 http/https」。
+    let current = parseHttpUrl(raw);
     const maxBytes = clampWebNumber(
       options.maxBytes ?? this.options.maxBytes,
       DEFAULT_FETCH_MAX_BYTES,
@@ -303,32 +342,47 @@ export class HttpWebClient implements WebClient {
       1,
       MAX_FETCH_TIMEOUT_MS,
     );
-    let response: Response;
-    try {
-      response = await fetch(url, {
-        redirect: "follow",
-        signal: AbortSignal.timeout(timeoutMs),
-        headers: {
-          "user-agent": this.options.userAgent ?? "pi-starter/0.3 (+https://github.com/LPK3215/pi-starter)",
-          accept: "text/html,application/xhtml+xml,text/plain,application/json;q=0.9,*/*;q=0.8",
-        },
-      });
-    } catch (err) {
-      const reason = err instanceof Error && err.name === "TimeoutError" ? "timeout" : "network";
-      throw new WebError(
-        reason === "timeout" ? `抓取超时（${timeoutMs}ms）：${url.href}` : `抓取失败：${url.href}`,
-        reason,
-      );
-    }
-    // 跟随后重定向的最终地址也要过一遍（否则 302 到内网就绕过了入口校验）。
-    const finalUrl = response.url || url.href;
-    const discard = () => {
+    // 整条重定向链共用一个超时，而不是每跳各给一次（否则 5 跳就能拖到 5 倍时长）。
+    const signal = AbortSignal.timeout(timeoutMs);
+    let response: Response | undefined;
+    for (let hop = 0; response === undefined; hop += 1) {
+      if (hop > MAX_REDIRECTS) {
+        throw new WebError(`重定向次数超过 ${MAX_REDIRECTS} 次：${raw}`, "network");
+      }
+      // **每一跳都先校验再请求。** 原实现用 `redirect: "follow"`，等于请求已经打到下一跳
+      // 之后才检查地址 —— 302 到内网时请求**已经发出去了**，事后再拦只能阻止读回内容，
+      // 挡不住「内网端点被触发」（对带副作用的 GET 就是真实影响）。所以改为 manual 自己跟。
+      await this.guard(current);
+      try {
+        response = await fetch(current, {
+          redirect: "manual",
+          signal,
+          headers: {
+            "user-agent": this.options.userAgent ?? DEFAULT_USER_AGENT,
+            accept: "text/html,application/xhtml+xml,text/plain,application/json;q=0.9,*/*;q=0.8",
+          },
+        });
+      } catch (err) {
+        const reason = err instanceof Error && err.name === "TimeoutError" ? "timeout" : "network";
+        throw new WebError(
+          reason === "timeout" ? `抓取超时（${timeoutMs}ms）：${current.href}` : `抓取失败：${current.href}`,
+          reason,
+        );
+      }
+      const location = redirectLocation(response);
+      if (!location) break;
       response.body?.cancel(undefined).catch(() => undefined);
+      try {
+        current = new URL(location, current);
+      } catch {
+        throw new WebError(`重定向目标不是合法 URL：${location}`, "bad_url");
+      }
+      response = undefined;
+    }
+    const finalUrl = response.url || current.href;
+    const discard = () => {
+      response?.body?.cancel(undefined).catch(() => undefined);
     };
-    await assertPublicUrl(finalUrl).catch((err: unknown) => {
-      discard();
-      throw err;
-    });
     const contentType = response.headers.get("content-type") ?? "";
     if (!response.ok) {
       discard();

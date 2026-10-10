@@ -687,6 +687,114 @@ test("集成：限流在真实 HTTP 上生效，且不影响探针", async () =>
   }
 });
 
+test("集成：WS 分派层——畸形输入回可读 error 帧，且**一条坏命令不打死整条连接**", async () => {
+  // 这一层此前只有跨进程的 `npm run smoke` 覆盖（那些覆盖率不进 `npm test` 的统计），
+  // 而它恰好是最容易「一个坏输入让整条连接失效」的地方。所以核心断言不只是「回了 error」，
+  // 还有「error 之后连接仍然可用」。
+  const h = await startHarness();
+  try {
+    send(h, { type: "hello", protocolVersion: PROTOCOL_VERSION });
+    await settle(250);
+
+    const errorsSince = (from: number) =>
+      h.frames.slice(from).filter((f) => f.type === "error") as Array<{ message: string }>;
+
+    // 1) images 带 data: 前缀 —— 模型最容易写错的一种。
+    let from = h.frames.length;
+    send(h, {
+      type: "prompt",
+      text: "看图",
+      images: [{ mimeType: "image/png", data: "data:image/png;base64,AAAA" }],
+    });
+    await settle(200);
+    const prefixed = errorsSince(from);
+    assert.equal(prefixed.length, 1, "必须回一条 error");
+    assert.match(prefixed[0]!.message, /不要带 data: 前缀/, "文案要能让人自己改对");
+
+    // 2) MIME 不在白名单 + 张数超限。
+    from = h.frames.length;
+    send(h, { type: "prompt", text: "x", images: [{ mimeType: "image/svg+xml", data: "AAAA" }] });
+    await settle(200);
+    assert.match(errorsSince(from)[0]?.message ?? "", /第 1 张图片的类型不支持/);
+
+    from = h.frames.length;
+    send(h, {
+      type: "prompt",
+      text: "x",
+      images: Array.from({ length: 5 }, () => ({ mimeType: "image/png", data: "AAAA" })),
+    });
+    await settle(200);
+    assert.match(errorsSince(from)[0]?.message ?? "", /一次最多 4 张图片/);
+
+    // 3) 会话类命令缺必填字段：逐条都要明确回帧，而不是静默什么都不做。
+    const conversationId = "conv-1";
+    const missingEntryId: Array<[string, Record<string, unknown>]> = [
+      ["set_label", { conversationId }],
+      ["edit_message", { conversationId }],
+      ["rollback_conversation", { conversationId }],
+    ];
+    for (const [type, payload] of missingEntryId) {
+      from = h.frames.length;
+      send(h, { type, ...payload });
+      await settle(150);
+      assert.match(errorsSince(from)[0]?.message ?? "", /entryId is required/, `${type} 缺 entryId 必须报错`);
+    }
+
+    from = h.frames.length;
+    send(h, { type: "rename_conversation", conversationId });
+    await settle(150);
+    assert.match(errorsSince(from)[0]?.message ?? "", /title is required/);
+
+    // 4) 不存在的会话 / 目标：回 error 而不是抛到顶层把连接带走。
+    from = h.frames.length;
+    send(h, { type: "open_conversation", conversationId: "no-such-conversation" });
+    await settle(250);
+    assert.equal(errorsSince(from).length, 1, "打开不存在的会话必须回 error");
+
+    from = h.frames.length;
+    send(h, { type: "delete_conversation", conversationId: "no-such-conversation" });
+    await settle(250);
+    assert.equal(errorsSince(from).length, 1, "删除不存在的会话必须回 error");
+
+    // 5) 非法思考档位：文案要列出合法取值（否则客户端只能瞎猜）。
+    from = h.frames.length;
+    send(h, { type: "set_thinking", level: "very-high" });
+    await settle(150);
+    assert.match(errorsSince(from)[0]?.message ?? "", /invalid thinking level/);
+
+    // 6) 没见过的名字：`isClientMessage` 会把「无空白的任意名字」当成**业务自定义命令**放行，
+    //    所以走的是 runCustom 的「未注册」分支 —— 这比粗暴拒绝更有用，它会带上最接近的
+    //    命令名做提示。（原先落到 switch 的 default 静默丢弃，前端只会一直等一个永不到来的响应。）
+    from = h.frames.length;
+    send(h, { type: "definitely_not_a_command" });
+    await settle(150);
+    assert.match(errorsSince(from)[0]?.message ?? "", /unknown command: definitely_not_a_command/);
+
+    // 而空串 / 纯空白是真的不合法，必须在协议层就被拒。
+    for (const bad of ["", "   "]) {
+      from = h.frames.length;
+      send(h, { type: bad });
+      await settle(150);
+      assert.match(
+        errorsSince(from)[0]?.message ?? "",
+        /unknown message type/,
+        `type=${JSON.stringify(bad)} 应被协议层拒`,
+      );
+    }
+
+    // 7) 一路错下来，连接必须还活着 —— 这才是「坏命令不打死连接」的真正断言。
+    from = h.frames.length;
+    send(h, { type: "ping" });
+    await settle(150);
+    assert.ok(
+      h.frames.slice(from).some((f) => f.type === "pong"),
+      "经历一连串畸形输入之后，ping 仍必须得到 pong",
+    );
+  } finally {
+    await h.close();
+  }
+});
+
 test("集成：连接关闭后 hub 回收会话（无泄漏）", async () => {
   const h = await startHarness();
   try {

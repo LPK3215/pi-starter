@@ -16,7 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **不假装能搜**：后端没有 `search()` 时**不注册** `web_search`（与 `rag:smoke` 打印 SKIP 同一原则）；默认的 DuckDuckGo 无 JS 版解析是 best-effort，抽不到就如实说「没有命中」。
   - 能力标签 `net` → `inferRisk` 判 `medium`；与 `exec` 同口径**不进 `allTools`**，开了才登记进 `ToolRegistry`。`SECURITY.md` / `.env.example` / 两份 README 都已注明「未被缓解的部分」（URL 由模型决定，DNS 解析与建连之间存在 TOCTOU 窗口）。
 
-- **五个「未覆盖即未验证」模块的测试**（本轮第二批，48 个测试文件 / 432 用例，覆盖率 90.45% → **91.43%**）：
+- **联网抓取的真实路径测试**（`web.test.ts` 11 → 23 例，`web.ts` 77% → **92.95%**）：此前只测了假后端，`fetchPage` 里的字节上限、重定向、超时、content-type 判定**全都没被真实执行过**。现在起本地 HTTP 服务跑真实抓取，覆盖：HTML 转纯文本 / JSON 不被拍平、正文恰好等于上限时 `truncated=false`、超限截断、404 与 `image/png` 翻成可读 `WebError`、正常跟随重定向且**每一跳都过策略**、302 到被禁主机时请求不发出、超过 `MAX_REDIRECTS` 即停、超时翻成 `timeout`、注入放行策略后非 http/https 仍被拒、重定向目标是非法 URL 时报错而不是崩在 `new URL`。
+- **WS 分派层的畸形输入测试**（`integration.test.ts`，`ws.ts` 76% → **83.42%**）：这一层此前只有跨进程的 `npm run smoke` 覆盖（那些覆盖率不进 `npm test` 统计），而它最容易「一个坏输入打死整条连接」。覆盖：`prompt` 带 `data:` 前缀 / 非白名单 MIME / 超过 4 张图片、`set_label`·`edit_message`·`rollback_conversation` 缺 `entryId`、`rename_conversation` 缺 `title`、打开或删除不存在的会话、非法思考档位、未知命令名（走「未注册命令」分支并带提示，而不是静默丢弃）、空串与纯空白 `type` 在协议层被拒 —— 以及**一连串畸形输入之后 `ping` 仍必须得到 `pong`**。
+- **五个「未覆盖即未验证」模块的测试**（本轮第二批，48 个测试文件 / 443 用例，覆盖率 90.45% → **92.26%**）：
   - `src/prompt-images.test.ts`（6 例，44% → 100%）：`parsePromptImages` 是 `prompt` / `steer` / `follow_up` 三条 WS 命令共用的唯一入口校验，此前只被间接带到 —— 等于「模型收到一张损坏的图」这条路径从未验证过。覆盖 MIME 白名单（`image/svg+xml` 拒收）、`data:` 前缀、非法 base64、**正则过得了但解码为 0 字节**（单字符 `"a"`）与恰好等于上限的边界。
   - `src/extensions/audit.test.ts`（6 例，56% → 100%）：这个扩展的价值全在「记什么、不记什么」上。核心断言是**日志里绝不能出现参数值**（含 `sk-` 密钥与 SQL 原文），只记字段名；以及失败的调用走 `warn`、`logArgKeys=false` 时连字段名都不记、超出 256 条进行中调用时最早的被淘汰。
   - `src/tools/ask-user-question.test.ts`（5 例，56% → 100%）：HITL 工具出错不是「答得不对」而是「整轮卡死」或「悄悄跳过」。覆盖无 UI 时**绝不假装等待且不调用任何 ui 方法**、`AbortSignal` 必须透传（否则桥那头无法取消）、`confirm` 选「否」与取消一样算未作答。
@@ -40,6 +42,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **联网抓取的重定向会在校验之前就把请求打到下一跳（`web_fetch` 的 SSRF 面）**：原实现用 `fetch(..., { redirect: "follow" })`，等响应回来才检查 `response.url` —— 也就是 `302` 到 `10.0.0.1` 时**请求已经发出去了**，事后检查只能阻止「把内容读回来」，挡不住「内网端点被触发」（对带副作用的 GET 就是真实影响）。现在改为 `redirect: "manual"` 自己跟，**每一跳都在发请求之前过一遍 host 策略**，共用一个超时，并用 `MAX_REDIRECTS = 5` 封顶。新增回归用例：公网点 `302` 到被禁主机时，**被禁主机收到 0 个请求**。
+- **`readCapped` 的差一错误：正文恰好等于上限时误报「已截断」**：判断写的是 `total + value.length >= maxBytes`，于是长度正好等于上限的正文被标成 `truncated: true` —— 一个字都没丢，工具却对模型说「正文已按上限截断」。改成 `>`，并加回归用例。
+- **`urlGuard` 可注入**：`HttpWebClient` 新增 `urlGuard?: UrlGuard`（默认 `assertPublicHost`），内网部署 / 走自有出口代理时可替换。**协议校验（只允许 http/https）刻意不经过它**，所以换 host 策略也换不掉这一条 —— 有对应用例锁定。
 - **`current_time` 在模型写 `UTC+8` / `GMT+8` 时直接抛 `RangeError`**：`toLocaleString` 只认 IANA 时区名，而这两种恰好是模型最可能写出来的写法（实测 `RangeError: Invalid time zone specified: UTC+8`）。工具此前没有任何测试、`execute` 从未被执行过，所以一直没暴露。现改为如实说明并给出可用写法（含「东八区应写 `Etc/GMT-8`，符号是反的」这个最容易踩的点），`details.ok=false` 以便调用方区分。
 - **`/files/copy` 复制目录必然 500**（`FileService.copy`）：代码校验完 `recursive` 之后仍然**无条件**调 `copyFileSync`，而它对目录直接抛 `EISDIR` —— 于是「传 `recursive: true` 去复制目录」100% 失败成 500，且即使不抛也只会留下一个空壳。改用 `cpSync(..., { recursive: true })`，并把复制失败翻译成 `AppError` 而不是裸抛。
 - **给目录改名会「先改盘、再报错」**（`FileService.rename`）：`renameSync` 成功之后无条件 `this.read(toRel)`，而 `read` 只读文件，于是目录重命名永远在**磁盘已经变了之后**返回 400 —— 客户端看到失败、实际已生效，比单纯失败更难查。现按目标类型返回目录描述。
