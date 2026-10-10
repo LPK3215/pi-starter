@@ -1,0 +1,73 @@
+{
+  "_说明": "已知偏离清单：这些官方组件与上游 registry 暂时不一致（上游实时拉取、无固定版本）。`sha` 是**本地内容**规范化后的哈希——本地内容一变即视为新增偏离并判失败；确认是刻意的改动后，跑 `npm --prefix web run check:official -- --write-baseline` 更新它（这一步必须出现在 PR 里被人看到）。`line` / `note` 仅供人工判断，脚本不使用。",
+  "registry": "https://r.assistant-ui.com/styles/base-nova",
+  "entries": [
+    "thread",
+    "thread-list"
+  ],
+  "modified": {
+    "components/assistant-ui/elements/thread.aui.tsx": {
+      "sha": "9a59232333b7",
+      "line": 8,
+      "note": ""
+    },
+    "components/assistant-ui/elements/file.tsx": {
+      "sha": "115ed660c91d",
+      "line": 140,
+      "note": ""
+    },
+    "components/assistant-ui/elements/media-player.tsx": {
+      "sha": "10d9aa25e3b9",
+      "line": 172,
+      "note": ""
+    },
+    "components/assistant-ui/elements/surfaces.tsx": {
+      "sha": "a82542ec08f0",
+      "line": 4,
+      "note": ""
+    },
+    "components/assistant-ui/elements/image.tsx": {
+      "sha": "01f7655ba942",
+      "line": 106,
+      "note": ""
+    },
+    "components/assistant-ui/elements/markdown-text.tsx": {
+      "sha": "4621787f6916",
+      "line": 8,
+      "note": ""
+    },
+    "components/assistant-ui/elements/reasoning.aui.tsx": {
+      "sha": "af46e4d5c13c",
+      "line": 3,
+      "note": ""
+    },
+    "components/assistant-ui/elements/reasoning.tsx": {
+      "sha": "06a21e6bc3cc",
+      "line": 5,
+      "note": ""
+    },
+    "components/assistant-ui/elements/tool-fallback.aui.tsx": {
+      "sha": "12b9885a9056",
+      "line": 3,
+      "note": ""
+    },
+    "components/assistant-ui/elements/tool-group.aui.tsx": {
+      "sha": "6fa7eb02ceef",
+      "line": 14,
+      "note": ""
+    },
+    "components/assistant-ui/elements/thread-list.aui.tsx": {
+      "sha": "ba1994d19c06",
+      "line": 301,
+      "note": ""
+    }
+  },
+  "missing": {
+    "components/assistant-ui/utils/useIsomorphicLayoutEffect.ts": {
+      "note": ""
+    },
+    "components/assistant-ui/elements/collapsible-root.tsx": {
+      "note": ""
+    }
+  }
+}

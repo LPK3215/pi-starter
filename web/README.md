@@ -85,13 +85,25 @@ assistant-ui 接自定义后端有四条路，这里取 ExternalStore，因为**
 官方组件是**落盘源码**，会随上游更新，也会被 CLI 改写。两个脚本把“和官方一样”变成可验证命题：
 
 ```bash
-npm run check:official   # 逐字节比对本地与 registry 内容；有修改/缺失则退出码 1
-npm run sync:official    # 按 registry 声明的路径与内容原样重写
+npm run check:official        # 比对本地与 registry；只对**新增**偏离报错（退出 1）
+npm run check:official:ci     # 同上，但拉不到 registry 时按跳过处理（退出 0）——给 CI 用
+npm run sync:official         # 按 registry 声明的路径与内容原样重写（会把本地改动覆盖掉）
+npm run check:official -- --write-baseline   # 认下当前这批偏离（须在 PR 里可见地提交）
 ```
 
 为什么需要：`shadcn add` 会改写 import 路径并把文件平铺到 `src/components/`，实测第一次比对出 15 处差异
-（包含一处 Base UI `render` 与官方 `asChild` 的组件风味差异）。先跑 `sync:official` 再跑 `check:official`，
-应得到“内容不同 0 / 本地缺失 0”（registry 当前共 20 个文件）。shadcn 内置件（button/skeleton/tooltip 等）不属本 registry，不比对。
+（包含一处 Base UI `render` 与官方 `asChild` 的组件风味差异）。
+
+**为什么是"基线 + 只报新增"而不是"必须完全一致"**：上游 registry 是**实时**拉取的、没有版本号，
+"与官方逐字节一致"不可能长期成立；而一个恒红的检查只会被排除出门禁，等于没人守。所以
+`scripts/registry-baseline.json` 记下当前这批已知偏离（连同**本地内容哈希**），此后：
+
+- 偏离没变 → 打印出来但不阻断；
+- 偏离未登记、或登记过但本地内容又被改 → 判失败（这才是要人看的信号）；
+- 拉不到 registry → 退出 2（网络故障，与"内容不一致"区分开）。
+
+同步（`sync:official`）会把本地改动**覆盖**掉——包括我们有意做的适配；要保留本地改动就别同步，
+而是把偏离登记进 baseline。shadcn 内置件（button/skeleton/tooltip 等）不属本 registry，不比对。
 
 ## 链路自检
 

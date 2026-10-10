@@ -9,6 +9,7 @@
     "lint": "oxlint",
     "test": "npm --prefix .. run test:web",
     "check:official": "node scripts/check-registry-sync.mjs",
+    "check:official:ci": "node scripts/check-registry-sync.mjs --tolerate-network",
     "sync:official": "node scripts/sync-official-components.mjs",
     "probe:ws": "node scripts/probe-ws.mjs",
     "preview": "vite preview"
