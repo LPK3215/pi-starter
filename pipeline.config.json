@@ -7,8 +7,8 @@
   "tagPrefix": "v",
   "remote": "origin",
 
-  "_remotes说明": "发版时分支与 tag 要推到的全部远程（一个都不落）。remote 是主远程——Release / CI / 网页链接都挂在它上面，所以排在第一位先推；其余是镜像，缺推只报警不阻断。没配 remotes 时等价于只推 remote。本仓只配了一个远程（origin = CNB，cnb.cool/lpk3215/pi-starter），所以这里也只有它——原先写成 [\"origin\",\"cnb\"] 会让发版在推镜像那一步必然失败。将来真加了镜像（如 GitHub），把名字追加进来即可。",
-  "remotes": ["origin"],
+  "_remotes说明": "发版时分支与 tag 要推到的全部远程（一个都不落）。主远程由 remote 字段决定，没写就默认 \"origin\"——Release / 网页链接都挂在它上面，所以排在第一位先推；其余是镜像，缺推只报警不阻断。本仓的实际拓扑：origin = GitHub（LPK3215/pi-starter，README 的 Release 徽章、Issue 模板、.github/workflows/publish.yml 都指它，所以它是主远程），cnb = CNB（cnb.cool/lpk3215/pi-starter，**门禁真正跑的地方**，GitHub Actions 因账号计费跑不起来）。两个都必须收到分支与 tag：只推 origin，发版提交在 CNB 上就没有回归保护；只推 cnb，对外 Release 与网页链接就对不上。要换主远程就同时改 remote 与这里的顺序，别只改一处。",
+  "remotes": ["origin", "cnb"],
 
   "versionFiles": [
     { "path": "package.json", "type": "json" },
@@ -37,7 +37,7 @@
     { "name": "unused symbols", "cmd": "npm run lint:unused" }
   ],
 
-  "_localPublish说明": "CI 跑不起来时的**正式**发版路径（本仓的 Actions 目前因账号计费锁定无法启动）：`npm run publish:local`。语义与 CI 出包一致 —— 门禁 → 出包 → 把产物挂到该 tag 的 Release 上；可重跑（--clobber 覆盖产物）。建 Release 的后端按**主远程的宿主**自动选：CNB（cnb.cool）走 `cnb` CLI，GitHub 走 `gh`——本仓主远程是 CNB，所以走 cnb；自建域名等场景可用本配置的 `host` 字段（\"cnb\" / \"github\"）显式覆盖。",
+  "_localPublish说明": "CI 跑不起来时的**正式**发版路径（本仓的 Actions 目前因账号计费锁定无法启动）：`npm run publish:local`。语义与 CI 出包一致 —— 门禁 → 出包 → 把产物挂到该 tag 的 Release 上；可重跑（--clobber 覆盖产物）。建 Release 的后端按**主远程的宿主**自动选：CNB（cnb.cool）走 `cnb` CLI，GitHub 走 `gh`——本仓主远程 `origin` 在 github.com，所以走 gh；cnb 是镜像，只负责补推分支与 tag（Release 不挂两份）。自建域名等场景可用本配置的 `host` 字段（\"cnb\" / \"github\"）显式覆盖。",
   "localPublish": {
     "versionFrom": "package.json",
     "steps": [
