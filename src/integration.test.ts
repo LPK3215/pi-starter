@@ -53,6 +53,8 @@ class FakeSession {
   isStreaming = false;
   disposed = false;
   activeTools = ["read"];
+  /** 统计被取了几次。SDK 的实现每次都会全量过滤会话文件，不该每周期都调。 */
+  statsCalls = 0;
   private listeners = new Set<(event: FakeEvent) => void>();
   private steering: string[] = [];
   private followUp: string[] = [];
@@ -73,6 +75,7 @@ class FakeSession {
   }
 
   getSessionStats() {
+    this.statsCalls += 1;
     return {
       sessionFile: undefined,
       sessionId: this.sessionId,
@@ -212,6 +215,33 @@ test("集成：多对话各自持有独立 session，切换不影响对方", asy
 
   hub.dispose();
   assert.ok(secondSession.disposed, "disposing the hub must dispose owned sessions");
+});
+
+test("集成：会话统计按事件失效——流式增量期间不重复全量取数，条目变了必然重取", async () => {
+  const agent = makeAgent();
+  const hub = new SessionHub(agent, resolveRuntimeConfig());
+  const sink = collector();
+  const cs = await hub.attach("c-stats", sink.push);
+  const conv = cs.active!;
+  const session = conv.sdkSession as unknown as FakeSession;
+
+  conv.getState();
+  const afterFirst = session.statsCalls;
+  assert.ok(afterFirst >= 1, "第一次构建快照必须真的取一次统计");
+
+  // 流式增量不改会话条目、也不改 usage，统计值不变 → 不该再取。
+  session.emit({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "hi" } });
+  session.emit({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "!" } });
+  conv.getState();
+  conv.getState();
+  assert.equal(session.statsCalls, afterFirst, "流式增量期间不该重复取统计");
+
+  // 条目变了 → 缓存必须作废，否则快照会显示过期的 token / cost。
+  session.emit({ type: "message_end" });
+  conv.getState();
+  assert.equal(session.statsCalls, afterFirst + 1, "message_end 之后必须重新取一次统计");
+
+  hub.dispose();
 });
 
 test("集成：并发会话数达上限后 LRU 回收最久未活动的对话", async () => {

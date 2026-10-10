@@ -9,6 +9,7 @@
  *   session.abortCompaction()         —— 取消压缩
  *   session.cycleModel()              —— 沿 scopedModels 轮换
  *   session.cycleThinkingLevel()      —— 轮换思考档
+ *   session.navigateTree(id, opts?)   —— 官方树导航（回退 + 分支摘要）
  *   session.setSessionName(name)      —— 写会话名
  *
  * 这些访问原先散落在 `session-hub.ts` 各处，**每处各写一遍 `typeof === "function"` 兜底**，
@@ -70,6 +71,21 @@ export function sdkCycleModel(
 /** 轮换思考档。 */
 export function sdkCycleThinkingLevel(session: SdkSession): (() => string | undefined) | undefined {
   const fn = (session as { cycleThinkingLevel?: () => string | undefined }).cycleThinkingLevel;
+  return typeof fn === "function" ? fn : undefined;
+}
+
+/**
+ * 官方树导航（`session.navigateTree`）：把叶子挪到目标条目，并对被丢掉的后半段生成分支摘要。
+ *
+ * 缺失时返回 `undefined`，由调用方回落到 `branch()` + custom 标记的老路径（替身 / 老版本 SDK）。
+ */
+export type NavigateTreeFn = (
+  id: string,
+  options?: { summarize?: boolean; customInstructions?: string; label?: string },
+) => Promise<unknown>;
+
+export function sdkNavigateTree(session: SdkSession): NavigateTreeFn | undefined {
+  const fn = (session as { navigateTree?: NavigateTreeFn }).navigateTree;
   return typeof fn === "function" ? fn : undefined;
 }
 

@@ -44,6 +44,7 @@ import {
   sdkCompact,
   sdkCycleModel,
   sdkCycleThinkingLevel,
+  sdkNavigateTree,
   sdkRenameSession,
   sdkSessionManager,
 } from "./sdk-adapter.js";
@@ -135,14 +136,9 @@ function projectMessage(
   const resolved = (parts.calls ?? []).filter((c) => results.has(c.id)).length;
   const callCount = parts.calls?.length ?? 0;
   const stop = typeof stopReason === "string" ? stopReason : "";
-  const sig = [
-    text.length,
-    parts.thinking?.length ?? 0,
-    callCount,
-    resolved,
-    stop,
-    entryId ?? "",
-  ].join("|");
+  // 用模板串而不是「数组 + join」：这个签名每个快照周期都要为每条消息重建一次，
+  // 数组分配 + join 会先造出 n 个中间字符串，模板串只产出最终那一个（同样的结果）。
+  const sig = `${text.length}|${parts.thinking?.length ?? 0}|${callCount}|${resolved}|${stop}|${entryId ?? ""}`;
   const hit = cache.get(message);
   if (hit && sigs.get(message) === sig) return hit;
 
@@ -317,6 +313,14 @@ export class Conversation {
   private projectionSig: ProjectionSig = new WeakMap();
   /** Per-message token counts, keyed by the stable projected UiMessage reference. */
   private tokenCache: WeakMap<UiMessage, number> = new WeakMap();
+  /**
+   * `getSessionStats()` 的缓存。
+   *
+   * 快照每个周期都要读它，而 SDK 的实现是 `sessionManager.getEntries()` —— 每次都会
+   * `fileEntries.filter(...)` **全量复制再全量扫描**一遍会话条目，成本随会话变长而增长。
+   * 统计值只在「条目变了」时才会变，所以按事件作废、周期内复用（见 `onEvent`）。
+   */
+  private sessionStats: ReturnType<Session["getSessionStats"]> | undefined;
   private readonly toolStartTimes = new Map<string, number>();
   /**
    * 工具耗时（按 toolCallId），供历史投影用。
@@ -386,6 +390,12 @@ export class Conversation {
   /* ─────────────── 事件翻译（B 类：SDK 事件 → 服务端消息） ─────────────── */
 
   private onEvent(event: AgentSessionEvent): void {
+    // 高频事件只有流式增量两类，它们不会新增会话条目、也不改 usage，所以统计值不变。
+    // 其余事件一律作废 `sessionStats`，让下一次 `buildState()` 重新取一份（保守方向：
+    // 宁可多算一次，也不会显示出过期的 token / cost）。
+    if (event.type !== "message_update" && event.type !== "tool_execution_update") {
+      this.sessionStats = undefined;
+    }
     switch (event.type) {
       case "message_update": {
         const ae = event.assistantMessageEvent;
@@ -643,15 +653,33 @@ export class Conversation {
 
   /* ─────────────── 快照构建（C 类） ─────────────── */
 
+  /**
+   * 当前路径的会话条目：一次遍历同时取回「消息对象 → 条目 id」与「条目上的官方标签」。
+   *
+   * `SessionManager.buildContextEntries()` 每次都会先 `getEntries()` 过滤整个会话文件，
+   * 再走一遍树——**并不便宜**。快照构建（`buildState`）两个结果都要用，合并成一趟就省掉
+   * 了每周期第二遍「全文件过滤 + 树遍历」。`getLabel` 只是 `labelsById` 的 Map 查询，
+   * 顺带调用可忽略不计。
+   */
+  private contextIndex(): {
+    ids: Map<AgentMessage, string>;
+    labels: { entryId: string; label: string }[];
+  } {
+    const ids = new Map<AgentMessage, string>();
+    const labels: { entryId: string; label: string }[] = [];
+    const manager = this.sessionManager();
+    if (!manager) return { ids, labels };
+    for (const entry of manager.buildContextEntries()) {
+      if (entry.type === "message") ids.set(entry.message, entry.id);
+      const label = manager.getLabel(entry.id);
+      if (label) labels.push({ entryId: entry.id, label });
+    }
+    return { ids, labels };
+  }
+
   /** 当前路径上，消息对象 → 会话条目 id。没有会话树时为空。 */
   private entryIds(): Map<AgentMessage, string> {
-    const map = new Map<AgentMessage, string>();
-    const manager = this.sessionManager();
-    if (!manager) return map;
-    for (const entry of manager.buildContextEntries()) {
-      if (entry.type === "message") map.set(entry.message, entry.id);
-    }
-    return map;
+    return this.contextIndex().ids;
   }
 
   private sessionManager(): SessionManager | undefined {
@@ -673,14 +701,30 @@ export class Conversation {
     this.cache = new WeakMap();
     this.projectionSig = new WeakMap();
     this.tokenCache = new WeakMap();
+    this.sessionStats = undefined;
     this.streamingText = "";
     this.streamingThinking = "";
     this.getState();
   }
 
-  /** Projected chat messages, using the stable-reference projection cache. */
-  private currentMessages(): UiMessage[] {
-    const ids = this.entryIds();
+  /**
+   * 会话统计（token / cost / 消息计数），按事件失效、周期内复用。
+   *
+   * 直接调 `session.getSessionStats()` 的代价见 `sessionStats` 字段的注释——它是 SDK 里
+   * 唯一「每次调用都全量过滤一遍会话文件」的读接口，而快照每个周期都要读它。
+   */
+  private stats(): ReturnType<Session["getSessionStats"]> {
+    if (!this.sessionStats) this.sessionStats = this.session.getSessionStats();
+    return this.sessionStats;
+  }
+
+  /**
+   * Projected chat messages, using the stable-reference projection cache.
+   *
+   * `ids` 可由调用方传入（`buildState` 就是），避免同一周期为了拿条目 id 再走一遍会话树。
+   */
+  private currentMessages(ids?: Map<AgentMessage, string>): UiMessage[] {
+    const entryIds = ids ?? this.entryIds();
     // 第一遍：收齐工具结果。SDK 把结果放在独立的 toolResult 消息里，
     // 而它需要被归回发起调用的那条 assistant 消息，否则历史里只有“调了什么”没有“结果”。
     const results: ToolResults = new Map();
@@ -701,7 +745,7 @@ export class Conversation {
     }
     const messages: UiMessage[] = [];
     for (const message of this.session.messages) {
-      const ui = projectMessage(message, this.cache, ids.get(message), results, this.projectionSig);
+      const ui = projectMessage(message, this.cache, entryIds.get(message), results, this.projectionSig);
       if (ui) messages.push(ui);
     }
     return messages;
@@ -725,13 +769,19 @@ export class Conversation {
 
   private buildState(): Omit<UiState, "rev"> {
     const session = this.session;
-    const allMessages = this.currentMessages();
+    // 一趟会话树遍历同时拿到「消息→条目 id」与「官方标签」，投影与标签共用，不再各走一遍。
+    const { ids, labels } = this.contextIndex();
+    const allMessages = this.currentMessages(ids);
     const totalMessageCount = allMessages.length;
     const messages = this.boundedMessages(allMessages);
     const model = session.model ?? this.fallbackModel;
-    const stats = session.getSessionStats();
+    const stats = this.stats();
     const contextTokens = this.estimateTokensCached(messages);
     const softCap = computeSoftCap(model.contextWindow ?? 0);
+    // `messages` 只是 `allMessages` 的尾部切片：未截断时两者就是**同一个数组**，本轮的总 token
+    // 上面已经用同一个 `estimateTokensCached` 算过，不必为「是否超预算」再全量累加一遍。
+    const totalTokens =
+      messages.length < totalMessageCount ? this.estimateTokensCached(allMessages) : contextTokens;
 
     return {
       clientId: this.clientId,
@@ -777,20 +827,26 @@ export class Conversation {
           // 注意这里刻意用**未截断**的 `allMessages`：预算是真实上下文的属性，不该被
           // 「快照最多 500 条」这个 UI 投影上限掩盖。但判断 trim 不必逐字符重算——
           // 逐条缓存与 `estimateConversationTokens` 是同一套公式，直接把总数传进去。
-          overBudget: this.planTrim(allMessages, this.estimateTokensCached(allMessages)).trimmed,
+          //
+          // `planContextTrim` 在 `estimated <= maxTokens` 时会立刻返回 `trimmed: false`，
+          // 所以先用同一个总数短路：没超预算时连那份马上被丢弃的 drop/keep 计划数组都不必
+          // 构造。判定仍然只有 `planContextTrim` 一个事实源。
+          overBudget: totalTokens > softCap && this.planTrim(allMessages, totalTokens).trimmed,
         },
       },
       pendingApproval: this.pendingApproval,
       planMode: this.isPlanMode(),
       conversations: this.listConversations(),
-      labels: this.labels(),
+      labels,
     };
   }
 
   /**
    * Sum token estimates, reusing per-message counts.
-   * UiMessage references are stable (projection cache), so an unchanged conversation costs
-   * O(new messages) instead of O(total characters) on every snapshot tick.
+   *
+   * UiMessage references are stable (projection cache), so this costs O(消息条数) 次 WeakMap
+   * 查询 —— 而不是每次都按**字符**重算（O(总字符数)）。这一层循环很便宜；
+   * 快照周期里真正随会话变长的外部成本是 SDK 的 `getSessionStats()`（见 `sessionStats`）。
    */
   private estimateTokensCached(messages: readonly UiMessage[]): number {
     let total = 0;
@@ -863,7 +919,7 @@ export class Conversation {
    */
   private logRunSummary(stopReason: string | undefined, willRetry: boolean): void {
     const model = this.session.model ?? this.fallbackModel;
-    const stats = this.session.getSessionStats();
+    const stats = this.stats();
     const messages = this.boundedMessages(this.currentMessages());
     const softCap = computeSoftCap(model.contextWindow ?? 0);
     const contextTokens = this.estimateTokensCached(messages);
@@ -985,14 +1041,7 @@ export class Conversation {
    * 没有会话树（无 manager）时返回空。只遍历当前路径的条目，不背整个文件。
    */
   labels(): { entryId: string; label: string }[] {
-    const manager = this.sessionManager();
-    if (!manager) return [];
-    const out: { entryId: string; label: string }[] = [];
-    for (const entry of manager.buildContextEntries()) {
-      const label = manager.getLabel(entry.id);
-      if (label) out.push({ entryId: entry.id, label });
-    }
-    return out;
+    return this.contextIndex().labels;
   }
 
   /**
@@ -1054,6 +1103,7 @@ export class Conversation {
     this.cache = new WeakMap();
     this.projectionSig = new WeakMap();
     this.tokenCache = new WeakMap();
+    this.sessionStats = undefined;
     this.streamingText = "";
     this.streamingThinking = "";
     const after = this.estimateTokensCached(this.boundedMessages(this.currentMessages()));
@@ -1162,15 +1212,8 @@ export class Conversation {
     if (this.session.isStreaming) {
       throw new AppError("conflict", "对话正在生成，先停掉再回退");
     }
-    const navigate = (
-      this.session as {
-        navigateTree?: (
-          id: string,
-          options?: { summarize?: boolean; customInstructions?: string; label?: string },
-        ) => Promise<unknown>;
-      }
-    ).navigateTree;
-    if (opts?.summarize && typeof navigate === "function") {
+    const navigate = sdkNavigateTree(this.session);
+    if (opts?.summarize && navigate) {
       await navigate.call(this.session, entryId.trim(), {
         summarize: true,
         ...(opts.instructions ? { customInstructions: opts.instructions } : {}),
@@ -1305,6 +1348,15 @@ export class ClientSession {
   private readonly persistedConversations: () => readonly StoredConversation[];
   private readonly rememberConversation: ((conv: Conversation) => void) | undefined;
   private readonly planMode: PlanModeController | undefined;
+  /**
+   * `listConversations()` 中「休眠对话」那一段的缓存。
+   *
+   * 经 `index`（索引数组引用）与 `liveKey`（在册会话 id 集合）双重校验——索引每次
+   * upsert/remove 都会换一个新数组，所以在册集合或索引一变就会自然失效，不需要额外的失效钩子。
+   */
+  private dormantCache:
+    | { index: readonly StoredConversation[]; liveKey: string; items: UiConversation[] }
+    | undefined;
 
   constructor(options: ClientSessionOptions) {
     this.clientId = options.clientId;
@@ -1491,18 +1543,32 @@ export class ClientSession {
 
   listConversations(): UiConversation[] {
     const live = [...this.convs.values()].map((conv) => conv.toSummary(conv.id === this.activeId));
-    const liveIds = new Set(live.map((item) => item.id));
-    const dormant: UiConversation[] = this.persistedConversations()
-      .filter((entry) => !liveIds.has(entry.sessionId))
-      .map((entry) => ({
-        id: entry.sessionId,
-        title: entry.title,
-        active: false,
-        streaming: false,
-        messageCount: entry.messageCount,
-        updatedAt: entry.updatedAt,
-        dormant: true,
-      }));
+    // 休眠项只由「索引内容 + 在册会话 id」决定，与各会话的实时状态无关。而快照每个周期都会
+    // 重建整份列表、索引上限又是 500 条——把这一段的 filter+map 结果按这两个输入缓存起来，
+    // 周期内就不必反复分配几百个对象。（在册的 `live` 部分每周期都会变，不能缓存。）
+    const index = this.persistedConversations();
+    const liveKey = live
+      .map((item) => item.id)
+      .sort()
+      .join("\n");
+    let dormant: UiConversation[];
+    if (this.dormantCache && this.dormantCache.index === index && this.dormantCache.liveKey === liveKey) {
+      dormant = this.dormantCache.items;
+    } else {
+      const liveIds = new Set(live.map((item) => item.id));
+      dormant = index
+        .filter((entry) => !liveIds.has(entry.sessionId))
+        .map((entry) => ({
+          id: entry.sessionId,
+          title: entry.title,
+          active: false,
+          streaming: false,
+          messageCount: entry.messageCount,
+          updatedAt: entry.updatedAt,
+          dormant: true,
+        }));
+      this.dormantCache = { index, liveKey, items: dormant };
+    }
     return [...live, ...dormant].sort((a, b) => b.updatedAt - a.updatedAt);
   }
 
@@ -1644,6 +1710,7 @@ export class ClientSession {
     }
     this.convs.clear();
     this.activeId = "";
+    this.dormantCache = undefined;
   }
 }
 
