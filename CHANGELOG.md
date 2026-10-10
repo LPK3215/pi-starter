@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-10
+
 ### Added
 
 - **跨会话记忆（默认开，`PI_MEMORY=off` 关）**：新增 `src/memory/store.ts` 与 `remember` / `recall` 两个工具，补齐 `docs/智能体视角评估.md` 里被点名的「最后两块砖」之一——此前每次新对话都从零开始，「记住我」不可能。落盘成 JSONL（默认 `~/.pi/agent/pi-starter-memory.jsonl`，原子写：先写同目录临时文件再 rename，与 `settings.ts` 同一口径），重启后仍在。
@@ -401,7 +403,8 @@ Initial public scaffold release.
 - **Sample chat page** (`public/index.html`): local-only reference UI for trying the HTTP/SSE endpoints.
 - **Build pipeline** (`npm run build`, `scripts/dist-assets.cjs`): compiles TypeScript to `dist/` and copies prompt / skill / knowledge assets alongside the emitted JS.
 
-[Unreleased]: https://github.com/LPK3215/pi-starter/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/LPK3215/pi-starter/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/LPK3215/pi-starter/releases/tag/v0.4.0
 [0.3.0]: https://github.com/LPK3215/pi-starter/releases/tag/v0.3.0
 [0.2.0]: https://github.com/LPK3215/pi-starter/releases/tag/v0.2.0
 [0.1.0]: https://github.com/LPK3215/pi-starter/releases/tag/v0.1.0
