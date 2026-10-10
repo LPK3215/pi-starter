@@ -19,7 +19,7 @@ import { createRotatingFileSink, LOG_BASE_NAME } from "../log-sink-file.js";
 import { getRequestLogger, requestContext } from "./request-context.js";
 import { registerLogRoutes } from "./log-routes.js";
 import { asyncRoute, registerErrorHandler } from "./routes.js";
-import { AppError } from "./errors.js";
+import { AppError } from "../errors.js";
 import { listenTestServer } from "../test-server.js";
 
 async function settle(): Promise<void> {

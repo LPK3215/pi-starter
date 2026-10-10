@@ -23,7 +23,7 @@ import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { createGunzip } from "node:zlib";
 import type { Express } from "express";
-import { validationFailed } from "./errors.js";
+import { validationFailed } from "../errors.js";
 import { asyncRoute } from "./routes.js";
 import { LOG_BASE_NAME } from "../log-sink-file.js";
 

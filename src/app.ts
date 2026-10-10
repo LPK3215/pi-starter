@@ -35,7 +35,7 @@ import {
   registerProbeRoutes,
   registerResourceRoutes,
 } from "./http/routes.js";
-import { AppError, badRequest, busy as busyError, toAppError } from "./http/errors.js";
+import { AppError, badRequest, busy as busyError, toAppError } from "./errors.js";
 import { registerFileRoutes } from "./http/file-routes.js";
 import { registerApprovalRoutes } from "./http/approval-routes.js";
 import { registerProviderKeyRoutes } from "./http/provider-key-routes.js";

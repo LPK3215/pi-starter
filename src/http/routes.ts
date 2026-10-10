@@ -14,7 +14,8 @@
 import type { Express, Request, Response } from "express";
 import { readFile } from "node:fs/promises";
 import { scanReadOnlySql } from "../db/index.js";
-import { AppError, badRequest, errorHandler, notFound, validationFailed } from "./errors.js";
+import { AppError, badRequest, notFound, validationFailed } from "../errors.js";
+import { errorHandler } from "./errors.js";
 import { getRequestLogger } from "./request-context.js";
 import { Metrics } from "../metrics.js";
 import { buildCapabilityBase } from "../capabilities.js";

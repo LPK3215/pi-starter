@@ -14,7 +14,7 @@
 import { createReadStream, existsSync, statSync } from "node:fs";
 import { basename } from "node:path";
 import type { Express, Request, Response } from "express";
-import { badRequest } from "./errors.js";
+import { badRequest } from "../errors.js";
 import { asyncRoute } from "./routes.js";
 import { FileService, isBinaryExtension } from "../files/service.js";
 

@@ -25,7 +25,7 @@ import {
 } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
-import { AppError, badRequest } from "../http/errors.js";
+import { AppError, badRequest } from "../errors.js";
 
 /** 索引里的一条对话。路径只给服务端自己用，不下发。 */
 export interface StoredConversation {

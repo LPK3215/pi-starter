@@ -41,7 +41,7 @@ import { Metrics, metrics as defaultMetrics } from "../metrics.js";
 import { buildCapabilityBase } from "../capabilities.js";
 import { toUiModel } from "../models.js";
 import { getLogger } from "../log.js";
-import { AppError, clientErrorMessage } from "../http/errors.js";
+import { AppError, clientErrorMessage } from "../errors.js";
 
 /** 把毫秒耗时收成 3 位小数，用于日志（避免浮点噪声刷屏）。 */
 function roundMs(ms: number): number {

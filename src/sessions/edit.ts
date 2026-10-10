@@ -11,7 +11,7 @@
 
 import { existsSync } from "node:fs";
 import { SessionManager, type SessionEntry } from "@earendil-works/pi-coding-agent";
-import { AppError, badRequest } from "../http/errors.js";
+import { AppError, badRequest } from "../errors.js";
 import { assertSessionFileAllowed } from "./store.js";
 
 /** 回退 / 编辑留下的标记。不进模型上下文。 */

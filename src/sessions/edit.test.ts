@@ -15,7 +15,7 @@ import { SessionManager } from "@earendil-works/pi-coding-agent";
 import type { Model } from "@earendil-works/pi-ai";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { resolveRuntimeConfig } from "../config.js";
-import { AppError } from "../http/errors.js";
+import { AppError } from "../errors.js";
 import type { ServerMessage } from "../protocol.js";
 import { Conversation, SessionHub } from "../session-hub.js";
 import type { BuiltAgent } from "../agent.js";

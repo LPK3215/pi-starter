@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { FileService, isBinaryExtension, looksBinary } from "./service.js";
-import { AppError } from "../http/errors.js";
+import { AppError } from "../errors.js";
 
 function tmpRoot(): string {
   return mkdtempSync(join(tmpdir(), "pi-files-"));

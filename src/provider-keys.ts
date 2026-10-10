@@ -22,7 +22,7 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
-import { validationFailed } from "./http/errors.js";
+import { validationFailed } from "./errors.js";
 
 /** 单个 provider 的密钥条数上限。 */
 export const MAX_PROVIDER_KEYS = 20;

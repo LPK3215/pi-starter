@@ -13,7 +13,7 @@
  */
 
 import type { Express, Request, Response } from "express";
-import { AppError, badRequest, validationFailed } from "./errors.js";
+import { AppError, badRequest, validationFailed } from "../errors.js";
 import { asyncRoute } from "./routes.js";
 import {
   validateApprovalRule,

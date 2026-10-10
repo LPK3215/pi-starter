@@ -8,7 +8,7 @@
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { AppError } from "./http/errors.js";
+import { AppError } from "./errors.js";
 import { MAX_IMAGE_BYTES, MAX_PROMPT_IMAGES, parsePromptImages } from "./prompt-images.js";
 
 /** 断言抛出的是 400 类的 AppError，并且文案里带上是第几张图。 */

@@ -18,7 +18,7 @@ import {
   sessionCatalog,
   sessionIndexPort,
 } from "./store.js";
-import { AppError } from "../http/errors.js";
+import { AppError } from "../errors.js";
 
 function expectAppError(fn: () => unknown): AppError {
   try {

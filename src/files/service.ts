@@ -30,7 +30,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { AppError, badRequest, notFound } from "../http/errors.js";
+import { AppError, badRequest, notFound } from "../errors.js";
 import { DEFAULT_DENY_NAMES, isDeniedName } from "../secret-files.js";
 
 // 重新导出：这两个符号原先定义在本文件，既有引用（含测试与二次开发）继续可用。

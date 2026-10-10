@@ -11,7 +11,7 @@ import { SessionManager } from "@earendil-works/pi-coding-agent";
 import type { Model } from "@earendil-works/pi-ai";
 import { resolveSessionManager } from "../agent.js";
 import { resolveRuntimeConfig } from "../config.js";
-import { AppError } from "../http/errors.js";
+import { AppError } from "../errors.js";
 import { SessionHub } from "../session-hub.js";
 import type { BuiltAgent } from "../agent.js";
 import { defaultSessionIndexFile, sessionCatalog, type SessionCatalog } from "./store.js";

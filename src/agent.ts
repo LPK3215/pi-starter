@@ -65,7 +65,7 @@ import {
   resolvePromptTemplatePaths,
   type LoadedPromptTemplate,
 } from "./prompt-templates/index.js";
-import { badRequest } from "./http/errors.js";
+import { badRequest } from "./errors.js";
 import { assertSessionFileAllowed } from "./sessions/store.js";
 import { formatKnowledgeCatalog, loadScaffoldKnowledge, type KnowledgeDoc, type KnowledgeHit } from "./knowledge/index.js";
 import {

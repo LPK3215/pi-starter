@@ -17,7 +17,7 @@
  */
 
 import type { Express, Request, Response } from "express";
-import { validationFailed } from "./errors.js";
+import { validationFailed } from "../errors.js";
 import { asyncRoute } from "./routes.js";
 import type { ProviderKeyStore } from "../provider-keys.js";
 

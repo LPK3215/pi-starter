@@ -382,13 +382,14 @@ export {
   AppError,
   badRequest,
   busy,
-  errorHandler,
   notFound,
   toAppError,
   validationFailed,
   type AppErrorCode,
   type AppErrorOptions,
-} from "./http/errors.js";
+} from "./errors.js";
+
+export { errorHandler } from "./http/errors.js";
 
 export {
   asyncRoute,

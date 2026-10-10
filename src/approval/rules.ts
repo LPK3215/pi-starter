@@ -17,7 +17,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "
 import { basename, dirname, join } from "node:path";
 import { isPathInsideCwd } from "../extensions/guard.js";
 import { shellApprovalRuleSpecs } from "../extensions/shell-rules.js";
-import { validationFailed } from "../http/errors.js";
+import { validationFailed } from "../errors.js";
 import { getLogger } from "../log.js";
 
 /** 规则命中后的动作。 */

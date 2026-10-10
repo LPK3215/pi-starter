@@ -39,13 +39,13 @@ Every `POST /chat` follows the same lifecycle: HTTP body → busy guard → `ses
 <!-- BEGIN:generated-numbers -->
 | Metric | Value |
 |---|---|
-| Backend source (`src/`, tests excluded) | 77 `.ts` files · 19157 lines |
+| Backend source (`src/`, tests excluded) | 81 `.ts` files · 19245 lines |
 | Backend tests | 49 files · **470 cases** · 11270 lines |
 | Frontend hand-written (`web/src`) | 36 files · 8751 lines |
 | Frontend cases | 19 |
 | HTTP route handlers (static count) | 55 |
-| Hand-written docs (`docs/*.md`) | 8 |
-| Largest single file | `src/session-hub.ts` (2169 lines) |
+| Hand-written docs (`docs/*.md`) | 9 |
+| Largest single file | `src/conversation/conversation.ts` (1137 lines) |
 
 > Generated from source by `node scripts/visualization/generate_readme_numbers.mjs` — **do not edit by hand**; `npm run docs:numbers:check` guards against drift in CI.
 <!-- END:generated-numbers -->
@@ -110,7 +110,7 @@ The scaffold is a **vertical-agent starting point**, not another coding-assistan
 | Process execution in `coding` only: `exec` / `exec_jobs` / `exec_stop` (timeout, process tree, workspace realpath) | Shell on by default. `off` and `readonly` do not get `exec` |
 | Multiple API keys (raw values never leave the server), typed errors, rate limits, metrics, redacted logs | OAuth, multi-user, payments |
 
-> **No built-in authentication — this is deliberate.** The scaffold binds `127.0.0.1` and warns loudly if `PI_HOST` is set to anything else, but nothing authenticates callers. Exposing it beyond loopback means exposing the agent *and its tools* to the network: put it behind your own auth proxy. Long-lived deployments should also note that settings are currently in-memory only, so `promptTemplate` / `disabledTools` reset on restart.
+> **No built-in authentication — this is deliberate.** The scaffold binds `127.0.0.1` and warns loudly if `PI_HOST` is set to anything else, but nothing authenticates callers. Exposing it beyond loopback means exposing the agent *and its tools* to the network: put it behind your own auth proxy. Settings are persisted to `~/.pi/agent/pi-starter-settings.json` (atomic write, corrupt file falls back to defaults), so `promptTemplate` / `disabledTools` survive a restart — only a library consumer that constructs `SettingsService` without a port gets the in-memory default. `builtinKnowledge` / `builtinSkills` are read once at assembly time, so changing those two needs a restart.
 
 Enable built-in tools (priority: CLI flags > `.env` > default `off`):
 
@@ -248,7 +248,7 @@ Dev mode needs the Vite proxy to pass the original `Host` through: the backend e
 
 When embedding into an existing service use `createApp({ staticDir: false })` and mount your own frontend.
 
-The full surface — all **34 WS client commands**, **21 server frames**, **60+ REST route handlers**, the tool inventory with capability/risk tags, every environment variable and every npm script — is generated from source into **[`docs/参考手册.md`](docs/参考手册.md)**. `npm run docs:reference:check` gates it in CI, so it cannot drift.
+The full surface — all **34 WS client commands**, **21 server frames**, **the complete REST route table**, the tool inventory with capability/risk tags, every environment variable and every npm script — is generated from source into **[`docs/参考手册.md`](docs/参考手册.md)**. `npm run docs:reference:check` gates it in CI, so it cannot drift.
 
 Probes are split by intent, so a dependency outage does not look like a dead process:
 
@@ -350,13 +350,20 @@ pi-starter/
 │       ├── generate_request_flow.mjs
 │       ├── generate_retrieval.mjs
 │       └── README.md
-├── docs/                 # generated SVGs + guides, referenced from the READMEs
+├── docs/                 # generated SVGs + guides + the generated reference manual
 │   ├── architecture.svg
 │   ├── sse-protocol.svg
 │   ├── knowledge-retrieval.svg # pluggable RAG retrieval pipeline
+│   ├── project_overview/ #   static HTML overview page (index.html + script.js + style.css)
+│   ├── 参考手册.md      #   GENERATED: WS protocol / REST / tools / env vars / npm scripts
 │   ├── 能力与边界.md    #   capability matrix & boundaries vs the SDK
-│   ├── 项目分析报告.md  #   engineering review
-│   └── 嵌入指南.md      #   embedding into an existing Express service
+│   ├── 嵌入指南.md      #   embedding into an existing Express service
+│   ├── 智能体视角评估.md #   first-person self-assessment (current state)
+│   ├── engineering-review.md # independent code review: findings + measured evidence
+│   ├── 官方SDK接口文档.md #   SDK interface notes
+│   ├── 前端调研.md      #   frontend research notes
+│   ├── assistant-ui.md  #   assistant-ui integration notes
+│   └── 项目分析报告.md  #   ARCHIVED pre-0.3.0 snapshot, kept for traceability only
 ├── .github/workflows/
 │   ├── ci.yml            # typecheck + unused + test + test:web + smoke + e2e + audit + build (ubuntu/win/mac)
 │   └── publish.yml       # tag-triggered release build (Actions unavailable in this repo — see pipeline.config.json)
@@ -474,7 +481,7 @@ description: Handles refund requests. Use when the user mentions refunds, return
 3. Decide refundability by policy
 ```
 
-After restart it shows up in `GET /health` / `GET /skills`. When the model matches the description it `read`s the SKILL.md at `<location>`. As a library: `buildAgent({ extraSkillPaths: ["/path/to/skills"] })`.
+After restart it shows up in `GET /info` / `GET /skills`. When the model matches the description it `read`s the SKILL.md at `<location>`. As a library: `buildAgent({ extraSkillPaths: ["/path/to/skills"] })`.
 
 By default `~/.pi/agent/skills` is not scanned. The `off` tier enables `read` (skills need it) but not bash/edit/write. `guard` blocks paths escaping cwd by default but allows `read` on SKILL.md.
 

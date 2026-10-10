@@ -39,13 +39,13 @@
 <!-- BEGIN:generated-numbers -->
 | 指标 | 数值 |
 |---|---|
-| 后端源码（`src/`，不含测试） | 77 个 `.ts` · 19157 行 |
+| 后端源码（`src/`，不含测试） | 81 个 `.ts` · 19245 行 |
 | 后端测试 | 49 个文件 · **470 用例** · 11270 行 |
 | 前端手写代码（`web/src`） | 36 个文件 · 8751 行 |
 | 前端用例 | 19 |
 | HTTP 路由处理器（静态计数） | 55 |
-| 手写文档（`docs/*.md`） | 8 |
-| 最大单文件 | `src/session-hub.ts`（2169 行） |
+| 手写文档（`docs/*.md`） | 9 |
+| 最大单文件 | `src/conversation/conversation.ts`（1137 行） |
 
 > 本表由 `node scripts/visualization/generate_readme_numbers.mjs` 从源码生成，**请勿手改**；`npm run docs:numbers:check` 会在 CI 里挡住漂移。
 <!-- END:generated-numbers -->
@@ -240,7 +240,23 @@ npm run ui:build   # 产出 web/dist——之后 `npm run web` 直接把应用�
 
 嵌进已有服务时用 `createApp({ staticDir: false })`，自己挂前端。
 
-`GET /health` 返回当前模型、可用模型列表、技能 / 知识库目录、数据库探活、内置工具档位、是否忙碌。
+完整能力面——34 条 WS 客户端命令、21 个服务端帧、全套 REST 路由表、带能力 / 风险标签的工具清单、全部环境变量与全部 npm 脚本——都由源码生成进 **[`docs/参考手册.md`](docs/参考手册.md)**。`npm run docs:reference:check` 在 CI 里挡住漂移。
+
+探活按用途拆开，这样依赖故障不会被误判成进程死掉：
+
+| 端点 | 含义 | 是否碰依赖 |
+|---|---|---|
+| `GET /health` | **liveness**——进程活着且在服务 | 否。模型 / 供应商故障期间仍为绿，编排器不会去反复重启一个健康的进程 |
+| `GET /health/ready` | **readiness**——模型已选、数据库可达、知识库已解析；任一项失败返回 `503` | 是 |
+| `GET /metrics` | 运行时指标；加 `?format=prometheus` 走文本格式 | 否 |
+| `GET /info` | 完整清单：当前模型、可用列表、技能 / 知识库目录、数据库探活、供应商鉴权状态、是否忙碌 | 仅模型目录 |
+
+所有响应都带加固头（`X-Content-Type-Options`、`X-Frame-Options`、`Referrer-Policy`、严格 CSP、COOP/CORP），并移除了 `X-Powered-By`。JSON body 默认上限 1 MB（超出 `413`）。
+
+```bash
+curl http://localhost:3000/health/ready
+curl "http://localhost:3000/metrics?format=prometheus"
+```
 
 不调模型也能测资源（虚拟 / 示例数据即可）：
 
@@ -326,13 +342,20 @@ pi-starter/
 │       ├── generate_request_flow.mjs
 │       ├── generate_retrieval.mjs
 │       └── README.md
-├── docs/                 # 架构图（自动生成）+ 指南，两份 README 都引用同一份
+├── docs/                 # 架构图（自动生成）+ 指南 + 生成的参考手册
 │   ├── architecture.svg
 │   ├── sse-protocol.svg
 │   ├── knowledge-retrieval.svg # 可插拔 RAG 检索管线
+│   ├── project_overview/ #   静态全景页（index.html + script.js + style.css）
+│   ├── 参考手册.md      #   生成：WS 协议 / REST / 工具 / 环境变量 / npm 脚本
 │   ├── 能力与边界.md    #   与 SDK 对齐的能力矩阵与边界
-│   ├── 项目分析报告.md  #   工程体检报告
-│   └── 嵌入指南.md      #   把 Agent 装进已有 Express 服务
+│   ├── 嵌入指南.md      #   把 Agent 装进已有 Express 服务
+│   ├── 智能体视角评估.md #   第一人称自评（当前现状）
+│   ├── engineering-review.md # 独立代码走查：结论 + 实测证据
+│   ├── 官方SDK接口文档.md #   SDK 接口笔记
+│   ├── 前端调研.md      #   前端调研
+│   ├── assistant-ui.md  #   assistant-ui 集成笔记
+│   └── 项目分析报告.md  #   已归档快照（0.3.0 之前），仅供追溯
 ├── .github/workflows/
 │   ├── ci.yml            # typecheck + unused + test + test:web + smoke + e2e + audit + build，矩阵跨 ubuntu / windows / macos
 │   └── publish.yml       # tag 触发的出包（本仓 Actions 不可用 —— 见 pipeline.config.json）
@@ -348,7 +371,7 @@ pi-starter/
 
 ```bash
 npm test            # 后端：单元 + 集成（数量见 Numbers 一节）
-npm run test:web    # 前端：11 个 WS 客户端测试（复用 tsx，零新依赖）
+npm run test:web    # 前端：WS 客户端测试（复用 tsx，零新依赖；数量见 Numbers）
 npm run smoke       # 23 项真实 WebSocket 端到端检查
 npm run typecheck   # 类型 + 协议完整性
 npm run lint:unused # 死代码门禁（"声明了但没接线"那一类）
@@ -446,7 +469,7 @@ description: 处理退款申请。用户说退款、退货、取消订单时使�
 3. 按规则决定是否可退
 ```
 
-重启后会出现在 `GET /health` / `GET /skills`。模型匹配 description 后会 `read` `<location>` 指向的 SKILL.md。当库用：`buildAgent({ extraSkillPaths: ["/path/to/skills"] })`。
+重启后会出现在 `GET /info` / `GET /skills`。模型匹配 description 后会 `read` `<location>` 指向的 SKILL.md。当库用：`buildAgent({ extraSkillPaths: ["/path/to/skills"] })`。
 
 默认不扫 `~/.pi/agent/skills`。`off` 档会打开 `read`（技能加载需要它），但不打开 bash/edit/write。`guard` 对越出 cwd 的路径默认拦截，但放行 `read` SKILL.md。
 
@@ -533,7 +556,11 @@ curl -X POST http://localhost:3000/db/query \
 
 | 方法 | 路径 | 作用 |
 |---|---|---|
-| GET | `/health` | 当前模型、可用列表、技能 / 知识库目录、数据库探活、是否忙碌 |
+| GET | `/health` | liveness 探活（不碰依赖） |
+| GET | `/health/ready` | readiness 探活——模型 + 数据库 + 知识库，失败返回 `503` |
+| GET | `/metrics` | 运行时指标；加 `?format=prometheus` 走文本格式 |
+| GET | `/info` | 完整清单：当前模型、可用列表、技能 / 知识库目录、数据库探活、供应商鉴权状态、是否忙碌 |
+| GET | `/providers` | 各 provider 的鉴权状态（官方 `ModelRuntime.getProviders`/`checkAuth`；只回 id/name/authorized/来源标签，不回原始 key） |
 | GET | `/skills` | 技能目录（不调模型） |
 | GET | `/skills/:name` | 读 SKILL.md 全文 |
 | GET | `/knowledge` | 知识库目录 |
@@ -546,7 +573,6 @@ curl -X POST http://localhost:3000/db/query \
 | POST | `/db/query` | `{ "sql": "SELECT …" }`，只读 |
 | POST | `/model` | `{ "model": "provider/modelId" }`，当前会话切换 |
 | POST | `/model/cycle` | 沿 `scopedModels` 轮换到下一个模型（无 body）；没有轮换列表时 400 |
-| GET | `/providers` | 各 provider 的鉴权状态（官方 `ModelRuntime.getProviders`/`checkAuth`；只回 id/name/authorized/来源标签，不回原始 key） |
 | POST | `/chat` | `{ "message": "..." }`，响应是 SSE 流；加 `?format=jsonl` 走官方原始 JSON 事件流（一行一个事件，`json.md` 词表） |
 
 嵌进已有 Express 时用 `createApp({ agent, staticDir: false })`，不要再开一个端口。完整装配、鉴权挂法与实测结论见 **[`docs/嵌入指南.md`](docs/嵌入指南.md)**。

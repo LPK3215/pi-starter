@@ -11,7 +11,7 @@ import { Logger, isSecretKey, resolveLogLevel, sanitizeFields } from "./log.js";
 import { Metrics } from "./metrics.js";
 import { childProcessEnv, isSecretEnvName } from "./child-env.js";
 import { isClientMessage } from "./protocol.js";
-import { AppError, badRequest, clientErrorMessage } from "./http/errors.js";
+import { AppError, badRequest, clientErrorMessage } from "./errors.js";
 import { DEFAULT_DENY_NAMES, isDeniedName } from "./secret-files.js";
 import {
   DEFAULT_SECURITY_HEADERS,

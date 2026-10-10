@@ -6,7 +6,7 @@
  */
 
 import type { ImageContent } from "@earendil-works/pi-ai";
-import { badRequest } from "./http/errors.js";
+import { badRequest } from "./errors.js";
 
 export const MAX_PROMPT_IMAGES = 4;
 export const MAX_IMAGE_BYTES = 512 * 1024;

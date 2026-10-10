@@ -26,7 +26,7 @@ import { resolveRuntimeConfig } from "./config.js";
 import { PROTOCOL_VERSION, type ServerMessage, type UiCapabilities, type UiState } from "./protocol.js";
 import { attachWebSocket } from "./transport/ws.js";
 import { Metrics } from "./metrics.js";
-import { AppError } from "./http/errors.js";
+import { AppError } from "./errors.js";
 import type { SessionCatalog, StoredConversation } from "./sessions/store.js";
 import { createToolRegistry } from "./tools/registry.js";
 import { SettingsService, memorySettingsPort } from "./settings.js";

@@ -12,7 +12,7 @@ import { createServer, type Server } from "node:http";
 import { once } from "node:events";
 import { WebSocket } from "ws";
 import { createApp } from "./app.js";
-import { AppError, notFound } from "./http/errors.js";
+import { AppError, notFound } from "./errors.js";
 import { attachWebSocket, defineCommand, type WsCommandRegistry } from "./transport/ws.js";
 import { listenExistingServer, waitFor } from "./test-server.js";
 import { SessionHub } from "./session-hub.js";

@@ -10,7 +10,7 @@ import type { BuiltAgent } from "./agent.js";
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import type { Model } from "@earendil-works/pi-ai";
 import { openDatabase } from "./db/index.js";
-import { AppError } from "./http/errors.js";
+import { AppError } from "./errors.js";
 import { loadKnowledgeFromDirs, searchKnowledge } from "./knowledge/index.js";
 import { loadSkillsFromDirs } from "./skills/index.js";
 
