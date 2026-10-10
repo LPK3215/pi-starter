@@ -679,6 +679,7 @@ Grouped by the question you are trying to answer. Read this index first, then pi
 | [`README.zh-CN.md`](README.zh-CN.md) | Chinese companion, mirrored section by section; Quick Start and secondary development live there too |
 | [`docs/project_overview/index.html`](docs/project_overview/index.html) | Interactive one-page panorama of the whole project (architecture, stack, capabilities, routes, quality). Its numbers, file lists, route table and gate list are generated from source by `npm run docs:overview`. Published live on GitHub Pages: <https://lpk3215.github.io/pi-starter/> |
 | [`docs/project_overview/project_card.html`](docs/project_overview/project_card.html) | The same story as one shareable image: an 800 px card that exports itself to a 2x PNG. Its numbers come from the same generator, so the two pages cannot disagree |
+| [`docs/archify/`](docs/archify/core-architecture.html) | Interactive, self-contained architecture views (click to zoom / search / focus): `core-architecture`, full `architecture-panorama`, `workflow-panorama`, `sequence-panorama` (`POST /chat`), `dataflow-panorama`. Regenerable from the typed JSON under `scripts/visualization/archify/`; the gated `docs/*.svg` remain the source of truth |
 
 **The interface: what it actually exposes**
 

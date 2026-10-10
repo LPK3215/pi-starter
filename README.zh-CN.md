@@ -665,6 +665,7 @@ server.listen(3000);
 | [`README.md`](README.md) | 英文主版（同章节 1∶1 对齐）；快速开始、二次开发都在里面 |
 | [`docs/project_overview/index.html`](docs/project_overview/index.html) | 整个项目的交互式全景观览页（架构 / 技术栈 / 能力 / 路由 / 质量）。其中的数值、文件清单、路由表、门禁列表由 `npm run docs:overview` 从源码生成；已由 GitHub Pages 上线：<https://lpk3215.github.io/pi-starter/> |
 | [`docs/project_overview/project_card.html`](docs/project_overview/project_card.html) | 同一份内容的「可分享单图」版：800px 长图名片，自带一键导出 2x PNG。数值出自同一个生成器，所以两份页面不可能对不上 |
+| [`docs/archify/`](docs/archify/core-architecture.html) | 交互式、自包含的架构图（可点击缩放 / 搜索 / 聚焦）：`core-architecture`、全景 `architecture-panorama`、`workflow-panorama`、`sequence-panorama`（`POST /chat`）、`dataflow-panorama`。可由 `scripts/visualization/archify/` 下的 typed JSON 重生成；受门禁的静态 `docs/*.svg` 仍为真源 |
 
 **查接口：它对外到底暴露什么**
 
