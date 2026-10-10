@@ -122,18 +122,35 @@ export class AppError extends Error {
     return GENERIC_MESSAGE[this.httpStatus] ?? GENERIC_MESSAGE[500]!;
   }
 
-  /** Everything for the server log: code, message, **full stack**, cause chain, details. */
+  /**
+   * 服务端日志字段。
+   *
+   * **4xx 不带堆栈。** 客户端写错一个查询参数抛出来的 `validation_failed`，栈顶永远是
+   * 校验器自己那一帧，对排查没有一个字的信息；而它是**按请求规模放大**的——有人对着
+   * `/logs?from=garbage` 打一万次，日志就被同一条无用的栈灌满。这套日志刚做完「无损字节
+   * 偏移分页 + 按 request_id 回溯」，可读性正是它的目的，所以体积也得管。
+   *
+   * 带栈的条件：`httpStatus >= 500`，或原文刻意不出服务端（`safeToExpose === false`，
+   * 那基本就是内部故障）。真实 `message` 与 `details` 两种情况下都进日志。
+   */
   toLogFields(): Record<string, unknown> {
-    return {
+    const fields: Record<string, unknown> = {
       code: this.code,
       httpStatus: this.httpStatus,
       // The real message is logged even when the client sees a generic one.
       message: this.message,
-      // Full stack of the AppError itself; secrets inside frames get value-redacted by the logger.
-      stack: this.stack,
       details: this.details,
-      ...(this.cause !== undefined ? { cause: serializeCause(this.cause, 0) } : {}),
     };
+    if (!this.carriesDiagnosticStack()) return fields;
+    // Full stack of the AppError itself; secrets inside frames get value-redacted by the logger.
+    fields.stack = this.stack;
+    if (this.cause !== undefined) fields.cause = serializeCause(this.cause, 0);
+    return fields;
+  }
+
+  /** 需要人去读代码才能修的错误才带栈：5xx，或对客户端藏了原文的错误。 */
+  private carriesDiagnosticStack(): boolean {
+    return this.httpStatus >= 500 || !this.safeToExpose;
   }
 }
 

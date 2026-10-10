@@ -19,7 +19,7 @@ import { createRotatingFileSink, LOG_BASE_NAME } from "../log-sink-file.js";
 import { getRequestLogger, requestContext } from "./request-context.js";
 import { registerLogRoutes } from "./log-routes.js";
 import { asyncRoute, registerErrorHandler } from "./routes.js";
-import { AppError } from "../errors.js";
+import { AppError, validationFailed } from "../errors.js";
 import { listenTestServer } from "../test-server.js";
 
 async function settle(): Promise<void> {
@@ -168,6 +168,57 @@ test("error line carries full stack + request_id, and secrets inside the message
   assert.ok(!serialized.includes("hunter2"), "password value redacted");
   assert.ok(!serialized.includes("tok-SHOULD-NOT-LEAK"), "token value redacted");
   assert.ok(serialized.includes("[redacted]"), "redaction marker present");
+});
+
+/**
+ * 回归：4xx 的错误行不再拖着一份"指向校验器自己"的堆栈。
+ *
+ * 症状真实出现过：对 `/logs?from=<非法值>` 发一次请求，日志里就多两份完整栈，
+ * 而那一轮的测试断言**全部通过**——噪声不会让任何东西变红,它只把刚做完的
+ * 「无损字节偏移分页 + 按 request_id 回溯」的日志按请求规模灌满没用的行。
+ * 反向性质（5xx 必须带完整栈与 cause 链）由上面那条测试锁住,两条一起把边界钉死。
+ */
+test("4xx 的错误行只记原因与 request_id，不记堆栈", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "pi-errlog-4xx-"));
+  const sink = createRotatingFileSink({ dir });
+  configureLog({ level: "debug", sink: sink.sink });
+
+  const app = express();
+  app.use(requestContext());
+  app.get(
+    "/bad",
+    asyncRoute(async () => {
+      throw validationFailed("from must be an ISO date or epoch ms", { details: { field: "from" } });
+    }),
+  );
+  registerErrorHandler(app);
+
+  const { url, close } = await listenTestServer(app);
+  const r = await fetch(`${url}/bad`);
+  const rid = r.headers.get("x-request-id")!;
+  assert.equal(r.status, 400);
+  // 省的是栈，不是原因：这类文案本来就是写给调用方的，不能顺带把它吞掉。
+  assert.equal(((await r.json()) as { error: string }).error, "from must be an ISO date or epoch ms");
+  await close();
+  await settle();
+  await sink.dispose();
+
+  const reader = express();
+  registerLogRoutes(reader, { dir });
+  const srv = await listenTestServer(reader);
+  const page = (await (await fetch(`${srv.url}/logs?requestId=${rid}&order=asc`)).json()) as {
+    entries: Array<Record<string, unknown>>;
+  };
+  await srv.close();
+
+  // 4xx 走的是 warn 行 `http request rejected`（5xx 才叫 `http request failed`），它以前也带着完整堆栈。
+  const failed = page.entries.find((e) => e.msg === "http request rejected");
+  assert.ok(failed, "4xx 仍然要留下错误行（不能因为省栈就整条不记）");
+  assert.equal(failed!.stack, undefined, "4xx 不记堆栈");
+  assert.equal(failed!.cause, undefined, "没有 cause 就不该凭空出现这个字段");
+  assert.equal(failed!.message, "from must be an ISO date or epoch ms");
+  assert.equal(failed!.level, "warn", "4xx 记在 warn，不占 error 的排障信号");
+  assert.equal(failed!.requestId, rid, "错误行仍与本次请求同键，可整条回溯");
 });
 
 test("pagination is lossless past the old 50k cap and stable (no dup/skip)", async () => {

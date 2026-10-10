@@ -90,6 +90,34 @@ test("cause 链在日志字段里保留（含各自的堆栈）", () => {
   assert.ok(typeof fields.stack === "string" && (fields.stack as string).length > 0, "AppError keeps its own stack");
 });
 
+/**
+ * 回归：4xx 曾**无条件**带完整堆栈。栈顶永远是校验器自己那一帧（零排障信息），
+ * 而它可以按请求规模放大——实测 `/logs?from=<非法值>` 就是这样吐了两份栈，
+ * 而那次测试是**通过**的：噪声不会让任何东西变红，只会把刚做完的「无损分页 +
+ * 按 request_id 回溯」的日志灌满没用的行。
+ */
+test("4xx 不带堆栈，但真实 message 与 details 照样进日志", () => {
+  const err = validationFailed("from must be an ISO date or epoch ms", { details: { field: "from" } });
+  const fields = err.toLogFields();
+  assert.equal(fields.stack, undefined, "4xx 的栈只指向校验器，不该进日志");
+  assert.equal(fields.cause, undefined, "没有 cause 就不该凭空出现这个字段");
+  assert.equal(fields.message, "from must be an ISO date or epoch ms", "原因仍然如实记录");
+  assert.equal(fields.httpStatus, 400);
+  assert.deepEqual(fields.details, { field: "from" });
+});
+
+/**
+ * 反向性质，和上一条一起把边界钉住：只要原文对客户端藏起来了，就说明
+ * 「不看代码不知道为什么失败」，这种必须带栈——哪怕它是 4xx。
+ */
+test("对客户端藏了原文的 4xx 仍然带栈", () => {
+  const err = new AppError("bad_request", 'driver said: relation "x" does not exist', { expose: false });
+  assert.equal(err.httpStatus, 400);
+  assert.equal(err.safeToExpose, false);
+  const fields = err.toLogFields();
+  assert.ok(typeof fields.stack === "string" && fields.stack.length > 0, "隐藏原文 = 需要排障 = 带栈");
+});
+
 test("details 只进日志，不进客户端文案", () => {
   const err = new AppError("internal", "boom", { details: { dbPath: "/var/data/app.db" } });
   assert.ok(!err.clientMessage().includes("/var/data"));
