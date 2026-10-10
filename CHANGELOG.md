@@ -43,6 +43,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **`guard` 的敏感文件拦截只查字面名，可被工作区内的符号链接绕过**：`isDeniedName(basename(targetPath))` 只看字面 basename，而 cwd 内一个 `alias.txt -> .env` 的链接——字面名不命中名单、路径也确实在 cwd 内——上面两道校验都会放行，**读出来的内容就是 `.env`**。文件服务那边（`files/service.ts` 的 `resolvePath`）在 0.3.0 就补了「真实目标名也要查」这一层，`guard` 这个负责拦**模型自身** `read`/`write`/`edit` 的旁路此前漏了，等于同一道门只关了一半（而 `read` 在任何档位都可用）。现补上同样的真实目标名校验（只在目标存在时解析，避免把父目录名误当成目标名），并加回归用例：绝对/相对目标的链接、指向 `id_rsa` 的链接、`sub/../alias.txt` 形式全部拦下，指向普通文件的链接不误伤。`SECURITY.md` 同步说明「两道门都查真实目标名」。
 - **Linux / macOS 的 `exec` 主执行路径不再继承 `PI_API_KEY`（P1-2 漏网之鱼）**：`src/exec/runner.ts` 的 `/bin/sh` 分支此前直接传 `process.env`，而 `src/child-env.ts` 的模块说明声称「凡是 spawn 子进程的地方都从这里取 env」——它恰好是唯一没兑现的地方，也是**主平台**。现改为 `childProcessEnv()`，并修正同文件 `taskkill` 分支里那句「凡 spawn 口径一致」的注释。新增 `src/exec/runner.test.ts` 用例锁定：子进程读不到 `PI_API_KEY` / `PI_API_KEY_<PROVIDER>`，但 `PATH` 等必须保留（否则 shell 与外部工具跑不起来）。
 
 ### Fixed

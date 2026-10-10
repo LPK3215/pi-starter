@@ -9,7 +9,7 @@
  * 这样它挡的是「覆盖率的下降」，而不是逼你现在去补一大片测试 ——
  * 门槛设得虚高只会让人加 `/* istanbul ignore *\/`，那是反效果。
  *
- * 实测基线（2026-10-10）：lines 92.66 / branches 80.95 / functions 85.64。
+ * 实测基线（2026-10-10）：lines 92.66 / branches 80.99 / functions 85.64。
  */
 
 import { spawnSync } from "node:child_process";

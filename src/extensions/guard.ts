@@ -153,6 +153,27 @@ export function guardExtension(pi: ExtensionAPI) {
         rule: "secret-file",
       });
     }
+    // 字面 basename 无害 ≠ 真实目标无害：cwd 内一个 `notes.txt -> .env` 的符号链接，
+    // 字面名（notes.txt）不命中名单、路径也确实在 cwd 内，于是上面两道都放行 ——
+    // 而读出来的内容就是 `.env`。文件服务那边（`files/service.ts` 的 `resolvePath`）
+    // 已经补了「真实目标名也要查」这一层，guard 这边此前漏了，等于同一道门只关了一半。
+    if (targetPath) {
+      const absolute = resolve(ctx.cwd, targetPath);
+      // 只在目标**存在**时解析：不存在的路径没有可逃逸的实体，硬解析只会把父目录的名字
+      // 误当成目标名（例如新建 `cwd/.env/foo` 也会去查 `.env`）。
+      const real = existsSync(absolute) ? realpathOfNearestExisting(absolute) : undefined;
+      const realName = real ? basename(real) : undefined;
+      if (realName && realName !== basename(targetPath) && isDeniedName(realName)) {
+        return block(
+          `${event.toolName}：拒绝访问敏感文件（${basename(targetPath)} 经符号链接指向 ${realName}）`,
+          {
+            toolName: event.toolName,
+            targetPath,
+            rule: "secret-file-symlink",
+          },
+        );
+      }
+    }
     if (targetPath && !isPathInsideCwd(targetPath, ctx.cwd)) {
       // SDK 技能正文在 additionalSkillPaths 里，不一定落在 cwd。
       // 只放行 read SKILL.md，write/edit 越界照拦。

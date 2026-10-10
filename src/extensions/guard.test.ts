@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, symlinkSync } from "node:fs";
+import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -53,6 +53,40 @@ test("guard：拒绝 agent 读写敏感文件（与文件服务共用同一名�
   // 普通文件不受影响；越界 read SKILL.md 的既有白名单也不受影响。
   assert.equal(callGuard("read", { path: "README.md" }, cwd), undefined);
   assert.equal(callGuard("read", { path: "/outside/SKILL.md" }, cwd), undefined);
+});
+
+/**
+ * 回归（高危）：**字面 basename 无害 ≠ 真实目标无害**。
+ *
+ * cwd 内一个 `alias.txt -> .env` 的符号链接：字面名 `alias.txt` 不在敏感名单里，
+ * 路径也确实在 cwd 内 —— 上面那两道校验都会放行，而读出来的内容就是 `.env`。
+ * 文件服务那边早就补了「真实目标名也要查」（`files/service.ts` 的 `resolvePath`），
+ * guard 这边此前漏了，于是模型的 `read` 能绕过同一道铁律。
+ */
+test("guard：cwd 内指向 .env 的符号链接同样被拦（真实目标名校验）", (t) => {
+  const cwd = mkdtempSync(join(tmpdir(), "pi-guard-link-"));
+  t.after(() => rmSync(cwd, { recursive: true, force: true }));
+  writeFileSync(join(cwd, ".env"), "PI_API_KEY=sk-should-not-leak\n");
+  writeFileSync(join(cwd, "notes.txt"), "无害内容\n");
+  writeFileSync(join(cwd, "id_rsa"), "-----BEGIN PRIVATE KEY-----\n");
+  symlinkSync(join(cwd, ".env"), join(cwd, "alias.txt")); // 绝对目标
+  symlinkSync(".env", join(cwd, "relative-alias.txt")); // 相对目标
+  symlinkSync(join(cwd, "id_rsa"), join(cwd, "key-link"));
+  symlinkSync(join(cwd, "notes.txt"), join(cwd, "harmless.txt")); // 指向普通文件
+
+  for (const path of ["alias.txt", "relative-alias.txt", "key-link"]) {
+    const result = callGuard("read", { path }, cwd);
+    assert.equal(result?.block, true, `${path} 经符号链接指向敏感文件，必须拦`);
+    assert.match(String(result?.reason), /符号链接指向/);
+  }
+  // 子目录里的链接同样要拦（不能被「相对路径」绕过）。
+  assert.equal(callGuard("read", { path: "sub/../alias.txt" }, cwd)?.block, true);
+
+  // 不误伤：指向普通文件的链接照常放行，普通文件也不受影响。
+  assert.equal(callGuard("read", { path: "harmless.txt" }, cwd), undefined);
+  assert.equal(callGuard("read", { path: "notes.txt" }, cwd), undefined);
+  // 目标不存在时不解析，避免把父目录名误当成目标名。
+  assert.equal(callGuard("read", { path: "not-created-yet.txt" }, cwd), undefined);
 });
 
 test("路径必须落在 cwd 内，跨目录和绝对路径越界被拦", () => {
