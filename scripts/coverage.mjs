@@ -9,7 +9,7 @@
  * 这样它挡的是「覆盖率的下降」，而不是逼你现在去补一大片测试 ——
  * 门槛设得虚高只会让人加 `/* istanbul ignore *\/`，那是反效果。
  *
- * 实测基线（2026-10-10）：lines 90.45 / branches 79.41 / functions 83.46。
+ * 实测基线（2026-10-10）：lines 91.43 / branches 79.90 / functions 84.62。
  */
 
 import { spawnSync } from "node:child_process";
@@ -20,7 +20,7 @@ import { fileURLToPath } from "node:url";
 const ROOT = resolve(fileURLToPath(new URL("..", import.meta.url)));
 
 /** 只降不升的棘轮阈值（略低于实测基线）。调高之前先跑一次看真实数字。 */
-const THRESHOLDS = { lines: 90, branches: 79, functions: 83 };
+const THRESHOLDS = { lines: 91, branches: 79, functions: 84 };
 
 const pkg = JSON.parse(readFileSync(resolve(ROOT, "package.json"), "utf8"));
 const files = pkg.scripts.test

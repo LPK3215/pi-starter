@@ -15,6 +15,7 @@ import { createApp } from "../app.js";
 import { listenTestServer } from "../test-server.js";
 import {
   ApprovalRulesStore,
+  MAX_USER_RULES,
   createPersistentRulesStore,
   loadApprovalRulesFromFile,
   builtinApprovalRules,
@@ -183,6 +184,102 @@ test("规则编辑：内置规则不可通过接口写入或删除", async () =>
     const builtin = builtinApprovalRules();
     assert.ok(builtin.length > 0);
     assert.ok(builtin.some((r) => r.action === "deny"), "hard denials must exist");
+  } finally {
+    await h.close();
+  }
+});
+
+/** 造 n 条合法的用户规则（id 唯一）。 */
+function manyRules(n: number): ApprovalRule[] {
+  return Array.from({ length: n }, (_, i) => ({ id: `r${i}`, ...rule(`r${i}`) }) as ApprovalRule);
+}
+
+test("规则编辑：GET 返回生效全集，每条都带 builtin 标记，并给出 userCount", async () => {
+  const store = new ApprovalRulesStore();
+  store.setUserRules([{ id: "u1", ...rule("u1") } as ApprovalRule]);
+  const h = await start(store);
+  try {
+    const res = await fetch(`${h.base}/approval/rules`);
+    assert.equal(res.status, 200);
+    const body = (await res.json()) as { rules: Array<{ id: string; builtin: boolean }>; userCount: number };
+    assert.equal(body.userCount, 1);
+    assert.equal(typeof body.userCount, "number");
+    for (const entry of body.rules) {
+      assert.equal(typeof entry.builtin, "boolean", "每条都要有 builtin 布尔标记，前端才能区分能不能删");
+    }
+    assert.ok(body.rules.some((entry) => entry.id === "u1"));
+  } finally {
+    await h.close();
+  }
+});
+
+test("规则编辑：PUT 整体替换——非数组 / 超上限 / 含内置 / 单条非法都拒，且被拒时不落地", async () => {
+  const store = new ApprovalRulesStore();
+  store.setUserRules([{ id: "keep", ...rule("keep") } as ApprovalRule]);
+  const h = await start(store);
+  try {
+    const put = (body: unknown) =>
+      fetch(`${h.base}/approval/rules`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+
+    assert.equal((await put({ rules: "nope" })).status, 400);
+    assert.equal((await put({ rules: [{ id: "r", ...rule("r"), builtin: true }] })).status, 400, "内置规则不可经此写入");
+    assert.equal((await put({ rules: manyRules(MAX_USER_RULES + 1) })).status, 400, "超过上限必须拒");
+    // 单条非法（match.value 缺失）也要被同一套校验拦下——不能出现「手写文件被拦、API 却能塞进去」。
+    assert.equal(
+      (await put({ rules: [{ id: "bad", description: "x", tools: ["bash"], field: "command", match: { kind: "glob" }, action: "ask" }] }))
+        .status,
+      400,
+    );
+    assert.deepEqual(store.listUserRules().map((r) => r.id), ["keep"], "被拒的请求绝不能改动已有规则");
+
+    // 恰好等于上限要放行（边界不能差一）。
+    assert.equal((await put({ rules: manyRules(MAX_USER_RULES) })).status, 200);
+    assert.equal(store.listUserRules().length, MAX_USER_RULES);
+
+    // 整体替换的语义：旧规则不再保留。
+    assert.equal((await put({ rules: [{ id: "only", ...rule("only") }] })).status, 200);
+    assert.deepEqual(store.listUserRules().map((r) => r.id), ["only"]);
+  } finally {
+    await h.close();
+  }
+});
+
+test("规则编辑：达到上限后「新增」被拒，但同 id 覆盖仍然可用", async () => {
+  const store = new ApprovalRulesStore();
+  store.setUserRules(manyRules(MAX_USER_RULES));
+  const h = await start(store);
+  try {
+    const post = (id: string) =>
+      fetch(`${h.base}/approval/rules`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id, ...rule(id) }),
+      });
+
+    assert.equal((await post("brand-new")).status, 400, "满了就不能再新增");
+    assert.equal(store.listUserRules().length, MAX_USER_RULES, "被拒时条数不变");
+
+    // 覆盖已有 id 不属于「新增」，不该被上限挡住（否则满了之后连改一条都做不到）。
+    assert.equal((await post("r0")).status, 200);
+    assert.equal(store.listUserRules().length, MAX_USER_RULES);
+  } finally {
+    await h.close();
+  }
+});
+
+test("规则编辑：内置规则不可删除——手改 rules.json 塞 builtin 也删不掉", async () => {
+  const store = new ApprovalRulesStore();
+  // 模拟用户手改规则文件，把 builtin 标记写了进去（validateApprovalRule 会原样保留它）。
+  store.setUserRules([{ id: "hijack", ...rule("hijack"), builtin: true } as ApprovalRule]);
+  const h = await start(store);
+  try {
+    const res = await fetch(`${h.base}/approval/rules/hijack`, { method: "DELETE" });
+    assert.equal(res.status, 400);
+    assert.deepEqual(store.listUserRules().map((r) => r.id), ["hijack"], "被拒的删除不能真的删掉");
   } finally {
     await h.close();
   }

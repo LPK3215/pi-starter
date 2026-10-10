@@ -16,6 +16,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **不假装能搜**：后端没有 `search()` 时**不注册** `web_search`（与 `rag:smoke` 打印 SKIP 同一原则）；默认的 DuckDuckGo 无 JS 版解析是 best-effort，抽不到就如实说「没有命中」。
   - 能力标签 `net` → `inferRisk` 判 `medium`；与 `exec` 同口径**不进 `allTools`**，开了才登记进 `ToolRegistry`。`SECURITY.md` / `.env.example` / 两份 README 都已注明「未被缓解的部分」（URL 由模型决定，DNS 解析与建连之间存在 TOCTOU 窗口）。
 
+- **五个「未覆盖即未验证」模块的测试**（本轮第二批，48 个测试文件 / 432 用例，覆盖率 90.45% → **91.43%**）：
+  - `src/prompt-images.test.ts`（6 例，44% → 100%）：`parsePromptImages` 是 `prompt` / `steer` / `follow_up` 三条 WS 命令共用的唯一入口校验，此前只被间接带到 —— 等于「模型收到一张损坏的图」这条路径从未验证过。覆盖 MIME 白名单（`image/svg+xml` 拒收）、`data:` 前缀、非法 base64、**正则过得了但解码为 0 字节**（单字符 `"a"`）与恰好等于上限的边界。
+  - `src/extensions/audit.test.ts`（6 例，56% → 100%）：这个扩展的价值全在「记什么、不记什么」上。核心断言是**日志里绝不能出现参数值**（含 `sk-` 密钥与 SQL 原文），只记字段名；以及失败的调用走 `warn`、`logArgKeys=false` 时连字段名都不记、超出 256 条进行中调用时最早的被淘汰。
+  - `src/tools/ask-user-question.test.ts`（5 例，56% → 100%）：HITL 工具出错不是「答得不对」而是「整轮卡死」或「悄悄跳过」。覆盖无 UI 时**绝不假装等待且不调用任何 ui 方法**、`AbortSignal` 必须透传（否则桥那头无法取消）、`confirm` 选「否」与取消一样算未作答。
+  - `src/tools/resource.test.ts` 扩充（7 例，`knowledge.ts` 71% → 100%、`database.ts` 73% → 98.7%）：`search_knowledge` 的 limit 夹取 `[1, 50]`（`100000` / `0` / 负数 / `NaN` / 非数字字符串 / 缺省六种输入）、未知文档名要列出可用项、`db_query` 的非只读 SQL 必须在**落到 `database.query` 之前**被拒（断言 `called === 0`）、查询抛错翻成「查询失败：…」、**被截断时必须显式告知真实总行数**并给出可执行下一步。
+  - `src/http/approval-routes.test.ts` 扩充（4 例，71% → 100%）：`GET` 的 builtin 标记与 `userCount`、`PUT` 整体替换的四条拒绝路径（非数组 / 超 `MAX_USER_RULES` / 含内置 / 单条非法）且**被拒时不落地**、达到上限后「新增」被拒但**同 id 覆盖仍可用**、手改 `rules.json` 塞 `builtin: true` 也删不掉。
+  - `src/tools/current-time.test.ts`（4 例，70.59% → 100%）：见上一条 `Fixed`。
+
 - **文件服务路由层测试（`src/http/file-routes.test.ts`，9 例）**：`file-routes.ts` 此前覆盖率 43.24%（全项目最低之一）而**没有任何测试**，可它正是把工作目录暴露成 HTTP 的那一层。覆盖：未提供 `FileService` 时 `/files/*` 完全不注册、`requirePath` 的 fail-closed（缺/空白 path = 400，不悄悄退回根目录）、敏感文件在 **read / raw / 列表预览** 三个出口都被拦且不回显内容、`recursive` 必须是布尔 `true`（字符串 `"true"` 不算数）、Range 语义（206 / `bytes=-N` 后缀区间 / 416 + `Content-Range: bytes */size` / 无 Range 超限 413 / `download=true` / 二进制扩展名给 octet-stream）、上传的**字节级往返**（历史 bug 是 `write` + `toString("utf8")` 损坏非 UTF-8 字节）。
   覆盖率 43.24% → **100%**，全项目 89.80% → **90.45%**（棘轮阈值随之抬到 lines 90 / branches 79 / functions 83）。
   同时把「上传上限是**两层叠加**」这件事写进了代码注释与测试：`/files/upload` 的 5MB 是第二层，默认 JSON body 上限 `1mb` 会先挡一道（base64 还放大 4/3），所以默认配置下原始字节刚过 1MB 就被 413，那个 5MB 检查**不可达**；只有把 `bodyLimit` 提到约 7mb 以上它才生效。
@@ -32,6 +40,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`current_time` 在模型写 `UTC+8` / `GMT+8` 时直接抛 `RangeError`**：`toLocaleString` 只认 IANA 时区名，而这两种恰好是模型最可能写出来的写法（实测 `RangeError: Invalid time zone specified: UTC+8`）。工具此前没有任何测试、`execute` 从未被执行过，所以一直没暴露。现改为如实说明并给出可用写法（含「东八区应写 `Etc/GMT-8`，符号是反的」这个最容易踩的点），`details.ok=false` 以便调用方区分。
 - **`/files/copy` 复制目录必然 500**（`FileService.copy`）：代码校验完 `recursive` 之后仍然**无条件**调 `copyFileSync`，而它对目录直接抛 `EISDIR` —— 于是「传 `recursive: true` 去复制目录」100% 失败成 500，且即使不抛也只会留下一个空壳。改用 `cpSync(..., { recursive: true })`，并把复制失败翻译成 `AppError` 而不是裸抛。
 - **给目录改名会「先改盘、再报错」**（`FileService.rename`）：`renameSync` 成功之后无条件 `this.read(toRel)`，而 `read` 只读文件，于是目录重命名永远在**磁盘已经变了之后**返回 400 —— 客户端看到失败、实际已生效，比单纯失败更难查。现按目标类型返回目录描述。
 - **`Range: bytes=-N` 后缀区间永远返回 416**（`/files/raw`）：把后缀长度当成了结束下标，`start(=size-N) > end(=N)` 恒成立。播放器从尾部 seek 全废。现按规范分开处理后缀区间与普通区间（`bytes=-0` 仍判 416，符合 RFC）。
