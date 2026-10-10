@@ -6,7 +6,7 @@
   <a href="https://github.com/LPK3215/pi-starter/releases"><img alt="release" src="https://img.shields.io/github/package-json/v/LPK3215/pi-starter?label=release&color=blue"/></a>
   <a href="LICENSE"><img alt="license" src="https://img.shields.io/github/license/LPK3215/pi-starter?color=green"/></a>
   <a href="https://nodejs.org/"><img alt="node" src="https://img.shields.io/badge/node-%3E%3D22.19-brightgreen"/></a>
-  <a href="https://github.com/LPK3215/pi-starter/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/LPK3215/pi-starter/ci.yml?branch=main&label=CI"/></a>
+  <a href="https://cnb.cool/lpk3215/pi-starter"><img alt="gates" src="https://img.shields.io/badge/gates-CNB%20pipeline-informational"/></a>
   <a href="https://github.com/LPK3215/pi-starter/issues"><img alt="issues" src="https://img.shields.io/github/issues/LPK3215/pi-starter"/></a>
   <a href="https://github.com/LPK3215/pi-starter/commits/main"><img alt="last commit" src="https://img.shields.io/github/last-commit/LPK3215/pi-starter"/></a>
   <a href="CONTRIBUTING.md"><img alt="PRs welcome" src="https://img.shields.io/badge/PRs-welcome-brightgreen"/></a>
@@ -305,43 +305,59 @@ pi-starter/
 │   ├── index.ts          # CLI entry (interactive chat)
 │   ├── server.ts         # Web entry: parse args, listen
 │   ├── app.ts            # ★ HTTP app: /health /skills /knowledge /db /model /chat
+│   ├── rpc.ts            # official RPC entry (`npm run dev -- --mode rpc`)
 │   ├── lib.ts            # library export (buildAgent / createApp / setupPiAgentDir …)
 │   ├── setup.ts          # npm run setup: merge-write into ~/.pi/agent/
 │   ├── agent.ts          # ★ assembly: model + persona + tools + extensions → session
-│   ├── config.ts         # config layer: CLI / .env / built-in-tools tier
-│   ├── cli-args.ts       # CLI flag parsing (shared by CLI and Web)
+│   ├── config.ts         # config layer: CLI / .env / built-in-tools tier / SDK settings passthrough
+│   ├── session-hub.ts    # hub: conversations per client (cap + LRU), restart recovery
+│   ├── client-session.ts # one WS connection's conversations + slot admission (in-flight counts)
+│   ├── conversation/     # Conversation: SDK events → snapshot state, tree ops, compaction
+│   ├── protocol.ts       # ★ single source of the WS/REST message types (compile-time completeness)
 │   ├── sse.ts            # agent events → SSE protocol / raw NDJSON (jsonl)
-│   ├── rpc.ts            # official RPC entry (`npm run dev -- --mode rpc`)
+│   ├── snapshot.ts       # snapshot emitter: delta vs full, throttled, rev chain
+│   ├── errors.ts         # AppError primitive (transport-agnostic)
+│   ├── http/             # routes / error handler / hardening / rate limit / log & file routes
+│   ├── transport/        # WebSocket: hello→ready, backpressure drops, origin check
+│   ├── sessions/         # session index (JSONL catalog) + rollback / edit / fork / import
+│   ├── approval/         # rules → policy → gate (deny can't be disabled) + tool watchdog
+│   ├── modes/            # plan mode: per-conversation "plan only" hard gate
+│   ├── extensions/       # extension layer: hooks on agent lifecycle
+│   │   ├── index.ts      #   ★ registry
+│   │   ├── guard.ts      #   tool_call interception (dangerous bash / path escape / secret names)
+│   │   ├── audit.ts      #   tool-call audit log
+│   │   ├── shell-rules.ts #  single source for dangerous shell patterns (guard + approval share it)
+│   │   └── *.example.ts  #   provider / command / sandbox / hooks / result-redaction seams
+│   ├── tools/            # tool layer: give the LLM "hands"
+│   │   ├── index.ts      #   ★ static tool registry
+│   │   ├── registry.ts   #   capability tags, runtime enable/disable
+│   │   ├── current-time.ts · knowledge.ts · database.ts · exec.ts
+│   │   ├── memory.ts     #   remember / recall
+│   │   ├── web.ts        #   web_fetch / web_search (SSRF-guarded, off by default)
+│   │   └── ask-user-question.ts # HITL ask through the official ctx.ui
+│   ├── skills/           # skills: <name>/SKILL.md, SDK additionalSkillPaths
+│   │   └── summarize/SKILL.md
+│   ├── knowledge/        # knowledge base: *.md + pluggable retrieval (keyword | vector)
+│   │   ├── index.ts · about.md
+│   │   ├── retrieval.ts  #   Retriever / EmbeddingProvider / VectorStore interfaces
+│   │   ├── embeddings.ts · embeddings-transformers.ts
+│   │   └── vector-store-sqlite.ts # persisted VectorStore (node:sqlite)
+│   ├── memory/           # cross-session memory store (JSONL, 0600, bounded)
+│   ├── prompt-templates/ # slash-command templates: <name>.md → /<name>, SDK additionalPromptTemplatePaths
+│   │   └── review.md
 │   ├── prompts/          # layered prompts (edit here = change the persona)
 │   │   ├── persona.md    #   who the agent is, how it answers
 │   │   └── rules.md      #   working constraints
-│   ├── tools/            # tool layer: give the LLM "hands"
-│   │   ├── index.ts      #   ★ static tool registry
-│   │   ├── current-time.ts
-│   │   ├── knowledge.ts  #   search / read the knowledge base
-│   │   └── database.ts   #   db_status / db_query
-│   ├── skills/           # skills: <name>/SKILL.md, SDK additionalSkillPaths
-│   │   ├── index.ts
-│   │   └── summarize/SKILL.md
-│   ├── knowledge/        # knowledge base: *.md + pluggable retrieval (keyword | vector)
-│   │   ├── index.ts
-│   │   ├── retrieval.ts  # Retriever / EmbeddingProvider / VectorStore interfaces
-│   │   ├── embeddings.ts # OpenAI-compatible + Ollama embedding providers
-│   │   ├── embeddings-transformers.ts # in-process embedding (@huggingface/transformers)
-│   │   ├── vector-store-sqlite.ts # persisted VectorStore (node:sqlite)
-│   │   └── about.md
-│   ├── prompt-templates/ # slash-command templates: <name>.md → /<name>, SDK additionalPromptTemplatePaths
-│   │   ├── index.ts
-│   │   └── review.md
-│   ├── db/               # database: node:sqlite, in-memory + sample notes
-│   │   └── index.ts
-│   └── extensions/       # extension layer: hooks on agent lifecycle
-│       ├── index.ts      #   ★ registry
-│       ├── guard.ts      #   example: tool_call interception (dangerous bash / path escape)
-│       ├── audit.ts      #   example: tool-call audit log
-│       ├── custom-provider.example.ts # example: pi.registerProvider (api-key)
-│       ├── example-command.ts         # example: pi.registerCommand / sendUserMessage
-│       └── sandbox.example.ts         # example: tool-routing override (isolation seam)
+│   ├── db/               # database: node:sqlite, in-memory default + read-only SQL scan
+│   ├── files/            # FileService: literal path + realpath check, denyNames
+│   ├── exec/             # process execution (tier `coding`): timeout, process tree, workspace
+│   ├── subagents/        # delegate_task: own budget, never occupies the main conversation cap
+│   ├── mcp/              # MCP stdio client + bridge (settings change applies without restart)
+│   ├── context/          # context budget: what to trim when the window is full
+│   └── runtime plumbing  # settings.ts · provider-keys.ts · secret-files.ts · models.ts ·
+│                         #   capabilities.ts · log.ts · log-sink-file.ts · metrics.ts ·
+│                         #   snapshot helpers · graceful.ts · child-env.ts · sdk-adapter.ts ·
+│                         #   cli-args.ts · prompt-images.ts · test-server.ts · test-tmp.ts
 ├── scripts/
 │   ├── dist-assets.cjs   # clean / copy prompt+skill+knowledge+prompt-templates assets into dist/
 │   ├── smoke-ws.mjs      # real WebSocket smoke (part of `npm run smoke`)
@@ -368,7 +384,7 @@ pi-starter/
 │   ├── assistant-ui.md  #   assistant-ui integration notes
 │   └── 项目分析报告.md  #   ARCHIVED pre-0.3.0 snapshot, kept for traceability only
 ├── .github/workflows/
-│   ├── ci.yml            # typecheck + unused + test + test:web + smoke + e2e + audit + build (ubuntu/win/mac)
+│   ├── ci.yml            # typecheck + unused + coverage + test + test:web + docs:check + smoke + e2e + audit + build (ubuntu/win/mac) — Actions cannot run for this account, so .cnb.yml is the gate that actually fires
 │   └── publish.yml       # tag-triggered release build (Actions unavailable in this repo — see pipeline.config.json)
 ├── web/                  # product frontend (own package.json, Vite + React + assistant-ui)
 │   └── src/pi/           #   the only hand-written glue: WS client + ExternalStore adapter

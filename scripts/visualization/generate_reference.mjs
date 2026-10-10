@@ -23,6 +23,8 @@
  *     —— 新增一个工具却忘了归类，会直接让门禁红，而不是让文档悄悄少一条。
  *   - 代码里引用的 `PI_*` 必须都在 `.env.example` 里登记过。
  *   - 两份 README 里出现 `PI_*` 名字但 `.env.example` 没登记（同一件事的反方向）。
+ *   - 两份 README 的 `src/` 目录树必须与文件系统一致：漏列（能力隐身）与多列（指向已不存在
+ *     的目录）都判失败。实测英文树曾只列 7 个目录而实际有 19 个。
  *
  * 用法：
  *   npx tsx scripts/visualization/generate_reference.mjs           # 写入 docs/参考手册.md
@@ -344,6 +346,41 @@ const ENV_ALLOWLIST = new Set(["PI_API_KEY_ZHIPU", "PI_EMBEDDINGS_KEY", "PI_BASE
 const missingFromExample = [...envInCode].filter((n) => !envDeclared.has(n) && !ENV_ALLOWLIST.has(n));
 if (missingFromExample.length > 0) {
   fail(`代码里引用但 .env.example 未登记：${missingFromExample.sort().join(", ")}`);
+}
+
+/* ═══════════════ 4.5 两份 README 的 src/ 目录树必须与文件系统一致 ═══════════════ */
+
+/**
+ * 为什么把这条塞进门禁：目录树是手写的，而代码长得比文档快。实测英文树只列了 7 个
+ * `src/` 子目录，实际有 19 个 —— `memory/`、`conversation/`、`approval/`、`mcp/` 全部缺席。
+ * 读者是靠这张图判断「项目有多大、东西放在哪」的，少列一个目录就等于宣称那个能力不存在。
+ * 两个方向都判：漏列（能力隐身）与多列（指向已经不存在的目录）。
+ */
+{
+  const actualDirs = new Set(
+    readdirSync(join(ROOT, "src"), { withFileTypes: true })
+      .filter((e) => e.isDirectory())
+      .map((e) => e.name)
+  );
+  for (const readme of ["README.md", "README.zh-CN.md"]) {
+    const text = read(join(ROOT, readme));
+    const start = text.indexOf("├── src/");
+    const end = text.indexOf("├── scripts/");
+    if (start < 0 || end < 0 || end < start) {
+      fail(`${readme}: 找不到 src/ 目录树段落（结构变了要同步更新生成器的这条检查）`);
+      continue;
+    }
+    const tree = text.slice(start, end);
+    const declared = new Set([...tree.matchAll(/[├└]── ([a-z][a-z0-9-]*)\/(?=[ \t])/g)].map((m) => m[1]));
+    const missing = [...actualDirs].filter((d) => !declared.has(d)).sort();
+    const stale = [...declared].filter((d) => !actualDirs.has(d)).sort();
+    if (missing.length > 0) {
+      fail(`${readme} 的 src/ 目录树漏了 ${missing.length} 个实际存在的目录：${missing.join(", ")}`);
+    }
+    if (stale.length > 0) {
+      fail(`${readme} 的 src/ 目录树列了已不存在的目录：${stale.join(", ")}`);
+    }
+  }
 }
 
 /* ══════════════════════════ 5. npm 脚本 ══════════════════════════ */

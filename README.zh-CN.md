@@ -6,7 +6,7 @@
   <a href="https://github.com/LPK3215/pi-starter/releases"><img alt="release" src="https://img.shields.io/github/package-json/v/LPK3215/pi-starter?label=release&color=blue"/></a>
   <a href="LICENSE"><img alt="license" src="https://img.shields.io/github/license/LPK3215/pi-starter?color=green"/></a>
   <a href="https://nodejs.org/"><img alt="node" src="https://img.shields.io/badge/node-%3E%3D22.19-brightgreen"/></a>
-  <a href="https://github.com/LPK3215/pi-starter/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/LPK3215/pi-starter/ci.yml?branch=main&label=CI"/></a>
+  <a href="https://cnb.cool/lpk3215/pi-starter"><img alt="gates" src="https://img.shields.io/badge/gates-CNB%20pipeline-informational"/></a>
   <a href="https://github.com/LPK3215/pi-starter/issues"><img alt="issues" src="https://img.shields.io/github/issues/LPK3215/pi-starter"/></a>
   <a href="https://github.com/LPK3215/pi-starter/commits/main"><img alt="last commit" src="https://img.shields.io/github/last-commit/LPK3215/pi-starter"/></a>
   <a href="CONTRIBUTING.md"><img alt="PRs welcome" src="https://img.shields.io/badge/PRs-welcome-brightgreen"/></a>
@@ -297,43 +297,59 @@ pi-starter/
 │   ├── index.ts          # CLI 入口（交互对话）
 │   ├── server.ts         # Web 入口：解析命令行、listen
 │   ├── app.ts            # ★ HTTP 应用：/health /skills /knowledge /db /model /chat
+│   ├── rpc.ts            # 官方 RPC 入口（`npm run dev -- --mode rpc`）
 │   ├── lib.ts            # 库导出（buildAgent / createApp / setupPiAgentDir …）
 │   ├── setup.ts          # npm run setup：merge 写入 ~/.pi/agent/
 │   ├── agent.ts          # ★ 组装层：模型 + 人设 + 工具 + 扩展 → session
-│   ├── config.ts         # 配置层：命令行 / .env / 内置工具档位
-│   ├── cli-args.ts       # 命令行 flag 解析（CLI / Web 共用）
+│   ├── config.ts         # 配置层：命令行 / .env / 内置工具档位 / SDK 设置透传
+│   ├── session-hub.ts    # 中枢：每连接多对话（上限 + LRU）、重启后接回
+│   ├── client-session.ts # 一条 WS 连接的对话集合 + 名额准入（在途也计入）
+│   ├── conversation/     # Conversation：SDK 事件 → 快照状态、会话树操作、压缩
+│   ├── protocol.ts       # ★ WS/REST 消息类型单一真源（编译期完备性断言）
 │   ├── sse.ts            # Agent 事件 → SSE 协议 / 原始 NDJSON（jsonl）
-│   ├── rpc.ts            # 官方 RPC 入口（`npm run dev -- --mode rpc`）
+│   ├── snapshot.ts       # 快照发射器：增量与全量、节流、rev 链
+│   ├── errors.ts         # AppError 原语（与传输层无关）
+│   ├── http/             # 路由 / 错误处理 / 加固 / 限流 / 日志与文件路由
+│   ├── transport/        # WebSocket：hello→ready、背压丢帧、Origin 校验
+│   ├── sessions/         # 会话索引（JSONL 目录）+ 回退 / 编辑 / 分叉 / 导入
+│   ├── approval/         # 规则 → 策略 → 闸门（deny 关不掉）+ 工具看门狗
+│   ├── modes/            # 计划模式：会话级「只规划」硬闸门
+│   ├── extensions/       # 扩展层：在 Agent 干活环节挂钩子
+│   │   ├── index.ts      #   ★ 登记入口
+│   │   ├── guard.ts      #   tool_call 拦截（危险 bash / 路径越界 / 敏感文件名）
+│   │   ├── audit.ts      #   工具调用审计日志
+│   │   ├── shell-rules.ts #  危险 shell 命令的单一事实源（guard 与审批共用）
+│   │   └── *.example.ts  #   provider / 命令 / 沙箱 / 钩子 / 结果脱敏接缝
+│   ├── tools/            # 工具层：给 LLM 装「手」
+│   │   ├── index.ts      #   ★ 静态工具登记入口
+│   │   ├── registry.ts   #   能力标签、运行中开关
+│   │   ├── current-time.ts · knowledge.ts · database.ts · exec.ts
+│   │   ├── memory.ts     #   remember / recall
+│   │   ├── web.ts        #   web_fetch / web_search（防 SSRF，默认关）
+│   │   └── ask-user-question.ts # 走官方 ctx.ui 的 HITL 反问
+│   ├── skills/           # 技能：<name>/SKILL.md，SDK additionalSkillPaths
+│   │   └── summarize/SKILL.md
+│   ├── knowledge/        # 知识库：*.md + 可插拔检索（关键词 | 向量）
+│   │   ├── index.ts · about.md
+│   │   ├── retrieval.ts  #   Retriever / EmbeddingProvider / VectorStore 接口
+│   │   ├── embeddings.ts · embeddings-transformers.ts
+│   │   └── vector-store-sqlite.ts # 持久化 VectorStore（node:sqlite）
+│   ├── memory/           # 跨会话记忆存储（JSONL、0600、有界）
+│   ├── prompt-templates/ # 斜杠命令模板：<name>.md → /<name>，SDK additionalPromptTemplatePaths
+│   │   └── review.md
 │   ├── prompts/          # 分层提示词（改这里 = 改 Agent 性格）
 │   │   ├── persona.md    #   人设：你是谁、你怎么回答
 │   │   └── rules.md      #   规则：工作约束
-│   ├── tools/            # 工具层：给 LLM 装「手」
-│   │   ├── index.ts      #   ★ 静态工具登记入口
-│   │   ├── current-time.ts
-│   │   ├── knowledge.ts  #   检索 / 读知识库
-│   │   └── database.ts   #   db_status / db_query
-│   ├── skills/           # 技能：<name>/SKILL.md，SDK additionalSkillPaths
-│   │   ├── index.ts
-│   │   └── summarize/SKILL.md
-│   ├── knowledge/        # 知识库：*.md + 可插拔检索（关键词 | 向量）
-│   │   ├── index.ts
-│   │   ├── retrieval.ts  # Retriever / EmbeddingProvider / VectorStore 接口
-│   │   ├── embeddings.ts # OpenAI 兼容 + Ollama embedding provider
-│   │   ├── embeddings-transformers.ts # 进程内 embedding（@huggingface/transformers）
-│   │   ├── vector-store-sqlite.ts # 持久化 VectorStore（node:sqlite）
-│   │   └── about.md
-│   ├── prompt-templates/ # 斜杠命令模板：<name>.md → /<name>，SDK additionalPromptTemplatePaths
-│   │   ├── index.ts
-│   │   └── review.md
-│   ├── db/               # 数据库：node:sqlite，默认内存 + 示例 notes
-│   │   └── index.ts
-│   └── extensions/       # 扩展层：在 Agent 干活环节挂钩子
-│       ├── index.ts      #   ★ 登记入口
-│       ├── guard.ts      #   示例：tool_call 拦截（危险 bash / 路径越界）
-│       ├── audit.ts      #   示例：工具调用审计日志
-│       ├── custom-provider.example.ts # 示例：pi.registerProvider（api-key）
-│       ├── example-command.ts         # 示例：pi.registerCommand / sendUserMessage
-│       └── sandbox.example.ts         # 示例：工具路由覆盖（隔离接缝）
+│   ├── db/               # 数据库：node:sqlite，默认内存 + 只读 SQL 扫描
+│   ├── files/            # FileService：字面路径 + realpath 两道校验、denyNames
+│   ├── exec/             # 进程执行（`coding` 档）：超时、进程树、工作区
+│   ├── subagents/        # delegate_task：自带预算，不占主对话的并发额度
+│   ├── mcp/              # MCP stdio 客户端 + 桥（改配置热生效，不用重启）
+│   ├── context/          # 上下文预算：窗口装不下时裁什么
+│   └── 运行时底座        # settings.ts · provider-keys.ts · secret-files.ts · models.ts ·
+│                         #   capabilities.ts · log.ts · log-sink-file.ts · metrics.ts ·
+│                         #   graceful.ts · child-env.ts · sdk-adapter.ts · cli-args.ts ·
+│                         #   prompt-images.ts · snapshot.ts · test-server.ts · test-tmp.ts
 ├── scripts/
 │   ├── dist-assets.cjs   # clean / copy 将 prompts+skills+prompt-templates+knowledge 拷到 dist/
 │   ├── smoke-ws.mjs      # 真实 WebSocket 冒烟（npm run smoke）
@@ -360,7 +376,7 @@ pi-starter/
 │   ├── assistant-ui.md  #   assistant-ui 集成笔记
 │   └── 项目分析报告.md  #   已归档快照（0.3.0 之前），仅供追溯
 ├── .github/workflows/
-│   ├── ci.yml            # typecheck + unused + test + test:web + smoke + e2e + audit + build，矩阵跨 ubuntu / windows / macos
+│   ├── ci.yml            # typecheck + unused + 覆盖率 + test + test:web + docs:check + smoke + e2e + audit + build，矩阵跨 ubuntu / windows / macos —— 本账号的 Actions 跑不起来，真正生效的远端门禁是 .cnb.yml
 │   └── publish.yml       # tag 触发的出包（本仓 Actions 不可用 —— 见 pipeline.config.json）
 ├── web/                  # 产品前端（独立 package.json：Vite + React + assistant-ui）
 │   └── src/pi/           #   唯一手写的胶水：WS 客户端 + ExternalStore 适配

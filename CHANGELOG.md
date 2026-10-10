@@ -11,6 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **发版顺序让每个 tag 都带着过期的派生文档，并让 `publish:local` 恒红**（`scripts/release.mjs`）：脚本的顺序是「跑门禁 → 回写版本号 → 打 tag → 推送」，而版本号是**派生文档的输入**——`docs/architecture.svg` 里就印着它。于是回写之后 tag 里的生成物必然旧一格，紧接着 `npm run publish:local` 再跑一次门禁时就红在 `docs:check` 上（v0.4.1 现场复现：`漂移：docs/architecture.svg`，同一个 tag 出不了包）。现在回写之后立刻重算派生文档（`docs:svg` / `docs:numbers` / `docs:reference`，项目定义了才跑）、再跑一次 `docs:check` 兜底，并把它们**一起收进 bump 提交**；不一致时**不打 tag**，并打印「此时版本文件尚未提交，`git checkout -- .` 回退」。另外补一条：回写后若工作区没有任何改动就直接失败——版本号已经是目标值，静默打个空 tag 更糟。
 
+### Changed
+
+- **README 可视化与结构树对齐真实项目**：两版 README 的 `src/` 目录树此前只列 7 个子目录，实际有 19 个——`memory/`、`conversation/`、`approval/`、`mcp/`、`modes/`、`subagents/` 等全部缺席，读者会以为那些能力不存在；现已补全（含 `errors.ts` / `sdk-adapter.ts` / `test-tmp.ts` 这类运行时底座），两版逐行对应。顶部那条指向 GitHub Actions 的 CI 徽章实测渲染成 `CI: failing`，而本账号的 Actions 根本跑不起来（远端门禁是 `.cnb.yml`）——红着的假状态比没有徽章更误导人，换成静态 `gates: CNB pipeline` 并链到实际跑门禁的仓库；`.github/workflows/ci.yml` 那行注释补上它其实也跑 `docs:check` 与覆盖率门禁，并注明它当前不生效。三张 SVG 复核结论：文字节点零中文、数值全部运行时从源码读取、版本号已是 `v0.4.1`，无需改动；`docs/` 未启用 GitHub Pages（实测 404），因此不写任何 Pages 链接。
+- **新增一条门禁断言，防目录树再次腐烂**（`generate_reference.mjs`）：两份 README 的 `src/` 树必须与文件系统一致，**漏列**（能力隐身）与**多列**（指向已不存在的目录）两个方向都判失败。负向验证：从英文树里删掉 `memory/` 一行，检查立刻红并点名「漏了 1 个实际存在的目录：memory」；还原后恢复绿。
+
 ## [0.4.1] - 2026-10-10
 
 ### Added
