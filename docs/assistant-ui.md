@@ -1,6 +1,7 @@
 # assistant-ui 采集文档（接口 / 用法 / 对接映射）
 
 > 用途：为 pi-starter 前端选型②（assistant-ui）**先把接口和用法完整拿下来**，暂不实现。
+> **状态更新（2026-10-10）：已经落地了。** 依赖在 `web/package.json`（`@assistant-ui/react`），接线只有两处手写：`web/src/pi/client.ts`（快照协议 WebSocket 客户端）与 `web/src/pi/usePiRuntime.ts`（ExternalStore 适配器），其余 `web/src/components/assistant-ui/**` 是采集来的官方组件。本文其余部分仍是当时的接口记录，未随版本更新；以 `web/` 源码为准。
 > 来源：官方文档站 assistant-ui.com（本次可访问，且提供 `llms.txt` 文档索引）+ 网络搜索交叉。star/下载量/版本为信源所示，落地前以官方为准。
 > 仓库：https://github.com/assistant-ui/assistant-ui ｜ 文档：https://www.assistant-ui.com/docs ｜ AI 索引：https://www.assistant-ui.com/llms.txt
 > license：MIT（可选付费 Assistant Cloud 做托管持久化，非必需）。作者 Y Combinator W25，>5 万月下载，LangChain/Stack AI/Browser Use 在用。

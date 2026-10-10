@@ -33,9 +33,10 @@ npm run setup           # merges credentials into ~/.pi/agent/
 
 See the [Project Structure](README.md#project-structure) section of the README for a map of `src/`. The short version:
 
-- Business logic and examples: `src/tools/`, `src/skills/`, `src/knowledge/`, `src/extensions/`
+- Business logic and examples: `src/tools/`, `src/skills/`, `src/knowledge/`, `src/extensions/`, `src/memory/`
 - Assembly layer: `src/agent.ts` (model + prompts + tools + extensions)
-- HTTP layer: `src/app.ts` (endpoints) + `src/sse.ts` (SSE protocol)
+- Turn engine and session stack: `src/conversation/` → `src/session-hub.ts` / `src/client-session.ts` → `src/snapshot.ts` / `src/protocol.ts` → `src/transport/ws.ts`
+- HTTP layer: `src/app.ts` (wiring) + `src/http/` (the route modules: `routes.ts`, `file-routes.ts`, `approval-routes.ts`, `provider-key-routes.ts`, `log-routes.ts`, `hardening.ts`, `rate-limit.ts`) + `src/sse.ts` (SSE protocol)
 - Shared config: `src/config.ts` (CLI > `.env` > defaults)
 - Library entry: `src/lib.ts` — exports `buildAgent`, `createApp`, `setupPiAgentDir` (not `setup`)
 
@@ -92,7 +93,7 @@ See the [Project Structure](README.md#project-structure) section of the README f
 | `npm run e2e` | Real processes: full turn → `SIGKILL` → restart → conversation recovered from disk (plus tool-call recovery, settings persistence, no ghost index entries, port released on shutdown) |
 | `npm run probe:providers` | Live reachability check of the providers configured in `.env` |
 
-**Platform note.** Both remote pipelines run in a `node:24` (Linux) container, while many contributors develop on Windows — so a Windows-only failure is invisible to CI, and vice versa. Anything newly added to `verify` must be run locally before it is called green. On Windows the suite reports explicit skips with reasons: file-permission assertions (`chmod` can only set the read-only bit, so `0600` and `0644` are indistinguishable in `stat.mode`), file symlinks (need developer mode / privileges; junctions only work for directories), and the real-`SIGTERM` shutdown path (`child.kill` goes through `TerminateProcess`) — that last one is why the graceful-shutdown **orchestration** lives in `src/graceful.ts` with all-platform tests instead of being left unwatched.
+**Platform note.** The gate that actually fires is `.cnb.yml`: a single `node:24` Linux container. `.github/workflows/ci.yml` declares a three-OS matrix (ubuntu / windows / macos on Node 22.19 / 22.x / 24.x) but **does not run for this account** (Actions is blocked by billing), so "CI is green" means CNB, and a Windows-only failure is invisible to it. Anything newly added to `verify` must therefore be run locally on Windows before it is called green — and `docs:overview:check` already bit that rule once: it passed locally and failed remotely because `git ls-files` escapes non-ASCII paths under git's default `core.quotePath`. On Windows the suite reports explicit skips with reasons: file-permission assertions (`chmod` can only set the read-only bit, so `0600` and `0644` are indistinguishable in `stat.mode`), file symlinks (need developer mode / privileges; junctions only work for directories), and the real-`SIGTERM` shutdown path (`child.kill` goes through `TerminateProcess`) — that last one is why the graceful-shutdown **orchestration** lives in `src/graceful.ts` with all-platform tests instead of being left unwatched.
 
 ## Commit & PR conventions
 

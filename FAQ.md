@@ -152,7 +152,7 @@ Yes — `npm run verify` passes on Windows, and every skip is printed with its r
 - **File symlinks** — need developer mode or privileges, and a junction (which any user can create) only works for directories, so it cannot express "harmless link name → real target is `.env`". Affects `guard` and the file service's `denyNames` tests.
 - **Real `SIGTERM`** — `child.kill` on Windows goes through `TerminateProcess`, so the signal path is unobservable; the shutdown *orchestration* was extracted into `src/graceful.ts` and is covered on every platform instead of being left unwatched.
 
-The remote pipelines run in a Linux container, so a Windows-only failure would never be seen by CI. That asymmetry is why new gates are always run locally before being called green, and why `verify` includes `verify:audit` at all.
+The gate that fires is `.cnb.yml` — one `node:24` Linux container. `.github/workflows/ci.yml` declares a three-OS matrix but does not run for this account, so a Windows-only failure is never seen remotely. That asymmetry is why new gates are always run locally before being called green, and why `verify` includes `verify:audit` at all.
 
 ### Do the tests clean up after themselves?
 
