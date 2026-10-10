@@ -11,8 +11,7 @@
  */
 
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { McpBridge } from "./bridge.js";
@@ -20,6 +19,7 @@ import { McpClient } from "./client.js";
 import { createToolRegistry } from "../tools/registry.js";
 import type { McpServerConfig } from "../settings.js";
 import { waitFor } from "../test-server.js";
+import { tempDir } from "../test-tmp.js";
 
 /** 一个最小但**真实**的 MCP stdio 服务器。 */
 const SERVER_SOURCE = `
@@ -87,7 +87,7 @@ function handle(msg) {
 `;
 
 function writeServerScript(): string {
-  const dir = mkdtempSync(join(tmpdir(), "pi-mcp-"));
+  const dir = tempDir("pi-mcp-");
   const file = join(dir, "server.mjs");
   writeFileSync(file, SERVER_SOURCE, "utf8");
   return file;

@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { findDangerousBash, guardExtension, isPathInsideCwd } from "./guard.js";
 import type { ToolCallEvent, ToolCallEventResult } from "@earendil-works/pi-coding-agent";
 import { DANGEROUS_SHELL_RULES, shellApprovalRuleSpecs } from "./shell-rules.js";
 import { builtinApprovalRules } from "../approval/rules.js";
+import { tempDir } from "../test-tmp.js";
 
 test("危险 bash 命中常见破坏性命令，放过普通命令", () => {
   assert.equal(findDangerousBash("rm -rf /")?.id, "rm-rf");
@@ -64,7 +64,7 @@ test("guard：拒绝 agent 读写敏感文件（与文件服务共用同一名�
  * guard 这边此前漏了，于是模型的 `read` 能绕过同一道铁律。
  */
 test("guard：cwd 内指向 .env 的符号链接同样被拦（真实目标名校验）", (t) => {
-  const cwd = mkdtempSync(join(tmpdir(), "pi-guard-link-"));
+  const cwd = tempDir("pi-guard-link-");
   t.after(() => rmSync(cwd, { recursive: true, force: true }));
   writeFileSync(join(cwd, ".env"), "PI_API_KEY=sk-should-not-leak\n");
   writeFileSync(join(cwd, "notes.txt"), "无害内容\n");
@@ -148,8 +148,8 @@ test("危险命令表单一事实源：guard 与审批规则同源且无漂移",
  * `FileService` 与 `exec` 都做了 realpath 校验，guard 不做得话三层保护强度不一致。
  */
 test("路径校验解析符号链接：指向 cwd 外的链接判为越界", (t) => {
-  const root = mkdtempSync(join(tmpdir(), "guard-root-"));
-  const outside = mkdtempSync(join(tmpdir(), "guard-out-"));
+  const root = tempDir("guard-root-");
+  const outside = tempDir("guard-out-");
   try {
     const link = join(root, "escape");
     try {

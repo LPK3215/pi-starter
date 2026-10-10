@@ -7,8 +7,8 @@
  */
 
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync, writeFileSync } from "node:fs";
+
 import { join } from "node:path";
 import { test } from "node:test";
 import { createApp } from "./app.js";
@@ -18,6 +18,7 @@ import { resolveRuntimeConfig } from "./config.js";
 import { createProviderKeyStore, MAX_PROVIDER_KEYS } from "./provider-keys.js";
 import type { BuiltAgent } from "./agent.js";
 import type { Model } from "@earendil-works/pi-ai";
+import { tempDir } from "./test-tmp.js";
 
 const SECRET = "sk-live-DO-NOT-LEAK-0123456789";
 const SECRET_LEN = SECRET.length;
@@ -62,7 +63,7 @@ function makeAgent(onSwitch?: (ref: string) => void): BuiltAgent {
 }
 
 function tmpStore() {
-  const dir = mkdtempSync(join(tmpdir(), "pi-keys-"));
+  const dir = tempDir("pi-keys-");
   return createProviderKeyStore(join(dir, "provider-keys.json"), { logger: () => {} });
 }
 
@@ -100,7 +101,7 @@ test("密钥库：拒绝非法输入且不落盘", () => {
 });
 
 test("密钥库：损坏 / 不可信文件回落，不抛错", () => {
-  const dir = mkdtempSync(join(tmpdir(), "pi-keys-"));
+  const dir = tempDir("pi-keys-");
   const filePath = join(dir, "provider-keys.json");
   writeFileSync(filePath, "{{{ broken", "utf8");
   const warnings: string[] = [];
@@ -133,7 +134,7 @@ test("密钥库：损坏 / 不可信文件回落，不抛错", () => {
 });
 
 test("密钥库：落盘是原子的，重启后读回", () => {
-  const dir = mkdtempSync(join(tmpdir(), "pi-keys-"));
+  const dir = tempDir("pi-keys-");
   const filePath = join(dir, "nested", "provider-keys.json");
   const store = createProviderKeyStore(filePath, { logger: () => {} });
   store.set("p", "one", SECRET);

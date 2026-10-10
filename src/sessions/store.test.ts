@@ -3,8 +3,7 @@
  * 一旦可被伪造就等于让任意客户端读服务端任意 .jsonl。
  */
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, symlinkSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, readFileSync, writeFileSync, symlinkSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { test } from "node:test";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
@@ -19,6 +18,7 @@ import {
   sessionIndexPort,
 } from "./store.js";
 import { AppError } from "../errors.js";
+import { tempDir } from "../test-tmp.js";
 
 function expectAppError(fn: () => unknown): AppError {
   try {
@@ -32,7 +32,7 @@ function expectAppError(fn: () => unknown): AppError {
 
 /** 造一个「会话目录 + 一个合法会话文件」。 */
 function fixture(): { root: string; sessions: string; file: string } {
-  const root = mkdtempSync(join(tmpdir(), "pi-sess-"));
+  const root = tempDir("pi-sess-");
   const sessions = join(root, "sessions", "--cwd--");
   mkdirSync(sessions, { recursive: true });
   const file = join(sessions, "2026-10-08T10-30-00_abc123.jsonl");
@@ -217,7 +217,7 @@ test("会话：空索引工厂", () => {
 });
 
 test("会话：显式目录不询问 SDK，空 cwd 不抛", () => {
-  const root = mkdtempSync(join(tmpdir(), "pi-sess-dir-"));
+  const root = tempDir("pi-sess-dir-");
   const explicit = join(root, "ours");
   const roots = defaultSessionRoots("", explicit);
   assert.deepEqual(roots, [explicit]);
@@ -225,8 +225,8 @@ test("会话：显式目录不询问 SDK，空 cwd 不抛", () => {
 });
 
 test("会话：默认目录是 SDK 目录的兄弟，且不复现编码", () => {
-  const agentDir = mkdtempSync(join(tmpdir(), "pi-agent-dir-"));
-  const cwd = mkdtempSync(join(tmpdir(), "pi-cwd-"));
+  const agentDir = tempDir("pi-agent-dir-");
+  const cwd = tempDir("pi-cwd-");
   const previous = process.env.PI_CODING_AGENT_DIR;
   process.env.PI_CODING_AGENT_DIR = agentDir;
   try {

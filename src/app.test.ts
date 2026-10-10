@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { listenTestServer } from "./test-server.js";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createApp } from "./app.js";
@@ -14,6 +14,7 @@ import { AppError } from "./errors.js";
 import { loadKnowledgeFromDirs, searchKnowledge } from "./knowledge/index.js";
 import { MemoryStore } from "./memory/store.js";
 import { loadSkillsFromDirs } from "./skills/index.js";
+import { tempDir } from "./test-tmp.js";
 
 type Listener = (event: AgentSessionEvent) => void;
 
@@ -108,7 +109,7 @@ test("GET /health 是轻量存活探针，不依赖模型与数据库", async ()
 });
 
 test("静态前端：staticDir 指向构建产物时，SPA 首页挂在 /", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "pi-static-"));
+  const dir = tempDir("pi-static-");
   writeFileSync(join(dir, "index.html"), "<!doctype html><title>pi-starter web</title>");
   const { app, dispose } = createApp({ agent: fakeAgent(), staticDir: dir });
   const { url, close } = await listen(app);
@@ -125,7 +126,7 @@ test("静态前端：staticDir 指向构建产物时，SPA 首页挂在 /", asyn
 test("静态前端：前端未构建（目录不存在）时 API 照常，不能把进程带倒", async () => {
   // express.static 对不存在的目录不抛错、直接穿透；默认值就指向可能不存在的 web/dist，
   // 所以这条契约必须有测试兜着，否则“先跑后端再构建前端”的开箱姿势会碎。
-  const missing = join(mkdtempSync(join(tmpdir(), "pi-nostatic-")), "dist");
+  const missing = join(tempDir("pi-nostatic-"), "dist");
   const { app, dispose } = createApp({ agent: fakeAgent(), staticDir: missing });
   const { url, close } = await listen(app);
   try {
@@ -162,7 +163,7 @@ test("GET /health/ready 做依赖深度探针", async () => {
 // 它们决定「人和模型看到的技能/知识/模板目录对不对」，而详情路由还要读磁盘。
 
 test("资源路由：/skills 列表与详情；列表不带正文，详情读磁盘，找不到即 404", async () => {
-  const root = mkdtempSync(join(tmpdir(), "pi-skills-"));
+  const root = tempDir("pi-skills-");
   mkdirSync(join(root, "summarize"));
   writeFileSync(
     join(root, "summarize", "SKILL.md"),
@@ -209,7 +210,7 @@ test("资源路由：SKILL.md 读不出来时**不能把绝对路径泄漏给客
 });
 
 test("资源路由：/knowledge 列表、搜索、详情，且 /knowledge/search 不会被 :name 抢走", async () => {
-  const root = mkdtempSync(join(tmpdir(), "pi-kb-"));
+  const root = tempDir("pi-kb-");
   writeFileSync(join(root, "faq.md"), "---\ntitle: 常见问题\ndescription: 怎么切换模型\n---\nPOST /model\n");
   const knowledge = loadKnowledgeFromDirs([root]);
   const { app, dispose } = createApp({ agent: fakeAgent({ knowledge }), staticDir: false });
@@ -247,7 +248,7 @@ test("记忆路由：未装配存储时 /memory 完全不注册", async () => {
 });
 
 test("记忆路由：GET 列表/检索、POST 写入、DELETE 删除，且与工具同一份 store", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "pi-memory-route-"));
+  const dir = tempDir("pi-memory-route-");
   const store = new MemoryStore({ filePath: join(dir, "memory.jsonl") });
   const { app, dispose } = createApp({
     agent: fakeAgent({ memory: { enabled: true, toolNames: ["remember", "recall"], store } }),
@@ -429,8 +430,8 @@ test("HTTP 层已加固：安全响应头 + body 超限返回 413", async () => 
 });
 
 test("GET /skills /knowledge /db 用虚拟数据测连接，不调模型", async () => {
-  const skillRoot = mkdtempSync(join(tmpdir(), "pi-http-skill-"));
-  const knowledgeRoot = mkdtempSync(join(tmpdir(), "pi-http-kb-"));
+  const skillRoot = tempDir("pi-http-skill-");
+  const knowledgeRoot = tempDir("pi-http-kb-");
   mkdirSync(join(skillRoot, "summarize"));
   writeFileSync(
     join(skillRoot, "summarize", "SKILL.md"),

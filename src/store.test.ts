@@ -7,8 +7,8 @@
  *      审批规则更严格：一条畸形规则绝不能被当成「无规则」从而放行高危命令。
  */
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync, readFileSync, readdirSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { writeFileSync, readFileSync, readdirSync } from "node:fs";
+
 import { join } from "node:path";
 import { test } from "node:test";
 import {
@@ -25,9 +25,10 @@ import {
   loadApprovalRulesFromFile,
   saveApprovalRulesToFile,
 } from "./approval/rules.js";
+import { tempDir } from "./test-tmp.js";
 
 function tmpDir(): string {
-  return mkdtempSync(join(tmpdir(), "pi-store-"));
+  return tempDir("pi-store-");
 }
 
 test("持久化：设置落盘后重启不丢（新实例读回同一份）", () => {

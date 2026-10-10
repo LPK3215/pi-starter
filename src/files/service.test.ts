@@ -3,15 +3,15 @@
  * 一个路径穿越或符号链接逃逸就等于把整个文件系统交出去。
  */
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, realpathSync, existsSync, readFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync, symlinkSync, realpathSync, existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { FileService, isBinaryExtension, looksBinary } from "./service.js";
 import { AppError } from "../errors.js";
+import { tempDir } from "../test-tmp.js";
 
 function tmpRoot(): string {
-  return mkdtempSync(join(tmpdir(), "pi-files-"));
+  return tempDir("pi-files-");
 }
 
 /**

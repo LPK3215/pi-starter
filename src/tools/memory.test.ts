@@ -6,15 +6,14 @@
  * 写成功时有没有回报 id 与淘汰信息。存储行为本身由 `memory/store.test.ts` 覆盖。
  */
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { createRecallTool, createRememberTool } from "./memory.js";
 import { MemoryStore } from "../memory/store.js";
+import { tempDir } from "../test-tmp.js";
 
 function makeStore(): MemoryStore {
-  const dir = mkdtempSync(join(tmpdir(), "pi-memory-tool-"));
+  const dir = tempDir("pi-memory-tool-");
   return new MemoryStore({ filePath: join(dir, "memory.jsonl") });
 }
 

@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, statSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { statSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { SqliteVectorStore } from "./vector-store-sqlite.js";
 import { VectorRetriever, type EmbeddingProvider } from "./retrieval.js";
 import type { KnowledgeDoc } from "./index.js";
+import { tempDir } from "../test-tmp.js";
 
 function doc(name: string, title: string, body: string, description = ""): KnowledgeDoc {
   return { name, title, description, filePath: `/x/${name}.md`, body };
@@ -32,7 +32,7 @@ const docs: KnowledgeDoc[] = [
  */
 test("SqliteVectorStore：落盘权限收紧到 0o600", () => {
   if (process.platform === "win32") return; // Windows 上 chmod 只能力所能及
-  const file = join(mkdtempSync(join(tmpdir(), "pi-vec-mode-")), "vectors.db");
+  const file = join(tempDir("pi-vec-mode-"), "vectors.db");
   const store = new SqliteVectorStore({ path: file });
   try {
     assert.equal(statSync(file).mode & 0o777, 0o600, "向量库必须仅本人可读");
@@ -61,7 +61,7 @@ test("SqliteVectorStore：deleteByChunkPrefix 精确匹配（文档名里的 `_`
 });
 
 test("SqliteVectorStore：upsert/has/query + 关闭重开后仍在（持久化）", async () => {
-  const file = join(mkdtempSync(join(tmpdir(), "pi-vec-")), "vectors.db");
+  const file = join(tempDir("pi-vec-"), "vectors.db");
   const store = new SqliteVectorStore({ path: file });
   await store.upsert([
     { id: "a", vector: [1, 0] },

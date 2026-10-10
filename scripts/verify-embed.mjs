@@ -17,7 +17,7 @@
  */
 
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createRequire } from "node:module";
@@ -106,17 +106,22 @@ await check("内置示例内容确实会进清单（说明为什么需要开关�
 
 await check("includeBuiltin:false 能把示例内容从知识库与技能两侧同时摘掉", () => {
   const dir = mkdtempSync(join(tmpdir(), "embed-kb-"));
-  writeFileSync(join(dir, "my-domain.md"), "---\ntitle: 我的业务\n---\n正文\n");
+  try {
+    writeFileSync(join(dir, "my-domain.md"), "---\ntitle: 我的业务\n---\n正文\n");
 
-  assert.deepEqual(
-    loadScaffoldKnowledge([dir], { includeBuiltin: false }).map((doc) => doc.name),
-    ["my-domain"],
-  );
-  assert.deepEqual(loadScaffoldSkills([dir], { includeBuiltin: false }), []);
-  assert.deepEqual(resolveSkillPaths([dir], { includeBuiltin: false }), []);
+    assert.deepEqual(
+      loadScaffoldKnowledge([dir], { includeBuiltin: false }).map((doc) => doc.name),
+      ["my-domain"],
+    );
+    assert.deepEqual(loadScaffoldSkills([dir], { includeBuiltin: false }), []);
+    assert.deepEqual(resolveSkillPaths([dir], { includeBuiltin: false }), []);
 
-  // 默认值不变：不传就是现在的行为，避免升级即破坏。
-  assert.ok(loadScaffoldKnowledge([]).length > 0, "默认仍带内置示例");
+    // 默认值不变：不传就是现在的行为，避免升级即破坏。
+    assert.ok(loadScaffoldKnowledge([]).length > 0, "默认仍带内置示例");
+  } finally {
+    // 这条 check 每跑一次就在临时目录里留一个目录（实测攒下 6 个）。验证脚本自己也不能漏。
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 await check("createApp 返回 app / seal / addDisposer / isBusy / dispose", () => {

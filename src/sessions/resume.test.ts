@@ -3,8 +3,7 @@
  * 不启真模型——会话文件用 SDK 的 SessionManager 读写，对话外壳用替身。
  */
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
@@ -15,6 +14,7 @@ import { AppError } from "../errors.js";
 import { SessionHub } from "../session-hub.js";
 import type { BuiltAgent } from "../agent.js";
 import { defaultSessionIndexFile, sessionCatalog, type SessionCatalog } from "./store.js";
+import { tempDir } from "../test-tmp.js";
 
 function expectAppError(fn: () => unknown): AppError {
   try {
@@ -40,7 +40,7 @@ function writeSession(dir: string, id: string, cwd: string): string {
 }
 
 test("恢复：允许目录内的文件能被打开，且 id 来自文件头", () => {
-  const cwd = mkdtempSync(join(tmpdir(), "pi-resume-"));
+  const cwd = tempDir("pi-resume-");
   const dir = join(cwd, "sessions");
   mkdirSync(dir);
   const file = writeSession(dir, "abc12345", cwd);
@@ -50,7 +50,7 @@ test("恢复：允许目录内的文件能被打开，且 id 来自文件头", (
 });
 
 test("恢复：目录外、空允许根、内存会话都不能打开", () => {
-  const cwd = mkdtempSync(join(tmpdir(), "pi-resume-"));
+  const cwd = tempDir("pi-resume-");
   const dir = join(cwd, "sessions");
   mkdirSync(dir);
   const file = writeSession(dir, "abc12345", cwd);
@@ -174,7 +174,7 @@ function makeAgent(dir: string, cwd: string): {
 }
 
 function workspace(): { cwd: string; dir: string; catalog: SessionCatalog } {
-  const cwd = mkdtempSync(join(tmpdir(), "pi-ws-"));
+  const cwd = tempDir("pi-ws-");
   const dir = join(cwd, "ours");
   mkdirSync(dir);
   const catalog = sessionCatalog(defaultSessionIndexFile(dir), [dir], cwd);

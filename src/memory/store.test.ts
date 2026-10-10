@@ -7,8 +7,7 @@
  *   3. **有界**（单条超限拒绝、总条数超限淘汰最旧）。
  */
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import {
@@ -16,9 +15,10 @@ import {
   MAX_MEMORY_ENTRIES,
   MemoryStore,
 } from "./store.js";
+import { tempDir } from "../test-tmp.js";
 
 function makeStore(): { store: MemoryStore; file: string } {
-  const dir = mkdtempSync(join(tmpdir(), "pi-memory-"));
+  const dir = tempDir("pi-memory-");
   const file = join(dir, "memory.jsonl");
   return { store: new MemoryStore({ filePath: file }), file };
 }
@@ -109,7 +109,7 @@ test("记忆：forget 按 id 删除，未命中返回 false", () => {
 });
 
 test("记忆：文件里混入损坏行时跳过它，其余仍可读（不整库报废）", () => {
-  const dir = mkdtempSync(join(tmpdir(), "pi-memory-bad-"));
+  const dir = tempDir("pi-memory-bad-");
   const file = join(dir, "memory.jsonl");
   const good = JSON.stringify({ id: "g", text: "好的", tags: [], createdAt: "2026-01-01T00:00:00Z", updatedAt: "2026-01-01T00:00:00Z" });
   writeFileSync(file, `not json\n${good}\n{"text":""}\n`);

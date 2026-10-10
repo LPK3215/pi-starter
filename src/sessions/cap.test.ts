@@ -6,14 +6,15 @@
  * 索引也必须有，否则「跑久了变慢」会表现为无法定位的性能退化。
  */
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
+
 import { join } from "node:path";
 import { test } from "node:test";
 import { MAX_INDEX_ENTRIES, sessionCatalog, type StoredConversation } from "./store.js";
+import { tempDir } from "../test-tmp.js";
 
 function fixture(): { dir: string; catalog: ReturnType<typeof sessionCatalog>; sessions: string } {
-  const root = mkdtempSync(join(tmpdir(), "pi-cap-"));
+  const root = tempDir("pi-cap-");
   const sessions = join(root, "sessions");
   mkdirSync(sessions, { recursive: true });
   const catalog = sessionCatalog(join(root, "index.json"), [sessions], root, {

@@ -6,8 +6,7 @@
  */
 
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
@@ -25,9 +24,10 @@ import {
   MAX_JOBS,
   MAX_OUTPUT_BYTES,
 } from "./runner.js";
+import { tempDir } from "../test-tmp.js";
 
 function workspace(): string {
-  return mkdtempSync(join(tmpdir(), "pi-exec-"));
+  return tempDir("pi-exec-");
 }
 
 function remove(dir: string): void {

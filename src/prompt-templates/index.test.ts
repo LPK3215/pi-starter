@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { writeFileSync } from "node:fs";
+
 import { join } from "node:path";
 import { test } from "node:test";
 import {
@@ -8,6 +8,7 @@ import {
   resolvePromptTemplatePaths,
   resolvePromptTemplatesDir,
 } from "./index.js";
+import { tempDir } from "../test-tmp.js";
 
 function templateFile(dir: string, name: string, description: string, body = "# hello\n"): string {
   const file = join(dir, `${name}.md`);
@@ -26,7 +27,7 @@ test("默认带上内置的 review 模板", () => {
 });
 
 test("includeBuiltin: false 时内置 review 不进交给 SDK 的路径", () => {
-  const extra = mkdtempSync(join(tmpdir(), "pi-prompt-only-"));
+  const extra = tempDir("pi-prompt-only-");
   templateFile(extra, "deploy", "部署流程");
   const paths = resolvePromptTemplatePaths([extra], { includeBuiltin: false });
   assert.ok(paths.some((p) => p.endsWith("deploy.md")), "业务模板保留");
@@ -34,7 +35,7 @@ test("includeBuiltin: false 时内置 review 不进交给 SDK 的路径", () => 
 });
 
 test("超大模板与超出数量上限的模板被跳过，不进 SDK 路径", () => {
-  const root = mkdtempSync(join(tmpdir(), "pi-prompt-cap-"));
+  const root = tempDir("pi-prompt-cap-");
   templateFile(root, "small", "ok");
   const big = join(root, "big.md");
   writeFileSync(big, `---\ndescription: huge\n---\n${"x".repeat(70 * 1024)}`);

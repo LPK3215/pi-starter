@@ -8,9 +8,8 @@
  *   4. 错误按模板聚合统计；出站 request_id 可透传（入站头被采纳）。
  */
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { writeFileSync } from "node:fs";
 import { gzipSync } from "node:zlib";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import express from "express";
@@ -21,6 +20,7 @@ import { registerLogRoutes } from "./log-routes.js";
 import { asyncRoute, registerErrorHandler } from "./routes.js";
 import { AppError, validationFailed } from "../errors.js";
 import { listenTestServer } from "../test-server.js";
+import { tempDir } from "../test-tmp.js";
 
 async function settle(): Promise<void> {
   await new Promise((r) => setTimeout(r, 60));
@@ -42,7 +42,7 @@ function buildApp(dir: string): express.Express {
 }
 
 test("full request logs are retrievable by request_id; secrets redacted on write", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "pi-logq-"));
+  const dir = tempDir("pi-logq-");
   const sink = createRotatingFileSink({ dir });
   configureLog({ level: "debug", sink: sink.sink });
 
@@ -76,7 +76,7 @@ test("full request logs are retrievable by request_id; secrets redacted on write
 });
 
 test("level filter, error stats aggregation, and inbound request_id passthrough", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "pi-logq-"));
+  const dir = tempDir("pi-logq-");
   const sink = createRotatingFileSink({ dir });
   configureLog({ level: "debug", sink: sink.sink });
 
@@ -119,7 +119,7 @@ test("level filter, error stats aggregation, and inbound request_id passthrough"
 });
 
 test("error line carries full stack + request_id, and secrets inside the message are redacted", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "pi-errlog-"));
+  const dir = tempDir("pi-errlog-");
   const sink = createRotatingFileSink({ dir });
   configureLog({ level: "debug", sink: sink.sink });
 
@@ -179,7 +179,7 @@ test("error line carries full stack + request_id, and secrets inside the message
  * 反向性质（5xx 必须带完整栈与 cause 链）由上面那条测试锁住,两条一起把边界钉死。
  */
 test("4xx 的错误行只记原因与 request_id，不记堆栈", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "pi-errlog-4xx-"));
+  const dir = tempDir("pi-errlog-4xx-");
   const sink = createRotatingFileSink({ dir });
   configureLog({ level: "debug", sink: sink.sink });
 
@@ -222,7 +222,7 @@ test("4xx 的错误行只记原因与 request_id，不记堆栈", async () => {
 });
 
 test("pagination is lossless past the old 50k cap and stable (no dup/skip)", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "pi-pagescale-"));
+  const dir = tempDir("pi-pagescale-");
   const today = new Date().toISOString().slice(0, 10);
   const N = 60_000; // 大于旧的 5 万上限
   const lines: string[] = [];
@@ -269,7 +269,7 @@ test("pagination is lossless past the old 50k cap and stable (no dup/skip)", asy
  * 用户看到的是「日志明明在，查询却是空的」。
  */
 test("只剩 .gz 归档时 desc 查询不能返回空页（首个候选文件是 gz 的回归）", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "pi-logq-gz-"));
+  const dir = tempDir("pi-logq-gz-");
   const day = "2026-09-30";
   const lines = [1, 2, 3].map((i) =>
     JSON.stringify({ ts: `${day}T0${i}:00:00.000Z`, level: "error", msg: `m${i}`, component: "x" }),

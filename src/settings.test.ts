@@ -6,14 +6,14 @@
  * 真的会在下次组装时被读走」。后者由 `scripts/e2e-restart.mjs` 端到端覆盖。
  */
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { SettingsService, fileSettingsPort, SETTINGS_DEFAULTS, validateSettings } from "./settings.js";
+import { tempDir } from "./test-tmp.js";
 
 function makeService(): { svc: SettingsService; file: string } {
-  const dir = mkdtempSync(join(tmpdir(), "pi-builtin-"));
+  const dir = tempDir("pi-builtin-");
   const file = join(dir, "settings.json");
   const svc = new SettingsService(fileSettingsPort(file));
   return { svc, file };
@@ -60,7 +60,7 @@ test("设置：只改一个不影响另一个（不能连带把另一个也关�
 });
 
 test("设置：内置示例内容开关会落盘，重建service 后仍在", () => {
-  const dir = mkdtempSync(join(tmpdir(), "pi-builtin-"));
+  const dir = tempDir("pi-builtin-");
   const file = join(dir, "settings.json");
   new SettingsService(fileSettingsPort(file)).patch({ builtinKnowledge: false, builtinSkills: false });
 

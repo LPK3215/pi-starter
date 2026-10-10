@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { loadSkillsFromDirs, loadScaffoldSkills, resolveSkillPaths } from "./index.js";
+import { tempDir } from "../test-tmp.js";
 
 test("扫描 SKILL.md，同名时先登记的赢", () => {
-  const root = mkdtempSync(join(tmpdir(), "pi-skills-"));
+  const root = tempDir("pi-skills-");
   const first = join(root, "first");
   const second = join(root, "second");
   mkdirSync(join(first, "summarize"), { recursive: true });
@@ -33,7 +33,7 @@ test("扫描 SKILL.md，同名时先登记的赢", () => {
 });
 
 test("resolveSkillPaths 去掉不存在的目录，保持顺序", () => {
-  const root = mkdtempSync(join(tmpdir(), "pi-skill-path-"));
+  const root = tempDir("pi-skill-path-");
   const extra = join(root, "extra");
   mkdirSync(extra);
   // 现在返回的是**技能目录本身**，所以扫描根必须真的含技能。
@@ -48,7 +48,7 @@ test("resolveSkillPaths 去掉不存在的目录，保持顺序", () => {
 });
 
 test("超大 SKILL.md 在读取前就被跳过，且不会进技能清单", () => {
-  const root = mkdtempSync(join(tmpdir(), "pi-skills-big-"));
+  const root = tempDir("pi-skills-big-");
   const small = join(root, "small");
   const big = join(root, "big");
   mkdirSync(small, { recursive: true });
@@ -75,7 +75,7 @@ test("超大 SKILL.md 在读取前就被跳过，且不会进技能清单", () =
 });
 
 test("技能数量超上限时截断，且不报错", () => {
-  const root = mkdtempSync(join(tmpdir(), "pi-skills-many-"));
+  const root = tempDir("pi-skills-many-");
   for (let i = 0; i < 6; i += 1) {
     const dir = join(root, `s${i}`);
     mkdirSync(dir, { recursive: true });
@@ -86,7 +86,7 @@ test("技能数量超上限时截断，且不报错", () => {
 });
 
 test("includeBuiltin: false 同时清掉清单与交给 SDK 的路径", () => {
-  const extra = mkdtempSync(join(tmpdir(), "pi-skills-only-"));
+  const extra = tempDir("pi-skills-only-");
   const mine = join(extra, "my-skill");
   mkdirSync(mine, { recursive: true });
   writeFileSync(join(mine, "SKILL.md"), "---\nname: my-skill\ndescription: d\n---\n# mine\n");

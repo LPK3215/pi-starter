@@ -14,15 +14,15 @@
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createServer, type Server } from "node:http";
 import { once } from "node:events";
 import { WebSocket } from "ws";
 import { SessionHub, DEFAULT_MAX_OPEN_CONVERSATIONS, MAX_SNAPSHOT_MESSAGES } from "./session-hub.js";
-import { listenExistingServer } from "./test-server.js";
+import { listenExistingServer, waitFor } from "./test-server.js";
 import { resolveRuntimeConfig } from "./config.js";
+import { tempDir } from "./test-tmp.js";
 import { PROTOCOL_VERSION, type ServerMessage, type UiCapabilities, type UiState } from "./protocol.js";
 import { attachWebSocket } from "./transport/ws.js";
 import { Metrics } from "./metrics.js";
@@ -315,11 +315,11 @@ test("集成：并发会话数达上限后 LRU 回收最久未活动的对话", 
 });
 
 test("集成：删除对话会真删文件与索引，越界路径与最后一条被拒", async () => {
-  const root = mkdtempSync(join(tmpdir(), "pi-del-"));
+  const root = tempDir("pi-del-");
   const file = join(root, "s1.jsonl");
   writeFileSync(file, "{}\n");
   // 另一个目录里的一份：代表“索引被篡改 / 路径越界”，删除必须被拦住。
-  const outside = join(mkdtempSync(join(tmpdir(), "pi-out-")), "evil.jsonl");
+  const outside = join(tempDir("pi-out-"), "evil.jsonl");
   writeFileSync(outside, "{}\n");
 
   const index = new Map<string, StoredConversation>();
@@ -604,6 +604,39 @@ async function startHarness(
 const send = (h: Harness, msg: unknown) => h.socket.send(JSON.stringify(msg));
 const settle = (ms = 200) => new Promise((r) => setTimeout(r, ms));
 
+/**
+ * 等到 `from` 之后出现 message 匹配 `pattern` 的 error 帧，并返回**第一条** error 帧。
+ *
+ * 为什么不能再靠 `await settle(N)` + `errorsSince(from)[0]?.message ?? ""`：全量并发时
+ * 十几个测试文件各开各的 HTTP/WS 服务，一帧的到达时间能超过任何固定时长，于是取到空串、
+ * 断言报 `actual: ''` —— 把「帧还没到」伪装成「文案不匹配」。本仓文档早就规定等待要看
+ * **结果**（`waitFor`），这一层是漏网之鱼。真等不到时由 `waitFor` 抛出「在等什么」。
+ *
+ * `settle` 仍然保留，但只该用在「等满一段时间，好让**负向**断言成立」的场合。
+ */
+async function waitError(h: Harness, from: number, pattern: RegExp, what: string): Promise<{ message: string }> {
+  await waitFor(
+    () =>
+      h.frames
+        .slice(from)
+        .some((f) => f.type === "error" && pattern.test((f as { message?: string }).message ?? "")),
+    `error 帧 /${pattern.source}/（${what}）`,
+    8000,
+  );
+  return h.frames.slice(from).find((f) => f.type === "error") as { message: string };
+}
+
+/** 只关心「回了几条 error」的场合：先等到至少一条，再交给调用方判数量。 */
+async function waitErrors(h: Harness, from: number, what: string): Promise<{ message: string }[]> {
+  await waitFor(() => h.frames.slice(from).some((f) => f.type === "error"), `error 帧（${what}）`, 8000);
+  return h.frames.slice(from).filter((f) => f.type === "error") as { message: string }[];
+}
+
+/** 等到 `from` 之后出现某个类型的帧（pong / snapshot / …）。 */
+async function waitFrame(h: Harness, from: number, type: string, what: string): Promise<void> {
+  await waitFor(() => h.frames.slice(from).some((f) => f.type === type), `${type} 帧（${what}）`, 8000);
+}
+
 test("集成：WS set_plan_mode 真的改到权威状态（协议→hub→快照 全链路）", async () => {
   const planMode = new PlanModeController({ defaultEnabled: () => false });
   const h = await startHarness(undefined, undefined, { planMode });
@@ -743,9 +776,6 @@ test("集成：WS 分派层——畸形输入回可读 error 帧，且**一条�
     send(h, { type: "hello", protocolVersion: PROTOCOL_VERSION });
     await settle(250);
 
-    const errorsSince = (from: number) =>
-      h.frames.slice(from).filter((f) => f.type === "error") as Array<{ message: string }>;
-
     // 1) images 带 data: 前缀 —— 模型最容易写错的一种。
     let from = h.frames.length;
     send(h, {
@@ -753,16 +783,17 @@ test("集成：WS 分派层——畸形输入回可读 error 帧，且**一条�
       text: "看图",
       images: [{ mimeType: "image/png", data: "data:image/png;base64,AAAA" }],
     });
-    await settle(200);
-    const prefixed = errorsSince(from);
+    const prefixed = await waitErrors(h, from, "images 带 data: 前缀");
     assert.equal(prefixed.length, 1, "必须回一条 error");
     assert.match(prefixed[0]!.message, /不要带 data: 前缀/, "文案要能让人自己改对");
 
     // 2) MIME 不在白名单 + 张数超限。
     from = h.frames.length;
     send(h, { type: "prompt", text: "x", images: [{ mimeType: "image/svg+xml", data: "AAAA" }] });
-    await settle(200);
-    assert.match(errorsSince(from)[0]?.message ?? "", /第 1 张图片的类型不支持/);
+    assert.match(
+      (await waitError(h, from, /第 1 张图片的类型不支持/, "MIME 不在白名单")).message,
+      /第 1 张图片的类型不支持/,
+    );
 
     from = h.frames.length;
     send(h, {
@@ -770,8 +801,7 @@ test("集成：WS 分派层——畸形输入回可读 error 帧，且**一条�
       text: "x",
       images: Array.from({ length: 5 }, () => ({ mimeType: "image/png", data: "AAAA" })),
     });
-    await settle(200);
-    assert.match(errorsSince(from)[0]?.message ?? "", /一次最多 4 张图片/);
+    assert.match((await waitError(h, from, /一次最多 4 张图片/, "张数超限")).message, /一次最多 4 张图片/);
 
     // 3) 会话类命令缺必填字段：逐条都要明确回帧，而不是静默什么都不做。
     const conversationId = "conv-1";
@@ -783,47 +813,50 @@ test("集成：WS 分派层——畸形输入回可读 error 帧，且**一条�
     for (const [type, payload] of missingEntryId) {
       from = h.frames.length;
       send(h, { type, ...payload });
-      await settle(150);
-      assert.match(errorsSince(from)[0]?.message ?? "", /entryId is required/, `${type} 缺 entryId 必须报错`);
+      assert.match(
+        (await waitError(h, from, /entryId is required/, `${type} 缺 entryId`)).message,
+        /entryId is required/,
+        `${type} 缺 entryId 必须报错`,
+      );
     }
 
     from = h.frames.length;
     send(h, { type: "rename_conversation", conversationId });
-    await settle(150);
-    assert.match(errorsSince(from)[0]?.message ?? "", /title is required/);
+    assert.match(
+      (await waitError(h, from, /title is required/, "rename_conversation 缺 title")).message,
+      /title is required/,
+    );
 
     // 4) 不存在的会话 / 目标：回 error 而不是抛到顶层把连接带走。
     from = h.frames.length;
     send(h, { type: "open_conversation", conversationId: "no-such-conversation" });
-    await settle(250);
-    assert.equal(errorsSince(from).length, 1, "打开不存在的会话必须回 error");
+    assert.equal((await waitErrors(h, from, "打开不存在的会话")).length, 1, "打开不存在的会话必须回 error");
 
     from = h.frames.length;
     send(h, { type: "delete_conversation", conversationId: "no-such-conversation" });
-    await settle(250);
-    assert.equal(errorsSince(from).length, 1, "删除不存在的会话必须回 error");
+    assert.equal((await waitErrors(h, from, "删除不存在的会话")).length, 1, "删除不存在的会话必须回 error");
 
     // 5) 非法思考档位：文案要列出合法取值（否则客户端只能瞎猜）。
     from = h.frames.length;
     send(h, { type: "set_thinking", level: "very-high" });
-    await settle(150);
-    assert.match(errorsSince(from)[0]?.message ?? "", /invalid thinking level/);
+    assert.match((await waitError(h, from, /invalid thinking level/, "非法思考档位")).message, /invalid thinking level/);
 
     // 6) 没见过的名字：`isClientMessage` 会把「无空白的任意名字」当成**业务自定义命令**放行，
     //    所以走的是 runCustom 的「未注册」分支 —— 这比粗暴拒绝更有用，它会带上最接近的
     //    命令名做提示。（原先落到 switch 的 default 静默丢弃，前端只会一直等一个永不到来的响应。）
     from = h.frames.length;
     send(h, { type: "definitely_not_a_command" });
-    await settle(150);
-    assert.match(errorsSince(from)[0]?.message ?? "", /unknown command: definitely_not_a_command/);
+    assert.match(
+      (await waitError(h, from, /unknown command: definitely_not_a_command/, "未注册命令名")).message,
+      /unknown command: definitely_not_a_command/,
+    );
 
     // 而空串 / 纯空白是真的不合法，必须在协议层就被拒。
     for (const bad of ["", "   "]) {
       from = h.frames.length;
       send(h, { type: bad });
-      await settle(150);
       assert.match(
-        errorsSince(from)[0]?.message ?? "",
+        (await waitError(h, from, /unknown message type/, `type=${JSON.stringify(bad)}`)).message,
         /unknown message type/,
         `type=${JSON.stringify(bad)} 应被协议层拒`,
       );
@@ -832,7 +865,7 @@ test("集成：WS 分派层——畸形输入回可读 error 帧，且**一条�
     // 7) 一路错下来，连接必须还活着 —— 这才是「坏命令不打死连接」的真正断言。
     from = h.frames.length;
     send(h, { type: "ping" });
-    await settle(150);
+    await waitFrame(h, from, "pong", "ping 之后");
     assert.ok(
       h.frames.slice(from).some((f) => f.type === "pong"),
       "经历一连串畸形输入之后，ping 仍必须得到 pong",

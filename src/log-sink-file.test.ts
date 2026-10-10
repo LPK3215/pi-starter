@@ -5,11 +5,12 @@
  * 用临时目录，跑完即弃，绝不写进工程 ./logs。
  */
 import assert from "node:assert/strict";
-import { mkdtempSync, readdirSync, readFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readdirSync, readFileSync } from "node:fs";
+
 import { join } from "node:path";
 import { test } from "node:test";
 import { createRotatingFileSink } from "./log-sink-file.js";
+import { tempDir } from "./test-tmp.js";
 
 /** 轮询等条件成立（gzip 归档是异步 fire-and-forget，不能拍固定时长）。 */
 async function waitUntil(predicate: () => boolean, what: string, timeoutMs = 3000): Promise<void> {
@@ -22,7 +23,7 @@ async function waitUntil(predicate: () => boolean, what: string, timeoutMs = 300
 }
 
 test("writes one JSON object per line", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "pi-logtest-"));
+  const dir = tempDir("pi-logtest-");
   const sink = createRotatingFileSink({ dir });
   sink.sink(JSON.stringify({ ts: "2026-01-01T00:00:00.000Z", level: "info", msg: "alpha" }));
   sink.sink(JSON.stringify({ ts: "2026-01-01T00:00:01.000Z", level: "warn", msg: "beta" }));
@@ -37,7 +38,7 @@ test("writes one JSON object per line", async () => {
 });
 
 test("rotates by size and gzip-archives the overflow", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "pi-logtest-"));
+  const dir = tempDir("pi-logtest-");
   const sink = createRotatingFileSink({ dir, maxBytes: 300 });
   // Each line ~150 bytes; 12 lines must trigger at least one intra-day roll.
   for (let i = 0; i < 12; i++) {
@@ -54,7 +55,7 @@ test("rotates by size and gzip-archives the overflow", async () => {
 });
 
 test("retention sweep removes expired archives", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "pi-logtest-"));
+  const dir = tempDir("pi-logtest-");
   // retentionDays 0 disables cleanup; just assert it never throws on an empty dir.
   const sink = createRotatingFileSink({ dir, retentionDays: 0 });
   sink.sink(JSON.stringify({ ts: "2026-01-03T00:00:00.000Z", level: "info", msg: "keep" }));

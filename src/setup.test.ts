@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { chmodSync, mkdtempSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 /**
@@ -40,6 +39,7 @@ import {
   setupPiAgentDir,
 } from "./setup.js";
 import type { ModelCatalog } from "./models.js";
+import { tempDir } from "./test-tmp.js";
 
 const modelscopeCatalog: ModelCatalog = {
   [DEFAULT_PROVIDER]: {
@@ -123,7 +123,7 @@ test("mergeAuthJson 已有 key 默认保留，--force 才覆盖", () => {
 });
 
 test("setupPiAgentDir 写入临时目录，缺 key 不落盘", () => {
-  const agentDir = mkdtempSync(join(tmpdir(), "pi-starter-setup-"));
+  const agentDir = tempDir("pi-starter-setup-");
   assert.throws(
     () =>
       setupPiAgentDir({
@@ -145,7 +145,7 @@ test("setupPiAgentDir 写入临时目录，缺 key 不落盘", () => {
  * 功能面（复制发生了、内容被真读进 auth.json）全平台都要验；权限面只在 POSIX 上验（见下）。
  */
 function setupFromExample(): { cwd: string; agentDir: string; copied: boolean; authKey: string } {
-  const cwd = mkdtempSync(join(tmpdir(), "pi-setup-cwd-"));
+  const cwd = tempDir("pi-setup-cwd-");
   const agentDir = join(cwd, "agent");
   writeFileSync(
     join(cwd, ".env.example"),
@@ -190,7 +190,7 @@ test("复制出来的 .env 权限收紧到 0600，不留世界可读", (t) => {
 });
 
 test("已有 .env 时不覆盖，copiedEnvExample 为 false", () => {
-  const cwd = mkdtempSync(join(tmpdir(), "pi-setup-cwd-"));
+  const cwd = tempDir("pi-setup-cwd-");
   writeFileSync(join(cwd, ".env"), "PI_API_KEY=sk-already-there\n", "utf-8");
   writeFileSync(join(cwd, ".env.example"), "PI_API_KEY=sk-from-example\n", "utf-8");
   const result = withEnvSnapshot(() =>
@@ -201,12 +201,12 @@ test("已有 .env 时不覆盖，copiedEnvExample 为 false", () => {
 });
 
 test("既没有 .env 也没有 .env.example 时明确报错", () => {
-  const cwd = mkdtempSync(join(tmpdir(), "pi-setup-cwd-"));
+  const cwd = tempDir("pi-setup-cwd-");
   assert.throws(() => setupPiAgentDir({ cwd, agentDir: join(cwd, "agent") }), /也没有 \.env\.example 可复制/);
 });
 
 test("多 provider：没找到密钥的只进 authKeyMissing 且不落盘；默认 provider 缺密钥才致命", () => {
-  const agentDir = mkdtempSync(join(tmpdir(), "pi-starter-setup-"));
+  const agentDir = tempDir("pi-starter-setup-");
   const catalog =
     `prov-a|https://a.example/v1|openai-completions|model-a:Model A;` +
     `prov-b|https://b.example/v1|openai-completions|model-b:Model B`;
@@ -227,7 +227,7 @@ test("多 provider：没找到密钥的只进 authKeyMissing 且不落盘；默�
 
   // 默认 provider 一个密钥都没有 → 这次 setup 没意义，必须直接失败，而不是写出一个跑不起来的目录。
   // 注意默认 provider 会回落到 `PI_API_KEY`，所以这里连它也不给才触发得到这条分支。
-  const another = mkdtempSync(join(tmpdir(), "pi-starter-setup-"));
+  const another = tempDir("pi-starter-setup-");
   assert.throws(
     () =>
       setupPiAgentDir({
@@ -240,7 +240,7 @@ test("多 provider：没找到密钥的只进 authKeyMissing 且不落盘；默�
 });
 
 test("provider 专属密钥优先，且名字里的 `-` 会换算成 `_`", () => {
-  const agentDir = mkdtempSync(join(tmpdir(), "pi-starter-setup-"));
+  const agentDir = tempDir("pi-starter-setup-");
   const result = setupPiAgentDir({
     agentDir,
     env: {
@@ -260,20 +260,20 @@ test("权限：auth.json 是 0600、agent 目录是 0700（与 provider-keys / �
     t.skip(MODE_SKIP_REASON);
     return;
   }
-  const agentDir = mkdtempSync(join(tmpdir(), "pi-starter-setup-"));
+  const agentDir = tempDir("pi-starter-setup-");
   const result = setupPiAgentDir({
     agentDir,
     env: { PI_PROVIDER: DEFAULT_PROVIDER, PI_MODEL: DEFAULT_MODEL_ID, PI_API_KEY: "sk-perm" },
   });
   assert.equal(statSync(result.authPath).mode & 0o777, 0o600, "auth.json 里有明文密钥");
-  // agentDir 由 mkdtempSync 预建（0700），这里确认 setup 不会把它放宽。
+  // agentDir 由 tempDir（底层是 mkdtempSync）预建（0700），这里确认 setup 不会把它放宽。
   assert.equal(statSync(agentDir).mode & 0o777, 0o700);
   // models.json 里没有密钥，不强制 0600（不做无意义的断言，只记录它不是机密）。
   assert.ok(statSync(result.modelsPath).isFile());
 });
 
 test("setupPiAgentDir 在临时目录 merge 模型并写入 key，第二次不覆盖", () => {
-  const agentDir = mkdtempSync(join(tmpdir(), "pi-starter-setup-"));
+  const agentDir = tempDir("pi-starter-setup-");
   mkdirSync(agentDir, { recursive: true });
   writeFileSync(
     join(agentDir, "models.json"),

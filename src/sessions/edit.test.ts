@@ -6,8 +6,7 @@
  */
 
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, readFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
@@ -27,6 +26,7 @@ import {
   rollbackSession,
 } from "./edit.js";
 import { defaultSessionIndexFile, sessionCatalog, type SessionCatalog } from "./store.js";
+import { tempDir } from "../test-tmp.js";
 
 function texts(manager: SessionManager): string[] {
   return manager.buildSessionContext().messages.map((message) => {
@@ -65,7 +65,7 @@ function transcript(dir: string, cwd: string): { manager: SessionManager; ids: R
 }
 
 test("回退丢掉后半段，重新打开文件也不会回来", () => {
-  const cwd = mkdtempSync(join(tmpdir(), "pi-edit-"));
+  const cwd = tempDir("pi-edit-");
   const dir = join(cwd, "sessions");
   mkdirSync(dir);
   const { manager, ids } = transcript(dir, cwd);
@@ -85,7 +85,7 @@ test("回退丢掉后半段，重新打开文件也不会回来", () => {
 });
 
 test("编辑用户消息会把它和后面的内容移出路径，并交还原文；助手消息不能编辑", () => {
-  const cwd = mkdtempSync(join(tmpdir(), "pi-edit-"));
+  const cwd = tempDir("pi-edit-");
   const dir = join(cwd, "sessions");
   mkdirSync(dir);
   const { manager, ids } = transcript(dir, cwd);
@@ -108,7 +108,7 @@ test("编辑用户消息会把它和后面的内容移出路径，并交还原�
 });
 
 test("编辑第一条用户消息后，当前路径是空的，重启也还是空的", () => {
-  const cwd = mkdtempSync(join(tmpdir(), "pi-edit-"));
+  const cwd = tempDir("pi-edit-");
   const dir = join(cwd, "sessions");
   mkdirSync(dir);
   const { manager, ids } = transcript(dir, cwd);
@@ -121,7 +121,7 @@ test("编辑第一条用户消息后，当前路径是空的，重启也还是�
 });
 
 test("分叉写出另一个文件，源会话的 id 和文件不变；没有助手回复的路径不会落盘", () => {
-  const cwd = mkdtempSync(join(tmpdir(), "pi-edit-"));
+  const cwd = tempDir("pi-edit-");
   const dir = join(cwd, "sessions");
   mkdirSync(dir);
   const { manager, ids } = transcript(dir, cwd);
@@ -268,7 +268,7 @@ function conversation(manager: SessionManager): { conv: Conversation; frames: Se
  * 两次之间任何一次失败都会留下重复的用户消息；这里要求"移除 + 重发"是一次调用完成。
  */
 test("原子替换并重发：replaceEntryId 先把该用户消息移出路径，再用新文本重发", async () => {
-  const cwd = mkdtempSync(join(tmpdir(), "pi-edit-"));
+  const cwd = tempDir("pi-edit-");
   const dir = join(cwd, "sessions");
   mkdirSync(dir);
   const { manager, ids } = transcript(dir, cwd); // u1 → a1 → u2 → a2
@@ -286,7 +286,7 @@ test("原子替换并重发：replaceEntryId 先把该用户消息移出路径�
 });
 
 test("原子替换并重发：正在生成时拒绝，且会话树原样不动", async () => {
-  const cwd = mkdtempSync(join(tmpdir(), "pi-edit-"));
+  const cwd = tempDir("pi-edit-");
   const dir = join(cwd, "sessions");
   mkdirSync(dir);
   const { manager, ids } = transcript(dir, cwd);
@@ -301,7 +301,7 @@ test("原子替换并重发：正在生成时拒绝，且会话树原样不动",
 });
 
 test("原子替换并重发：只接受用户消息（助手消息走回退，不是编辑）", async () => {
-  const cwd = mkdtempSync(join(tmpdir(), "pi-edit-"));
+  const cwd = tempDir("pi-edit-");
   const dir = join(cwd, "sessions");
   mkdirSync(dir);
   const { manager, ids } = transcript(dir, cwd);
@@ -312,7 +312,7 @@ test("原子替换并重发：只接受用户消息（助手消息走回退，�
 });
 
 test("对话上的回退会换掉模型看到的消息，正在生成时拒绝且不写标记", async () => {
-  const cwd = mkdtempSync(join(tmpdir(), "pi-edit-"));
+  const cwd = tempDir("pi-edit-");
   const dir = join(cwd, "sessions");
   mkdirSync(dir);
   const { manager, ids } = transcript(dir, cwd);
@@ -341,7 +341,7 @@ test("对话上的回退会换掉模型看到的消息，正在生成时拒绝�
 });
 
 test("回退 summarize:true 且 SDK 提供 navigateTree 时走官方树导航、不把指令吞掉", async () => {
-  const cwd = mkdtempSync(join(tmpdir(), "pi-edit-"));
+  const cwd = tempDir("pi-edit-");
   const dir = join(cwd, "sessions");
   mkdirSync(dir);
   const { manager, ids } = transcript(dir, cwd);
@@ -360,7 +360,7 @@ test("回退 summarize:true 且 SDK 提供 navigateTree 时走官方树导航、
 });
 
 test("回退不带 summarize 时走 branch + 标记路径（不碰 navigateTree）", async () => {
-  const cwd = mkdtempSync(join(tmpdir(), "pi-edit-"));
+  const cwd = tempDir("pi-edit-");
   const dir = join(cwd, "sessions");
   mkdirSync(dir);
   const { manager, ids } = transcript(dir, cwd);
@@ -374,7 +374,7 @@ test("回退不带 summarize 时走 branch + 标记路径（不碰 navigateTree�
 });
 
 test("官方标签：setLabel 写入会话文件、labels() 读回、空串即清除", () => {
-  const cwd = mkdtempSync(join(tmpdir(), "pi-edit-"));
+  const cwd = tempDir("pi-edit-");
   const dir = join(cwd, "sessions");
   mkdirSync(dir);
   const { manager, ids } = transcript(dir, cwd);
@@ -392,7 +392,7 @@ test("官方标签：setLabel 写入会话文件、labels() 读回、空串即�
 });
 
 test("改名写进会话文件，占位标题不会在下一条消息时被盖掉", () => {
-  const cwd = mkdtempSync(join(tmpdir(), "pi-edit-"));
+  const cwd = tempDir("pi-edit-");
   const dir = join(cwd, "sessions");
   mkdirSync(dir);
   const { manager } = transcript(dir, cwd);
@@ -407,7 +407,7 @@ test("改名写进会话文件，占位标题不会在下一条消息时被盖�
 });
 
 function workspace(): { cwd: string; dir: string; catalog: SessionCatalog } {
-  const cwd = mkdtempSync(join(tmpdir(), "pi-edit-hub-"));
+  const cwd = tempDir("pi-edit-hub-");
   const dir = join(cwd, "ours");
   mkdirSync(dir);
   return { cwd, dir, catalog: sessionCatalog(defaultSessionIndexFile(dir), [dir], cwd) };

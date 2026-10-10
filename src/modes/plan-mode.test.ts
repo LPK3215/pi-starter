@@ -9,8 +9,8 @@
  */
 
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { writeFileSync } from "node:fs";
+
 import { join } from "node:path";
 import { test } from "node:test";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -21,9 +21,10 @@ import {
   planModeDenyReason,
   planModeExtension,
 } from "./plan-mode.js";
+import { tempDir } from "../test-tmp.js";
 
 function tmpFile(name: string): string {
-  return join(mkdtempSync(join(tmpdir(), "pi-plan-")), name);
+  return join(tempDir("pi-plan-"), name);
 }
 
 /** 收集扩展注册的事件处理器，用来真正触发钩子。 */

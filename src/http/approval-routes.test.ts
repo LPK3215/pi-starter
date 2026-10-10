@@ -7,8 +7,7 @@
  *   2. API 入口与磁盘加载用**同一套校验**：不能出现「手写文件被拦、API 却能塞进去」。
  */
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { createApp } from "../app.js";
@@ -25,6 +24,7 @@ import { SessionHub } from "../session-hub.js";
 import { resolveRuntimeConfig } from "../config.js";
 import { SettingsService } from "../settings.js";
 import type { BuiltAgent } from "../agent.js";
+import { tempDir } from "../test-tmp.js";
 
 function makeAgent(): BuiltAgent {
   const model = { provider: "test", id: "m1", name: "M1", contextWindow: 1000 } as never;
@@ -90,7 +90,7 @@ async function start(store: ApprovalRulesStore) {
 }
 
 test("规则编辑：新增后立刻落盘，重启读得回来", async () => {
-  const file = join(mkdtempSync(join(tmpdir(), "pi-rules-")), "rules.json");
+  const file = join(tempDir("pi-rules-"), "rules.json");
   const store = createPersistentRulesStore(file);
   const h = await start(store);
   try {
@@ -115,7 +115,7 @@ test("规则编辑：新增后立刻落盘，重启读得回来", async () => {
 });
 
 test("规则编辑：运行期间的外部修改不会被停机覆盖", async () => {
-  const file = join(mkdtempSync(join(tmpdir(), "pi-rules-")), "rules.json");
+  const file = join(tempDir("pi-rules-"), "rules.json");
   const store = createPersistentRulesStore(file);
   const h = await start(store);
   try {

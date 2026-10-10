@@ -16,8 +16,7 @@
  */
 
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { createApp } from "../app.js";
@@ -27,6 +26,7 @@ import { SessionHub } from "../session-hub.js";
 import { resolveRuntimeConfig } from "../config.js";
 import { SettingsService } from "../settings.js";
 import type { BuiltAgent } from "../agent.js";
+import { tempDir } from "../test-tmp.js";
 
 /** 与 approval-routes.test.ts 同一套最小替身。 */
 function fakeAgent(): BuiltAgent {
@@ -107,7 +107,7 @@ async function start(options: { files?: FileService; bodyLimit?: string | number
 }
 
 function tempRoot(): string {
-  return mkdtempSync(join(tmpdir(), "pi-files-"));
+  return tempDir("pi-files-");
 }
 
 /** 带 JSON body 的 POST。 */

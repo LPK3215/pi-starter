@@ -1,13 +1,13 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { formatKnowledgeCatalog, loadKnowledgeFromDirs, loadScaffoldKnowledge, searchKnowledge } from "./index.js";
+import { tempDir } from "../test-tmp.js";
 
 test("扫描 md，同名时先登记的赢，检索按关键词打分", () => {
-  const first = mkdtempSync(join(tmpdir(), "pi-kb-a-"));
-  const second = mkdtempSync(join(tmpdir(), "pi-kb-b-"));
+  const first = tempDir("pi-kb-a-");
+  const second = tempDir("pi-kb-b-");
   writeFileSync(
     join(first, "about.md"),
     "---\ntitle: 关于\ndescription: 脚手架说明\n---\n默认关 bash。\n",
@@ -44,7 +44,7 @@ test("目录格式化成 XML，空库返回空串", () => {
 });
 
 test("includeBuiltin: false 才能把内置示例文档从系统提示词里去掉", () => {
-  const extra = mkdtempSync(join(tmpdir(), "pi-kb-only-"));
+  const extra = tempDir("pi-kb-only-");
   writeFileSync(join(extra, "my-domain.md"), "---\ntitle: 我的业务\n---\n只有我自己的内容。\n");
 
   // 默认：内置示例与业务文档并存——这正是嵌入别人服务时 undesired 的形态。
@@ -63,7 +63,7 @@ test("includeBuiltin: false 才能把内置示例文档从系统提示词里去�
 });
 
 test("includeBuiltin 只影响 *Scaffold* 加载器，loadKnowledgeFromDirs 不受牵连", () => {
-  const dir = mkdtempSync(join(tmpdir(), "pi-kb-plain-"));
+  const dir = tempDir("pi-kb-plain-");
   writeFileSync(join(dir, "plain.md"), "---\ntitle: 普通\n---\n正文\n");
   const docs = loadKnowledgeFromDirs([dir], { includeBuiltin: false });
   assert.deepEqual(docs.map((doc) => doc.name), ["plain"]);

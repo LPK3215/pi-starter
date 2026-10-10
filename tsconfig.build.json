@@ -10,5 +10,11 @@
     "sourceMap": true
   },
   "include": ["src/**/*.ts"],
-  "exclude": ["dist", "node_modules", "src/**/*.test.ts"]
+  "exclude": [
+    "dist",
+    "node_modules",
+    "src/**/*.test.ts",
+    "src/test-server.ts",
+    "src/test-tmp.ts"
+  ]
 }

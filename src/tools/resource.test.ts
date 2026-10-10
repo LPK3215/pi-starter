@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { createReadKnowledgeTool, createSearchKnowledgeTool } from "./knowledge.js";
@@ -12,10 +11,11 @@ import { openDatabase } from "../db/index.js";
 import type { KnowledgeDoc } from "../knowledge/index.js";
 import type { Retriever } from "../knowledge/retrieval.js";
 import type { DatabaseStore } from "../db/index.js";
+import { tempDir } from "../test-tmp.js";
 
 test("知识库 / 数据库工具登记正确的 name，加载结果可被检索", () => {
-  const skillRoot = mkdtempSync(join(tmpdir(), "pi-skill-"));
-  const knowledgeRoot = mkdtempSync(join(tmpdir(), "pi-kb-"));
+  const skillRoot = tempDir("pi-skill-");
+  const knowledgeRoot = tempDir("pi-kb-");
   mkdirSync(join(skillRoot, "summarize"));
   writeFileSync(
     join(skillRoot, "summarize", "SKILL.md"),

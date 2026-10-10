@@ -1,9 +1,8 @@
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { isReadOnlySql, openDatabase, scanReadOnlySql, MAX_SQL_LENGTH } from "./index.js";
+import { tempDir } from "../test-tmp.js";
 
 test("isReadOnlySql 只放过单条 SELECT / WITH", () => {
   assert.equal(isReadOnlySql("SELECT 1"), true);
@@ -120,7 +119,7 @@ test("内存库能探活、读种子、按关键词搜、拒绝写 SQL", () => {
 });
 
 test("文件库能连上并读回写入的行", () => {
-  const dir = mkdtempSync(join(tmpdir(), "pi-db-"));
+  const dir = tempDir("pi-db-");
   const path = join(dir, "app.db");
   const db = openDatabase({ path, seed: false });
   try {
