@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-10-10
+
 ### Added
 
 - **面向人的数字有了唯一来源**（`scripts/visualization/metrics.mjs`）：文件数 / 行数 / 用例数 / 路由数 / 门禁列表 / 依赖版本 / 覆盖率阈值集中在一处，`generate_readme_numbers.mjs` 与新的 `generate_overview.mjs` 都从它取。此前 README 表格、架构图、全景页各算各的，同一件事在三个地方有不同答案。配套 `scripts/coverage-thresholds.mjs`：阈值原先只能写在 `scripts/coverage.mjs` 里，而那个文件顶层就 spawn 整个测试套件，谁 `import` 它谁跑一遍测试——所以阈值搬出来，两处（门禁与页面）读同一份。
