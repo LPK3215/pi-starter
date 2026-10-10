@@ -44,7 +44,7 @@
 | 前端手写代码（`web/src`） | 36 个文件 · 8751 行 |
 | 前端用例 | 19 |
 | HTTP 路由处理器（静态计数） | 58 |
-| 手写文档（`docs/*.md`） | 9 |
+| 手写文档（`docs/*.md`） | 10 |
 | 最大单文件 | `src/conversation/conversation.ts`（1137 行） |
 
 > 本表由 `node scripts/visualization/generate_readme_numbers.mjs` 从源码生成，**请勿手改**；`npm run docs:numbers:check` 会在 CI 里挡住漂移。
@@ -348,6 +348,7 @@ pi-starter/
 │   ├── sse-protocol.svg
 │   ├── knowledge-retrieval.svg # 可插拔 RAG 检索管线
 │   ├── project_overview/ #   静态全景页（index.html + script.js + style.css）
+│   ├── 使用指南.md      #   上手用：三种形态怎么跑、怎么加业务、怎么排错
 │   ├── 参考手册.md      #   生成：WS 协议 / REST / 工具 / 环境变量 / npm 脚本
 │   ├── 能力与边界.md    #   与 SDK 对齐的能力矩阵与边界
 │   ├── 嵌入指南.md      #   把 Agent 装进已有 Express 服务
@@ -636,17 +637,44 @@ server.listen(3000);
 
 ## 文档导航
 
+按「要解决什么问题」分三类，先看这份索引再挑文档。
+
+**上手用：怎么把它跑起来、用起来**
+
 | 文件 | 内容 |
 |---|---|
-| [`README.md`](README.md) | 英文主版（同章节 1∶1 对齐） |
-| [`CHANGELOG.md`](CHANGELOG.md) | 版本历史（Keep a Changelog + SemVer） |
-| [`CONTRIBUTING.md`](CONTRIBUTING.md) | 开发环境、项目地图、自检命令、提交约定 |
-| [`SECURITY.md`](SECURITY.md) | 漏洞报告与内建安全边界 |
+| **[`docs/使用指南.md`](docs/使用指南.md)** | **三种形态（CLI / HTTP+SSE / 前端）怎么跑、怎么发第一句话、怎么加业务、出问题怎么定位；一页看完的入口** |
 | [`FAQ.md`](FAQ.md) | 安装 / 运行时 / 模型切换 / 部署 / 开发 常见问题 |
+| [`README.md`](README.md) | 英文主版（同章节 1∶1 对齐）；快速开始、二次开发都在里面 |
+
+**查接口：它对外到底暴露什么**
+
+| 文件 | 内容 |
+|---|---|
+| **[`docs/参考手册.md`](docs/参考手册.md)** | **对外接口的单一事实源：WS 协议（客户端命令 / 服务端帧）、全套 REST 路由、工具清单（能力 / 风险标签）、全部环境变量与 npm 脚本**——由源码生成，`npm run docs:reference:check` 挡漂移 |
+| [`docs/嵌入指南.md`](docs/嵌入指南.md) | 把 Agent 装进已有 Express 服务：两条路线、鉴权挂法、实测自检清单 |
+| [`docs/官方SDK接口文档.md`](docs/官方SDK接口文档.md) | 上游 pi-agent SDK 的接口笔记（本脚手架封装的那层） |
+
+**看边界：它做到哪、不做什么、为什么**
+
+| 文件 | 内容 |
+|---|---|
 | **[`docs/能力与边界.md`](docs/能力与边界.md)** | **能力清单、功能边界、与参考项目的取舍理由、复核时钉死的事实** |
-| **[`docs/嵌入指南.md`](docs/嵌入指南.md)** | **把 Agent 装进已有 Express 服务：两条路线、鉴权挂法、实测自检清单** |
+| [`README.md`](README.md) 的「功能边界」一节 | 一条表讲清「做了 / 刻意不做」 |
+| [`SECURITY.md`](SECURITY.md) | 漏洞报告渠道与内建安全边界（`guard` 不是沙箱、默认无鉴权） |
+| [`docs/智能体视角评估.md`](docs/智能体视角评估.md) | 第一人称自评：做得好的、**当前确实存在**的问题、提升顺序 |
+
+**过程与历史（不用先读）**
+
+| 文件 | 内容 |
+|---|---|
+| [`CONTRIBUTING.md`](CONTRIBUTING.md) | 开发环境、项目地图、自检命令、提交约定 |
+| [`CHANGELOG.md`](CHANGELOG.md) | 版本历史（Keep a Changelog + SemVer） |
+| [`docs/engineering-review.md`](docs/engineering-review.md) | 独立代码走查：结论 + 实测证据 |
+| [`docs/项目分析报告.md`](docs/项目分析报告.md) | 已归档快照（0.3.0 之前），仅供追溯 |
+| [`docs/前端调研.md`](docs/前端调研.md) · [`docs/assistant-ui.md`](docs/assistant-ui.md) | 前端选型与 assistant-ui 集成笔记 |
 | [`AUTHORS`](AUTHORS) | 维护者 |
-| [`scripts/visualization/README.md`](scripts/visualization/README.md) | 上面两张图的重新生成方式 |
+| [`scripts/visualization/README.md`](scripts/visualization/README.md) | README 里那几张图的重新生成方式 |
 
 ## 贡献
 

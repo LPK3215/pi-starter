@@ -44,7 +44,7 @@ Every `POST /chat` follows the same lifecycle: HTTP body → busy guard → `ses
 | Frontend hand-written (`web/src`) | 36 files · 8751 lines |
 | Frontend cases | 19 |
 | HTTP route handlers (static count) | 58 |
-| Hand-written docs (`docs/*.md`) | 9 |
+| Hand-written docs (`docs/*.md`) | 10 |
 | Largest single file | `src/conversation/conversation.ts` (1137 lines) |
 
 > Generated from source by `node scripts/visualization/generate_readme_numbers.mjs` — **do not edit by hand**; `npm run docs:numbers:check` guards against drift in CI.
@@ -356,6 +356,7 @@ pi-starter/
 │   ├── sse-protocol.svg
 │   ├── knowledge-retrieval.svg # pluggable RAG retrieval pipeline
 │   ├── project_overview/ #   static HTML overview page (index.html + script.js + style.css)
+│   ├── 使用指南.md      #   getting started: three shapes, adding business logic, troubleshooting (Chinese)
 │   ├── 参考手册.md      #   GENERATED: WS protocol / REST / tools / env vars / npm scripts
 │   ├── 能力与边界.md    #   capability matrix & boundaries vs the SDK
 │   ├── 嵌入指南.md      #   embedding into an existing Express service
@@ -650,15 +651,42 @@ Why local extensions and skills are not loaded: pi extensions/skills on your mac
 
 ## Documentation
 
+Grouped by the question you are trying to answer. Read this index first, then pick.
+
+**Getting started: how to run it and use it**
+
 | File | What it covers |
 |---|---|
-| [`README.zh-CN.md`](README.zh-CN.md) | Chinese companion, mirrored section by section |
-| [`CHANGELOG.md`](CHANGELOG.md) | Version history (Keep a Changelog + SemVer) |
-| [`CONTRIBUTING.md`](CONTRIBUTING.md) | Dev setup, project map, self-check commands, commit conventions |
-| [`SECURITY.md`](SECURITY.md) | Vulnerability reporting and known protection boundaries |
+| **[`docs/使用指南.md`](docs/使用指南.md)** | **The three shapes (CLI / HTTP+SSE / web front end): how to run them, how to send a first message, how to add your own business logic, how to diagnose failures. One-page entry point. (Chinese)** |
 | [`FAQ.md`](FAQ.md) | Setup, runtime, model switching, deployment, development Q&A |
-| **[`docs/能力与边界.md`](docs/能力与边界.md)** | **Capability list, functional boundaries, why we do/don't mirror the reference project, facts pinned during review** |
-| **[`docs/嵌入指南.md`](docs/嵌入指南.md)** | **Embedding the agent into an existing Express service: two routes, auth placement, measured checklist** |
+| [`README.zh-CN.md`](README.zh-CN.md) | Chinese companion, mirrored section by section; Quick Start and secondary development live there too |
+
+**The interface: what it actually exposes**
+
+| File | What it covers |
+|---|---|
+| **[`docs/参考手册.md`](docs/参考手册.md)** | **Single source of truth for the external surface: WS protocol (client commands / server frames), the full REST route table, tools with capability/risk tags, every environment variable and npm script.** Generated from source; `npm run docs:reference:check` blocks drift. (Chinese) |
+| [`docs/嵌入指南.md`](docs/嵌入指南.md) | Embedding the agent into an existing Express service: two routes, auth placement, measured checklist. (Chinese) |
+| [`docs/官方SDK接口文档.md`](docs/官方SDK接口文档.md) | Interface notes for the upstream pi-agent SDK this scaffold wraps. (Chinese) |
+
+**Boundaries: what it does, what it deliberately does not, and why**
+
+| File | What it covers |
+|---|---|
+| **[`docs/能力与边界.md`](docs/能力与边界.md)** | **Capability list, functional boundaries, why we do/don't mirror the reference project, facts pinned during review. (Chinese)** |
+| This README's "Scope boundaries" section | One table of "does / deliberately does not" |
+| [`SECURITY.md`](SECURITY.md) | Vulnerability reporting and known protection boundaries (`guard` is not a sandbox; no auth by default) |
+| [`docs/智能体视角评估.md`](docs/智能体视角评估.md) | First-person self-assessment: what holds up, **what is genuinely still broken**, order of improvement. (Chinese) |
+
+**Process and history (nothing here you must read first)**
+
+| File | What it covers |
+|---|---|
+| [`CONTRIBUTING.md`](CONTRIBUTING.md) | Dev setup, project map, self-check commands, commit conventions |
+| [`CHANGELOG.md`](CHANGELOG.md) | Version history (Keep a Changelog + SemVer) |
+| [`docs/engineering-review.md`](docs/engineering-review.md) | Independent code review: conclusions plus measured evidence. (Chinese) |
+| [`docs/项目分析报告.md`](docs/项目分析报告.md) | Archived snapshot (pre-0.3.0), for traceability only. (Chinese) |
+| [`docs/前端调研.md`](docs/前端调研.md) · [`docs/assistant-ui.md`](docs/assistant-ui.md) | Front-end research and assistant-ui integration notes. (Chinese) |
 | [`AUTHORS`](AUTHORS) | Maintainers |
 | [`scripts/visualization/README.md`](scripts/visualization/README.md) | How the diagrams above are regenerated |
 

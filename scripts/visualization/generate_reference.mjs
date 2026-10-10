@@ -267,7 +267,17 @@ const webEnabledTools = webToolsForMode(true).map((tool) => tool.name);
 /* ══════════════════════════ 4. 环境变量 ══════════════════════════ */
 
 const envExampleText = read(join(ROOT, ".env.example"));
-const envEntries = [];
+/**
+ * 一个变量在 `.env.example` 里可能被写多遍——不同取值的示例块各自出现一次
+ * （`PI_EMBEDDINGS_PROVIDER` 有 openai 与 transformers 两种写法）。表要按**变量名**去重：
+ * 只出现多行，读者会以为那里有多个变量，计数也会虚高。
+ *
+ * 合并口径：
+ *   - `enabled`：只要有一处是未注释的真赋值就算「启用」。
+ *   - `comment`：取**每个出现处**的注释，按首次出现顺序拼起来，去掉重复。
+ *     多套写法各自的说明都留着，比只留最后一块更不容易丢信息。
+ */
+const envRawEntries = [];
 {
   let comment = [];
   let group = "";
@@ -280,7 +290,7 @@ const envEntries = [];
     const header = /^#\s*[-=]{4,}/.test(line) ? "" : /^#\s*(.+)$/.exec(line)?.[1];
     const varMatch = /^#?\s*(PI_[A-Z0-9_]+)\s*=/.exec(line);
     if (varMatch) {
-      envEntries.push({
+      envRawEntries.push({
         name: varMatch[1],
         enabled: !line.startsWith("#"),
         group,
@@ -295,6 +305,21 @@ const envEntries = [];
     }
   }
 }
+const envByName = new Map();
+for (const entry of envRawEntries) {
+  const seen = envByName.get(entry.name);
+  if (!seen) {
+    envByName.set(entry.name, { ...entry, comments: entry.comment ? [entry.comment] : [] });
+    continue;
+  }
+  seen.enabled = seen.enabled || entry.enabled;
+  if (entry.comment && !seen.comments.includes(entry.comment)) seen.comments.push(entry.comment);
+}
+const envEntries = [...envByName.values()].map((e) => ({ ...e, comment: e.comments.join(" ") }));
+// 断言：去重后每个变量只该有一行——生成器将来改动若把这个性质弄丢，直接让门禁红。
+const envDuplicates = envEntries.map((e) => e.name).filter((n, i, all) => all.indexOf(n) !== i);
+if (envDuplicates.length > 0) fail(`环境变量表出现重复行：${[...new Set(envDuplicates)].join(", ")}`);
+if (envEntries.length !== envByName.size) fail("环境变量去重后计数与唯一名字数不一致");
 const envDeclared = new Set(envEntries.map((e) => e.name));
 
 // 代码里引用的 PI_*（排除测试、排除 `PI_FOO_*` 这种 glob 提法）
@@ -434,7 +459,7 @@ function render() {
   out.push("## 4. 环境变量");
   out.push("");
   out.push(
-    `\`.env.example\` 登记了 **${envEntries.length}** 个；下表的「默认」列里，未注释的即为默认启用的写法。`,
+    `\`.env.example\` 登记了 **${envEntries.length}** 个（按变量名去重）；下表的「默认」列里，未注释的即为默认启用的写法。`,
   );
   out.push("");
   out.push("| 变量 | 默认 | 说明 |");
