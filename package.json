@@ -2,7 +2,7 @@
   "name": "pi-starter",
   "version": "0.4.0",
   "type": "module",
-  "description": "Agent scaffold on the pi-agent SDK: tools, skills, knowledge base, database, model switching, HTTP SSE; business logic injected via the interface",
+  "description": "Agent scaffold on the pi-agent SDK: tools, skills, knowledge base with pluggable RAG, cross-session memory, MCP bridge, plan mode, subagents, database, model switching, CLI + HTTP SSE + WebSocket + library entry points; business logic injected via options",
   "author": "LPK3215 <17538703215@163.com>",
   "license": "MIT",
   "homepage": "https://github.com/LPK3215/pi-starter#readme",
@@ -19,7 +19,14 @@
     "sdk",
     "scaffold",
     "sse",
-    "sqlite"
+    "websocket",
+    "sqlite",
+    "mcp",
+    "rag",
+    "memory",
+    "plan-mode",
+    "subagents",
+    "express"
   ],
   "exports": {
     ".": {
@@ -33,7 +40,10 @@
     "dist",
     "scripts",
     "README.md",
-    "LICENSE"
+    "README.zh-CN.md",
+    "CHANGELOG.md",
+    "LICENSE",
+    "AUTHORS"
   ],
   "scripts": {
     "dev": "tsx src/index.ts",

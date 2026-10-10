@@ -126,3 +126,21 @@ test("记忆：落盘是原子写（写完后不留同目录临时文件）", ()
   assert.deepEqual(leftovers, [], "不应留下临时文件");
   assert.ok(statSync(file).size > 0);
 });
+
+/**
+ * 回归：记忆落盘原先只有 `writeFileSync`，于是按**进程 umask** 建文件（通常 0o644，世界可读），
+ * 而它默认落在 `~/.pi/agent/` —— 同一个目录里 provider-keys 与向量库都坚持 0600。
+ * 记忆存的是「关于用户的事实」，最小权限这件事不写出来就是没写出来。
+ *
+ * 与 setup / 向量库 / provider-keys 同一口径：只在 POSIX 上真验（Windows 的 chmod 只能置
+ * 只读位，0600 与 0644 在 stat.mode 上不可区分），跳过要被打印、被统计。
+ */
+test("记忆文件权限收紧到 0600，不留世界可读", (t) => {
+  if (process.platform === "win32") {
+    t.skip("Windows 的 chmod 只能置只读位，0600 与 0644 在 stat.mode 上不可区分（POSIX 专属断言）");
+    return;
+  }
+  const { store, file } = makeStore();
+  store.remember({ text: "关于我的事实：偏好用中文回答", tags: ["preference"] });
+  assert.equal(statSync(file).mode & 0o777, 0o600, "记忆文件必须仅本人可读");
+});

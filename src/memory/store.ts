@@ -14,6 +14,7 @@
  */
 
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   readFileSync,
@@ -234,19 +235,37 @@ export class MemoryStore {
     }
   }
 
-  /** 原子写：先写同目录临时文件再 rename，避免写到一半被杀留下截断文件。 */
+  /**
+   * 原子写：先写同目录临时文件再 rename，避免写到一半被杀留下截断文件。
+   *
+   * 权限口径照 `provider-keys.ts`：目录 0700、临时文件与目标文件都 0600。记忆存的是
+   * 「关于用户的事实」，而它默认落在 `~/.pi/agent/` —— 同一个目录里 provider-keys 一直
+   * 坚持 0600；`writeFileSync` 只按进程 umask 建文件（通常 0o644，世界可读），
+   * 所以「最小权限」不写出来就是没写出来。Windows 上尽力而为（与其余三处同一处理）。
+   */
   private save(): void {
+    const dir = dirname(this.filePath);
+    const tmp = join(dir, `.${basename(this.filePath)}.${process.pid}.tmp`);
     try {
-      const dir = dirname(this.filePath);
-      mkdirSync(dir, { recursive: true });
-      const tmp = join(dir, `.${basename(this.filePath)}.${process.pid}.tmp`);
-      writeFileSync(tmp, serialize(this.entries), "utf8");
+      mkdirSync(dir, { recursive: true, mode: 0o700 });
+      writeFileSync(tmp, serialize(this.entries), { encoding: "utf8", mode: 0o600 });
+      try {
+        // 临时文件同样含明文，且它的存在窗口更短更不容易被人注意到 —— 一并收紧。
+        chmodSync(tmp, 0o600);
+      } catch {
+        /* Windows 上是尽力而为 */
+      }
       renameSync(tmp, this.filePath);
+      try {
+        chmodSync(this.filePath, 0o600);
+      } catch {
+        /* Windows 上是尽力而为 */
+      }
     } catch (err) {
       // 落盘失败只告警：记忆写不进去不该让一次对话崩掉。
       this.log?.("记忆写盘失败", err);
       try {
-        rmSync(join(dirname(this.filePath), `.${basename(this.filePath)}.${process.pid}.tmp`), { force: true });
+        rmSync(tmp, { force: true });
       } catch {
         // 临时文件清理失败无需再报，交由下次覆盖。
       }

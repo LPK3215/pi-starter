@@ -10,6 +10,7 @@
   <a href="https://github.com/LPK3215/pi-starter/issues"><img alt="issues" src="https://img.shields.io/github/issues/LPK3215/pi-starter"/></a>
   <a href="https://github.com/LPK3215/pi-starter/commits/main"><img alt="last commit" src="https://img.shields.io/github/last-commit/LPK3215/pi-starter"/></a>
   <a href="CONTRIBUTING.md"><img alt="PRs welcome" src="https://img.shields.io/badge/PRs-welcome-brightgreen"/></a>
+  <a href="CODE_OF_CONDUCT.md"><img alt="Contributor Covenant" src="https://img.shields.io/badge/Contributor%20Covenant-2.1-4baaaa"/></a>
 </p>
 
 **Repository**: <https://github.com/LPK3215/pi-starter> · **Upstream SDK**: [earendil-works/pi](https://github.com/earendil-works/pi)
@@ -39,8 +40,8 @@ Every `POST /chat` follows the same lifecycle: HTTP body → busy guard → `ses
 <!-- BEGIN:generated-numbers -->
 | Metric | Value |
 |---|---|
-| Backend source (`src/`, tests excluded) | 84 `.ts` files · 19964 lines |
-| Backend tests | 53 files · **504 cases** · 12134 lines |
+| Backend source (`src/`, tests excluded) | 84 `.ts` files · 19983 lines |
+| Backend tests | 53 files · **505 cases** · 12152 lines |
 | Frontend hand-written (`web/src`) | 36 files · 8751 lines |
 | Frontend cases | 19 |
 | HTTP route handlers (static count) | 58 |
@@ -372,7 +373,7 @@ pi-starter/
 ├── web/                  # product frontend (own package.json, Vite + React + assistant-ui)
 │   └── src/pi/           #   the only hand-written glue: WS client + ExternalStore adapter
 ├── Dockerfile            # ready-to-run sandbox image (see SECURITY.md / README advanced)
-├── LICENSE  README.md  README.zh-CN.md  CONTRIBUTING.md  SECURITY.md
+├── LICENSE  README.md  README.zh-CN.md  CONTRIBUTING.md  CODE_OF_CONDUCT.md  SECURITY.md
 ├── CHANGELOG.md  FAQ.md  AUTHORS  .gitignore  .gitattributes
 └── package.json  tsconfig.json  tsconfig.build.json  .env.example  .dockerignore  .cnb.yml
 ```
@@ -683,6 +684,7 @@ Grouped by the question you are trying to answer. Read this index first, then pi
 | File | What it covers |
 |---|---|
 | [`CONTRIBUTING.md`](CONTRIBUTING.md) | Dev setup, project map, self-check commands, commit conventions |
+| [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md) | Community conduct (Contributor Covenant 2.1) |
 | [`CHANGELOG.md`](CHANGELOG.md) | Version history (Keep a Changelog + SemVer) |
 | [`docs/engineering-review.md`](docs/engineering-review.md) | Independent code review: conclusions plus measured evidence. (Chinese) |
 | [`docs/项目分析报告.md`](docs/项目分析报告.md) | Archived snapshot (pre-0.3.0), for traceability only. (Chinese) |
@@ -692,11 +694,13 @@ Grouped by the question you are trying to answer. Read this index first, then pi
 
 ## Contributing
 
-Feature branches, PRs welcome. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the full flow and the self-check commands. Run the diagram generators whenever counts, tools, endpoints, or SSE events change:
+Feature branches, PRs welcome. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the full flow and the self-check commands, and [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md) for community conduct. Whenever counts, tools, endpoints, SSE events, or routes change, regenerate what is derived from source:
 
 ```bash
-node scripts/visualization/generate_architecture.mjs
-node scripts/visualization/generate_request_flow.mjs
+npm run docs:svg        # three diagrams (architecture / request flow / retrieval)
+npm run docs:numbers    # the generated tables in both READMEs
+npm run docs:reference  # docs/参考手册.md (protocol / REST / tools / env / scripts)
+npm run docs:check      # exits 1 if any generated surface is stale — this is what CI enforces
 ```
 
 ## Security

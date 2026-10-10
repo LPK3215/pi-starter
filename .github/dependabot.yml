@@ -1,0 +1,60 @@
+# Dependabot version updates.
+#
+# Two deliberate scope limits, both inherited from this repo's existing conventions:
+#
+#   1. The pi SDK trio is **pinned exactly** and upgraded by hand. Code depends on its
+#      documented surface (and a few non-public shapes are isolated behind
+#      `src/sdk-adapter.ts` on purpose), so an automatic bump is exactly the kind of
+#      change that must be taken through the real gates — `npm run verify:all`
+#      (verify + real-process e2e) — with a human reading the diff. Hence `ignore`.
+#   2. GitHub Actions currently cannot run for this account (billing lock), so the
+#      remote gate lives in `.cnb.yml`. Dependabot PRs are still useful — they get
+#      checked before merge the same way any other PR does — but do not assume a
+#      green check mark here means CI ran.
+
+version: 2
+updates:
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "03:00"
+      timezone: "Asia/Shanghai"
+    open-pull-requests-limit: 5
+    allow:
+      - dependency-type: "production"
+      - dependency-type: "development"
+    ignore:
+      - dependency-name: "@earendil-works/pi-agent-core"
+      - dependency-name: "@earendil-works/pi-ai"
+      - dependency-name: "@earendil-works/pi-coding-agent"
+    groups:
+      npm-root:
+        patterns:
+          - "*"
+
+  - package-ecosystem: "npm"
+    directory: "/web"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "03:00"
+      timezone: "Asia/Shanghai"
+    open-pull-requests-limit: 5
+    groups:
+      npm-web:
+        patterns:
+          - "*"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "03:00"
+      timezone: "Asia/Shanghai"
+    groups:
+      github-actions:
+        patterns:
+          - "*"

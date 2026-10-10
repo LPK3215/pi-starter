@@ -16,6 +16,13 @@
 *.yaml text eol=lf
 *.html text eol=lf
 *.css  text eol=lf
+
+# Generated diagrams are byte-compared by `npm run docs:check` (docs:svg:check). A checkout
+# that rewrites their line endings would report drift on one OS and not the other.
+*.svg  text eol=lf
+
+# The pre-commit hook is executed by sh; CRLF would break its shebang line.
+hooks/pre-commit text eol=lf
 .env.example text eol=lf
 .gitignore   text eol=lf
 .gitattributes text eol=lf
@@ -44,7 +51,12 @@ AUTHORS      text eol=lf
 
 # Treat generated files as such on GitHub so PR diffs stay readable.
 package-lock.json linguist-generated=true -diff
+web/package-lock.json linguist-generated=true -diff
 dist/** linguist-generated=true export-ignore
+web/dist/** linguist-generated=true export-ignore
+
+# Packed artifacts (`npm pack` / `publish:local`) must never be text-normalised.
+*.tgz binary
 
 # Documentation files: long lines are prose, not code.
 *.md markdown

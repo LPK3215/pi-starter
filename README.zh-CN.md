@@ -10,6 +10,7 @@
   <a href="https://github.com/LPK3215/pi-starter/issues"><img alt="issues" src="https://img.shields.io/github/issues/LPK3215/pi-starter"/></a>
   <a href="https://github.com/LPK3215/pi-starter/commits/main"><img alt="last commit" src="https://img.shields.io/github/last-commit/LPK3215/pi-starter"/></a>
   <a href="CONTRIBUTING.md"><img alt="PRs welcome" src="https://img.shields.io/badge/PRs-welcome-brightgreen"/></a>
+  <a href="CODE_OF_CONDUCT.md"><img alt="Contributor Covenant" src="https://img.shields.io/badge/Contributor%20Covenant-2.1-4baaaa"/></a>
 </p>
 
 **仓库地址**：<https://github.com/LPK3215/pi-starter> · **上游 SDK**：[earendil-works/pi](https://github.com/earendil-works/pi)
@@ -39,8 +40,8 @@
 <!-- BEGIN:generated-numbers -->
 | 指标 | 数值 |
 |---|---|
-| 后端源码（`src/`，不含测试） | 84 个 `.ts` · 19964 行 |
-| 后端测试 | 53 个文件 · **504 用例** · 12134 行 |
+| 后端源码（`src/`，不含测试） | 84 个 `.ts` · 19983 行 |
+| 后端测试 | 53 个文件 · **505 用例** · 12152 行 |
 | 前端手写代码（`web/src`） | 36 个文件 · 8751 行 |
 | 前端用例 | 19 |
 | HTTP 路由处理器（静态计数） | 58 |
@@ -364,7 +365,7 @@ pi-starter/
 ├── web/                  # 产品前端（独立 package.json：Vite + React + assistant-ui）
 │   └── src/pi/           #   唯一手写的胶水：WS 客户端 + ExternalStore 适配
 ├── Dockerfile            # 开箱即用的沙箱镜像（见 SECURITY.md / README 高级模式）
-├── LICENSE  README.md  README.zh-CN.md  CONTRIBUTING.md  SECURITY.md
+├── LICENSE  README.md  README.zh-CN.md  CONTRIBUTING.md  CODE_OF_CONDUCT.md  SECURITY.md
 ├── CHANGELOG.md  FAQ.md  AUTHORS  .gitignore  .gitattributes
 └── package.json  tsconfig.json  tsconfig.build.json  .env.example  .dockerignore  .cnb.yml
 ```
@@ -669,6 +670,7 @@ server.listen(3000);
 | 文件 | 内容 |
 |---|---|
 | [`CONTRIBUTING.md`](CONTRIBUTING.md) | 开发环境、项目地图、自检命令、提交约定 |
+| [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md) | 社区行为准则（Contributor Covenant 2.1） |
 | [`CHANGELOG.md`](CHANGELOG.md) | 版本历史（Keep a Changelog + SemVer） |
 | [`docs/engineering-review.md`](docs/engineering-review.md) | 独立代码走查：结论 + 实测证据 |
 | [`docs/项目分析报告.md`](docs/项目分析报告.md) | 已归档快照（0.3.0 之前），仅供追溯 |
@@ -678,11 +680,13 @@ server.listen(3000);
 
 ## 贡献
 
-欢迎 PR，开题分支即可。完整流程与自检命令见 [`CONTRIBUTING.md`](CONTRIBUTING.md)。计数、工具、endpoint 或 SSE 事件变化后，记得跑图产出脚本：
+欢迎 PR，开题分支即可。完整流程与自检命令见 [`CONTRIBUTING.md`](CONTRIBUTING.md)，社区行为准则见 [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md)。计数、工具、endpoint、SSE 事件或路由变化后，重新生成这些「由源码派生」的内容：
 
 ```bash
-node scripts/visualization/generate_architecture.mjs
-node scripts/visualization/generate_request_flow.mjs
+npm run docs:svg        # 三张图（架构 / 请求时序 / 检索）
+npm run docs:numbers    # 两份 README 的生成表格
+npm run docs:reference  # docs/参考手册.md（协议 / REST / 工具 / 环境变量 / 脚本）
+npm run docs:check      # 任一处过期即退出 1 —— CI 挡的就是这个
 ```
 
 ## 安全

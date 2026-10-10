@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **开源规范补齐**：新增 `CODE_OF_CONDUCT.md`（Contributor Covenant 2.1，英文单版）与 `.github/dependabot.yml`。dependabot **刻意不自动升 `@earendil-works/*` 三件套**——它们钉版本是设计（升级必须走 `verify:all` 的完整门禁 + 人看 diff），并在文件里注明「GitHub Actions 本账号跑不起来，绿勾不等于远端跑过」。`.gitattributes` 补：`*.svg text eol=lf`（架构图现在被 `docs:svg:check` 按字节比对，行尾被规范化会在一个系统上报假漂移）、`hooks/pre-commit text eol=lf`（CRLF 会打断 shebang）、`web/package-lock.json` 与 `web/dist/**` 标 `linguist-generated`、`*.tgz binary`。`package.json` 的 `files` 增加 `README.zh-CN.md` / `CHANGELOG.md` / `AUTHORS`（原来只发英文 README，中文主版和作者信息不在包里），`description` 与 `keywords` 补齐现有能力面（记忆 / MCP / 计划模式 / 子代理 / RAG / 四入口）。
+- **两份 README 的生成物指引改成脚本名**：原先手写 `node scripts/visualization/generate_architecture.mjs` 两行且漏了第三张图，现在统一 `npm run docs:svg` / `docs:numbers` / `docs:reference` / `docs:check`，并说明「CI 挡的就是 docs:check 过期」。语言切换互链、章节数（29 = 29）与文档导航表两版对齐。
+- **FAQ 补 5 条**：记忆存在哪、默认开还是关、和知识库的分工；默认不开联网工具是不是缺口（以及开了之后防什么、不防什么）；`verify:audit` 的第三种结论「无法执行」为什么既不红也不绿；Windows 上那几例跳过是不是套件不健康；测试的临时目录现在由谁回收。
+- **CONTRIBUTING 补齐真实门禁**：`npm run verify` 的组成此前只写了 7 步、漏了 `docs:check` 与 `verify:audit`（这两步是本轮才进 verify 的）；命令表补 `test:coverage` / `smoke` / `e2e` / `docs:*` / `probe:providers`；新增「平台注记」讲清远端 Linux、本地 Windows 的不对称与三类跳过的成因；测试约定里写死两条：临时目录必须走 `tempDir()`、平台不适用要 `t.skip(原因)`（两条都是本轮修过的真实缺陷）。
+
+### Security
+
+- **跨会话记忆落盘不再世界可读**（`src/memory/store.ts`）：`save()` 原先只有 `writeFileSync(tmp, …)` + `renameSync`，于是文件按**进程 umask** 建成 `0o644`——而记忆默认住在 `~/.pi/agent/`，同一个目录里 `auth.json` 与 provider-keys 都坚持 `0600`，向量库也坚持（注释里还写着原因）。存的是「关于用户的事实」，最小权限不写出来就是没写出来。现在目录 `0700`、临时文件与目标文件都 `0600`（临时文件同样含明文，窗口期更短更隐蔽，与 provider-keys 同一处理），Windows 尽力而为。回归：`记忆文件权限收紧到 0600，不留世界可读`（POSIX 专属，Windows 显式跳过并打印原因）。`SECURITY.md` 增补该文件的位置、权限与 `/memory` 未鉴权这一层。
+- **`SECURITY.md` 的会话表述改为准确**：原句「One process holds one agent session, and concurrent `/chat` calls return 429」在 REST 侧成立、在 WS 侧不成立（每连接多对话，cap 8 + LRU），容易让人以为整个进程只有一个对话。
+
 ### Changed
 
 - **三张架构图纳入漂移门禁**（`docs:svg:check` 接进 `npm run docs:check`）：`generate_architecture.mjs` / `generate_request_flow.mjs` / `generate_retrieval.mjs` 原先只有「跑一次就新鲜一次」，**没有任何东西保证它被跑过**——README 上的架构图实际漂移过一次：图里写着 `Contract smoke tests: 49 files · 470 cases`，源码已经是 `53 files · 504 cases`。图里的数字比手写文档更危险，因为它看起来是机器生成的、于是不受怀疑。三个生成器现在都支持 `--check`（与 README 数字、参考手册同一口径：一致退 0 / 漂移退 1 并指名怎么重生成）。负向验证：往 `docs/architecture.svg` 末尾追加一个空格，`--check` 立刻退 1；重生成后回到退 0。同时刷新 `docs/architecture.svg` 到当前实况（另两张本来就一致）。

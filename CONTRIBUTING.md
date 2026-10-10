@@ -51,19 +51,24 @@ See the [Project Structure](README.md#project-structure) section of the README f
 
 2. **Keep changes scoped.** Do not edit `node_modules/@earendil-works`. Do not add new runtime dependencies unless the feature genuinely needs them.
 
-3. **Update tests with code.** The contract smoke tests (`*.test.ts` under `src/`) must never call a real model or touch the real `~/.pi/agent/` — keep them runnable offline.
+3. **Update tests with code.** The contract smoke tests (`*.test.ts` under `src/`) must never call a real model or touch the real `~/.pi/agent/` — keep them runnable offline. Two rules that exist because they were broken in practice:
+   - **Temp directories go through `tempDir()`** (`src/test-tmp.ts`), not a bare `mkdtempSync`. Test files used to leak 8.5k directories (~165 MB) into the system temp folder because nothing deleted them. `tempDir()` registers cleanup on process exit and reports removal failures instead of swallowing them.
+   - **Platform-inapplicable assertions call `t.skip(reason)` and return.** Never `catch { return; }` — a test that never ran an assertion must not show up as a pass. Skips are printed and counted (see the Windows notes in the table below).
 
-4. **Update docs.** If you add a tool, endpoint, config key, or event, update `README.md` **and** `README.zh-CN.md` side by side so the two stay aligned.
+4. **Update docs.** If you add a tool, endpoint, config key, or event, update `README.md` **and** `README.zh-CN.md` side by side so the two stay aligned. The generated surfaces are not edited by hand — run `npm run docs:svg && npm run docs:numbers && npm run docs:reference`; `npm run docs:check` fails if you forget.
 
 5. **Self-check** before opening a PR (same gates as CI):
 
    ```bash
-   npm run verify   # typecheck + lint:unused + test + test:web + smoke + build + verify:embed
+   npm run verify   # typecheck + lint:unused + test + test:web + docs:check + verify:audit + smoke + build + verify:embed
+   npm run verify:all   # the above + npm run e2e (real processes; see the platform note below)
    # or run them individually:
    npm run typecheck
    npm run lint:unused
    npm test
    npm run test:web
+   npm run docs:check
+   npm run verify:audit
    npm run build
    ```
 
@@ -78,6 +83,16 @@ See the [Project Structure](README.md#project-structure) section of the README f
 | `npm run web` | Starts the HTTP + SSE server on `:3000` |
 | `npm run rag:smoke` | Optional live check of the local in-process vector RAG (`@huggingface/transformers`); prints `SKIP` + exit 0 when the model host / native runtime is unreachable, so it never false-greens or blocks you |
 | `npm run clean` | Removes `dist/` |
+| `npm run test:web` | Frontend contract tests (`web/src/pi/*.test.ts`), headless, `fetch` stubbed |
+| `npm run test:coverage` | Coverage ratchet via Node's built-in `--experimental-test-coverage` (no c8/nyc). Thresholds only ever move **up**: lines 92 / branches 81 / functions 85, measured over `src/**` only |
+| `npm run docs:check` | Byte-compares every generated surface against source: `docs:numbers:check` (README tables) + `docs:reference:check` (`docs/参考手册.md`) + `docs:svg:check` (the three diagrams). Drift exits 1 and names the regeneration command |
+| `npm run docs:svg` / `docs:numbers` / `docs:reference` | Regenerate the diagrams / README numbers / reference manual |
+| `npm run verify:audit` | Runs the **same** dependency-audit commands the remote gate runs (root package + `web/`), so "green locally" and "green remotely" mean the same thing. Three outcomes are kept apart: pass / advisories found / **could not execute** (exit 2 — a broken gate is never reported as a pass, nor as a vulnerability) |
+| `npm run smoke` | Real HTTP + WS transport checks (frame order, pending replay, origin, backpressure) without a model |
+| `npm run e2e` | Real processes: full turn → `SIGKILL` → restart → conversation recovered from disk (plus tool-call recovery, settings persistence, no ghost index entries, port released on shutdown) |
+| `npm run probe:providers` | Live reachability check of the providers configured in `.env` |
+
+**Platform note.** Both remote pipelines run in a `node:24` (Linux) container, while many contributors develop on Windows — so a Windows-only failure is invisible to CI, and vice versa. Anything newly added to `verify` must be run locally before it is called green. On Windows the suite reports explicit skips with reasons: file-permission assertions (`chmod` can only set the read-only bit, so `0600` and `0644` are indistinguishable in `stat.mode`), file symlinks (need developer mode / privileges; junctions only work for directories), and the real-`SIGTERM` shutdown path (`child.kill` goes through `TerminateProcess`) — that last one is why the graceful-shutdown **orchestration** lives in `src/graceful.ts` with all-platform tests instead of being left unwatched.
 
 ## Commit & PR conventions
 
