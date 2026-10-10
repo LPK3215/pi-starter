@@ -35,6 +35,17 @@ function requireString(value: unknown, field: string): string {
   return value;
 }
 
+/**
+ * 解析 recall 的 limit。非法/缺省回落到 store 的默认值（传 undefined 让它自己判），
+ * 越界由 store 侧夹取——路由层不重复一份夹取逻辑，避免两处口径漂移。
+ */
+function parseMemoryLimit(raw: unknown): number | undefined {
+  if (raw === undefined) return undefined;
+  const value = Number(raw);
+  if (!Number.isFinite(value)) throw badRequest("limit must be a number");
+  return Math.trunc(value);
+}
+
 /** Wrap an async route so rejected promises reach the error middleware. */
 export function asyncRoute(
   handler: (req: Request, res: Response) => Promise<void>,
@@ -126,6 +137,41 @@ export function registerProbeRoutes(
 
 export function registerResourceRoutes(app: Express, agent: BuiltAgent): void {
   const { skills, knowledge, promptTemplates } = agent;
+
+  // 跨会话记忆：只在装配了存储时注册。写入/删除走同一份 store，与 remember / recall 工具同源。
+  // 省略时不注册——不注册比注册一个永远报错的端点诚实（与 /files、/approval/rules 同一原则）。
+  // 可选链：库嵌入方/测试替身可能不实现 `memory`（字段在 BuiltAgent 上，但这里是运行时读）。
+  const memory = agent.memory?.store;
+  if (memory) {
+    app.get("/memory", (req, res) => {
+      const query = typeof req.query.q === "string" ? req.query.q : "";
+      const limit = parseMemoryLimit(req.query.limit);
+      const hits = memory.recall(query, limit);
+      res.json({ ok: true, query, hits, total: memory.size });
+    });
+
+    app.post("/memory", (req, res) => {
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      const text = requireString(body.text, "text");
+      const tags = Array.isArray(body.tags)
+        ? body.tags.filter((t): t is string => typeof t === "string")
+        : undefined;
+      let result: { entry: { id: string }; evicted: number };
+      try {
+        result = memory.remember({ text, ...(tags ? { tags } : {}) });
+      } catch (err) {
+        // 校验失败是客户端错误（正文空 / 超限 / 标签非法），如实返回文案。
+        throw validationFailed(err instanceof Error ? err.message : String(err));
+      }
+      res.json({ ok: true, id: result.entry.id, evicted: result.evicted, total: memory.size });
+    });
+
+    app.delete("/memory/:id", (req, res) => {
+      const id = req.params.id;
+      if (!memory.forget(id)) throw notFound(`no such memory: ${id}`);
+      res.json({ ok: true, id, total: memory.size });
+    });
+  }
 
   app.get("/skills", (_req, res) => {
     res.json({

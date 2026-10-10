@@ -576,6 +576,33 @@ export function resolveWebConfig(env: Record<string, string | undefined> = proce
 }
 
 /**
+ * 跨会话记忆配置（`PI_MEMORY`）。
+ *
+ * 默认**开**——记忆只读写本地文件，没有出站网络，与联网工具（默认关）的取舍不同：
+ * 它补齐的是「通用」里「记住上次说过什么」这一块，关掉它等于每次对话都从零开始。
+ *
+ * 取值风格与 `PI_WEB` 一致：只有明确的 `off` / `false` / `0` 才算关；不写 = 开。
+ * 之所以反过来（默认开、显式关），是因为记忆的价值恰恰在于「不配置也能用」。
+ */
+export interface MemoryConfig {
+  enabled: boolean;
+  /** 记忆文件路径。缺省用 `MemoryStore` 的默认（`~/.pi/agent/pi-starter-memory.jsonl`）。 */
+  path?: string;
+}
+
+export function resolveMemoryConfig(
+  env: Record<string, string | undefined> = process.env,
+): MemoryConfig {
+  const raw = clean(env.PI_MEMORY)?.toLowerCase();
+  const disabled = raw === "off" || raw === "false" || raw === "0";
+  const path = clean(env.PI_MEMORY_PATH);
+  return {
+    enabled: !disabled,
+    ...(path ? { path } : {}),
+  };
+}
+
+/**
  * 解析 PI_SCOPED_MODELS（模型轮换列表）：逗号分隔，每项 `provider/modelId[:thinkingLevel]`。
  * 例：modelscope/Qwen/Qwen3-Next:high,zhipu/glm-4.5-air:off
  * 返回的是未解析的原始引用；由 agent 层用 resolveScopedModels 对可用模型逐个解析。

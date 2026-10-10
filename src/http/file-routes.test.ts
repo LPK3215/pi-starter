@@ -63,6 +63,7 @@ function fakeAgent(): BuiltAgent {
     model,
     builtinTools: "off" as const,
     web: { enabled: false, toolNames: [] },
+    memory: { enabled: false, toolNames: [] },
     skills: [],
     knowledge: [],
     database: {

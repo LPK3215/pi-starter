@@ -24,6 +24,7 @@ import {
   sessionToolPolicy,
   parseScopedModelRefs,
   resolveWebConfig,
+  resolveMemoryConfig,
   SETUP_HINT,
   type BuiltinToolMode,
 } from "./config.js";
@@ -90,6 +91,8 @@ import { openScaffoldDatabase, type DatabaseStore } from "./db/index.js";
 import { getLogger } from "./log.js";
 import { createReadKnowledgeTool, createSearchKnowledgeTool } from "./tools/knowledge.js";
 import { createDbQueryTool, createDbStatusTool } from "./tools/database.js";
+import { createRecallTool, createRememberTool } from "./tools/memory.js";
+import { MemoryStore } from "./memory/store.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -237,6 +240,17 @@ export interface BuildAgentOptions {
   /** 显式开关联网工具（覆盖 `PI_WEB`）。传 `true` 时用默认 HTTP 后端。 */
   web?: boolean;
   /**
+   * 跨会话记忆存储。传了就**开启** `remember` / `recall` 两个工具并换上这个实现
+   * （换存储位置 / 换后端 / 测试用内存实现）。
+   *
+   * 不传时是否开启由 `PI_MEMORY` 决定（默认开）——记忆是本地文件读写，没有出站网络，
+   * 与联网工具（默认关）的取舍不同：它补齐的正是「通用」里「记住上次」这一块。
+   * 设为 `false` 则显式关闭（工具不注册）。
+   */
+  memory?: MemoryStore | false;
+  /** 记忆文件路径（仅在不传 `memory` 时生效）。默认 `~/.pi/agent/pi-starter-memory.jsonl`。 */
+  memoryPath?: string;
+  /**
    * 模型轮换列表（官方 `scopedModels` + `session.cycleModel`）。不传则读 `PI_SCOPED_MODELS`；
    * 两者都缺时，默认用当前已配 Key 的可用模型派生一份（不改变初始选模，只是把轮换打开）。
    */
@@ -357,6 +371,11 @@ export interface BuiltAgent {
    * 与 `builtinTools` 的区别：那是**内置**工具档位，这是**脚手架自带**的可选能力。
    */
   web: { enabled: boolean; toolNames: string[] };
+  /**
+   * 跨会话记忆状态。默认开；关掉时 `store` 为 undefined 且 `toolNames` 为空。
+   * `store` 暴露出来供 REST `/memory` 与嵌入方读写同一份记忆。
+   */
+  memory: { enabled: boolean; toolNames: string[]; store?: MemoryStore };
   skills: LoadedSkill[];
   knowledge: KnowledgeDoc[];
   /** 已生效的知识检索后端（默认 keyword；行为与向量库隔离时与从前一致）。 */
@@ -565,10 +584,34 @@ export async function buildAgent(options: BuildAgentOptions = {}): Promise<Built
   const webEnabled = options.web ?? webCfg.enabled;
   const webTools = webToolsForMode(webEnabled, options.webClient);
 
+  // 跨会话记忆：默认开（本地文件读写、无出站网络），`PI_MEMORY=off` 或 `buildAgent({ memory: false })` 关。
+  // 关掉时两个工具都不注册——不注册比注册一个永远报「没开」的工具诚实。
+  const memoryCfg = resolveMemoryConfig();
+  const memoryEnabled = options.memory !== false && (options.memory !== undefined || memoryCfg.enabled);
+  const memoryStore: MemoryStore | undefined =
+    memoryEnabled
+      ? options.memory instanceof MemoryStore
+        ? options.memory
+        : new MemoryStore({
+            ...(options.memoryPath ?? memoryCfg.path ? { filePath: options.memoryPath ?? memoryCfg.path } : {}),
+            logger: (msg, detail) => getLogger().warn(msg, { detail: detail instanceof Error ? detail.message : detail }),
+          })
+      : undefined;
+  const memoryTools =
+    memoryStore !== undefined ? [createRememberTool(memoryStore), createRecallTool(memoryStore)] : [];
+
   const resolveToolList = (): ToolDefinition[] => {
     const live = options.dynamicTools?.() ?? [];
     const execTools = execToolsForMode(cfg.builtinTools, execEnv);
-    return [...allTools, ...dynamicTools, ...webTools, ...execTools, ...live, ...(options.extraTools ?? [])];
+    return [
+      ...allTools,
+      ...dynamicTools,
+      ...webTools,
+      ...memoryTools,
+      ...execTools,
+      ...live,
+      ...(options.extraTools ?? []),
+    ];
   };
 
   /**
@@ -735,6 +778,11 @@ export async function buildAgent(options: BuildAgentOptions = {}): Promise<Built
     },
     builtinTools: cfg.builtinTools,
     web: { enabled: webTools.length > 0, toolNames: webTools.map((tool) => tool.name) },
+    memory: {
+      enabled: memoryStore !== undefined,
+      toolNames: memoryTools.map((tool) => tool.name),
+      ...(memoryStore ? { store: memoryStore } : {}),
+    },
     skills,
     knowledge,
     knowledgeRetrieval: retriever.kind,

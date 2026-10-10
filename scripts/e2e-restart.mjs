@@ -448,6 +448,66 @@ console.log("\n── 设置：改 → 落盘 → 重启后生效 ──");
   await new Promise((r) => { second.child.once("exit", () => r(true)); second.child.kill("SIGKILL"); });
 }
 
+/* ── 7.5 跨会话记忆：写 → 落盘 → 重启后仍在 ──
+ * 记忆的全部意义就是「换个会话/重启还在」。单测能证明 store 落盘与重建实例仍可读，
+ * 但证明不了「真实进程里的 `/memory` 与工具用的是同一份、且真的落在 agentDir 下」——
+ * 那一步只在真实启动里发生。这里直接打 HTTP，不依赖模型调用。 */
+console.log("\n── 跨会话记忆：写 → 落盘 → 重启后仍在 ──");
+{
+  const first = startServer("memory-run1");
+  await waitReady("memory-run1", first.log);
+
+  // 默认开：能力目录里必须有两个记忆工具（关掉时才不该出现）。
+  const caps = await (await fetch(`http://127.0.0.1:${PORT}/capabilities`)).json();
+  const toolNames = (caps.tools ?? []).map((t) => t.name);
+  check("记忆: 默认开，能力目录里有 remember / recall",
+    toolNames.includes("remember") && toolNames.includes("recall"),
+    `tools=[${toolNames.join(",")}]`);
+
+  // 空查询就是「我记过什么」，起点必须是空的（落到临时 agentDir，不读用户真实记忆）。
+  const emptyList = await (await fetch(`http://127.0.0.1:${PORT}/memory`)).json();
+  check("记忆: 起点是空的（用的是临时 agentDir，不碰用户真实记忆）",
+    emptyList.total === 0, `total=${emptyList.total}`);
+
+  const wrote = await fetch(`http://127.0.0.1:${PORT}/memory`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ text: "用户偏好中文回答，恢复时要记住这条", tags: ["preference"] }),
+  });
+  const wroteBody = await wrote.json();
+  check("记忆: POST /memory 写入成功并给出 id", wrote.status === 200 && Boolean(wroteBody.id),
+    `status=${wrote.status} id=${wroteBody.id}`);
+
+  const memFile = join(agentDir, "pi-starter-memory.jsonl");
+  check("记忆: 已落盘到 agentDir 下（不是内存）", existsSync(memFile), `期望文件 ${memFile}`);
+
+  await new Promise((r) => { first.child.once("exit", () => r(true)); first.child.kill("SIGKILL"); });
+
+  // 重启：换一个进程，记忆必须还在，且能按关键词命中。
+  const second = startServer("memory-run2");
+  await waitReady("memory-run2", second.log);
+  const afterList = await (await fetch(`http://127.0.0.1:${PORT}/memory`)).json();
+  check("记忆: 重启后仍在（跨会话的前提）",
+    afterList.total === 1 && String(afterList.hits?.[0]?.text).includes("偏好中文"),
+    `total=${afterList.total} hit=${afterList.hits?.[0]?.text}`);
+
+  const searched = await (await fetch(`http://127.0.0.1:${PORT}/memory?q=中文`)).json();
+  check("记忆: 重启后按关键词命中", searched.hits?.length === 1, `hits=${searched.hits?.length}`);
+
+  // 删除后重启不该复活。
+  const id = afterList.hits?.[0]?.id;
+  const deleted = await fetch(`http://127.0.0.1:${PORT}/memory/${id}`, { method: "DELETE" });
+  check("记忆: DELETE /memory/:id 删除成功", deleted.status === 200, `status=${deleted.status}`);
+
+  await new Promise((r) => { second.child.once("exit", () => r(true)); second.child.kill("SIGKILL"); });
+
+  const third = startServer("memory-run3");
+  await waitReady("memory-run3", third.log);
+  const finalList = await (await fetch(`http://127.0.0.1:${PORT}/memory`)).json();
+  check("记忆: 删除已落盘，重启后不复活", finalList.total === 0, `total=${finalList.total}`);
+  await new Promise((r) => { third.child.once("exit", () => r(true)); third.child.kill("SIGKILL"); });
+}
+
 /* ── 8. 优雅停机 ──
  * `shutdown()` 负责按序拆掉审批闸门 → WS → 会话 → 扩展，并回收 MCP 子进程。
  * 这条链路此前**零覆盖**：E2E 全程用 SIGKILL，直接绕过它；而没被跑过的清理代码
