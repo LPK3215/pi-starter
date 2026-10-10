@@ -299,7 +299,38 @@ if (dryRun) {
 if (bumps.length > 0) {
   ensureGitIdentity();
   for (const b of bumps) fs.writeFileSync(b.file, b.next);
-  const quoted = bumps.map((b) => `"${b.file}"`).join(" ");
+
+  /**
+   * 回写版本号会**连带把派生文档弄过期**——架构图里就印着版本号。原来的顺序是
+   * 「门禁 → 回写 → 打 tag」，于是 tag 里的生成物永远比源码旧一格，而 `publish:local`
+   * 再跑一次门禁时直接恒红（v0.4.1 现场中过一次：`docs:check` 报 architecture.svg 漂移）。
+   *
+   * 所以回写之后：先重算派生文档（只在项目定义了这些脚本时跑），再用 `docs:check` 兜底
+   * ——它同时覆盖「重算也修不掉」的情况。两者都算进这个 bump 提交，tag 就自洽了。
+   */
+  const npmScripts = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8")).scripts ?? {};
+  for (const script of ["docs:svg", "docs:numbers", "docs:reference"]) {
+    if (typeof npmScripts[script] === "string") sh(`npm run ${script}`);
+  }
+  try {
+    if (typeof npmScripts["docs:check"] === "string") sh("npm run docs:check");
+  } catch {
+    console.error(
+      "\n[release] 版本号回写并重算之后，派生文档仍与源码不一致 —— 不打 tag。\n" +
+        "  版本文件此时**尚未提交**，回退：git checkout -- .\n" +
+        "  修好生成器或文档后重新发版。"
+    );
+    process.exit(1);
+  }
+
+  // 到这里工作区里的改动只可能来自回写与重算（第 1 步已要求工作区干净）。
+  const touched = execSync("git status --porcelain", { cwd: ROOT })
+    .toString()
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => line.slice(3).trim());
+  if (touched.length === 0) throw new Error("回写后没有任何待提交改动：版本号可能已经是目标值");
+  const quoted = touched.map((f) => `"${f}"`).join(" ");
   sh(`git add -- ${quoted}`);
   // 用 --no-verify 提交：本脚本第 2 步已经跑过全量门禁（verify），
   // 而项目的 pre-commit 钩子跑的是 precommit（人工提交用的快检子集）——

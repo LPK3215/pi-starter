@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **发版顺序让每个 tag 都带着过期的派生文档，并让 `publish:local` 恒红**（`scripts/release.mjs`）：脚本的顺序是「跑门禁 → 回写版本号 → 打 tag → 推送」，而版本号是**派生文档的输入**——`docs/architecture.svg` 里就印着它。于是回写之后 tag 里的生成物必然旧一格，紧接着 `npm run publish:local` 再跑一次门禁时就红在 `docs:check` 上（v0.4.1 现场复现：`漂移：docs/architecture.svg`，同一个 tag 出不了包）。现在回写之后立刻重算派生文档（`docs:svg` / `docs:numbers` / `docs:reference`，项目定义了才跑）、再跑一次 `docs:check` 兜底，并把它们**一起收进 bump 提交**；不一致时**不打 tag**，并打印「此时版本文件尚未提交，`git checkout -- .` 回退」。另外补一条：回写后若工作区没有任何改动就直接失败——版本号已经是目标值，静默打个空 tag 更糟。
+
 ## [0.4.1] - 2026-10-10
 
 ### Added
