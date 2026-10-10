@@ -39,3 +39,6 @@ coverage/
 .DS_Store
 Thumbs.db
 desktop.ini
+# 桌面环境回收站（本地垃圾数据，非项目产物）
+.Trash-*/
+Trash/
