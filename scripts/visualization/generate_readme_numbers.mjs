@@ -26,12 +26,19 @@
 
 import { readFileSync, writeFileSync } from "node:fs";
 import { readdirSync, statSync } from "node:fs";
-import { join, relative, resolve } from "node:path";
+import { join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = resolve(fileURLToPath(new URL("../..", import.meta.url)));
 const BEGIN = "<!-- BEGIN:generated-numbers -->";
 const END = "<!-- END:generated-numbers -->";
+
+/**
+ * `path.relative` 在 Windows 上给的是反斜杠，而写进 README 的路径是正斜杠字面量。
+ * 不归一的话 `--check` 会在 Windows 上恒报漂移——数字全对，只有分隔符不同，
+ * 于是这条「防漂移」的检查本身变成了平台噪声。
+ */
+const toPosix = (p) => (sep === "/" ? p : p.split(sep).join("/"));
 
 /** 递归收集目录下的文件（按扩展名过滤），跳过 node_modules / dist。 */
 function walk(dir, extensions, out = []) {
@@ -130,7 +137,7 @@ function collect() {
     routes: routeCount(),
     docs: docsMd.length,
     largest: srcSource
-      .map((file) => ({ file: relative(ROOT, file), lines: countLines(file) }))
+      .map((file) => ({ file: toPosix(relative(ROOT, file)), lines: countLines(file) }))
       .sort((a, b) => b.lines - a.lines)
       .slice(0, 1)[0],
   };

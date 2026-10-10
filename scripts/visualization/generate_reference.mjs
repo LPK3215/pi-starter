@@ -32,7 +32,7 @@
  */
 
 import { readFileSync, writeFileSync, readdirSync, statSync } from "node:fs";
-import { join, relative, resolve } from "node:path";
+import { join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { CLIENT_MESSAGE_TYPES } from "../../src/protocol.ts";
 import { allTools } from "../../src/tools/index.ts";
@@ -44,6 +44,14 @@ const ROOT = resolve(fileURLToPath(new URL("../..", import.meta.url)));
 const OUT = join(ROOT, "docs/参考手册.md");
 const CHECK = process.argv.includes("--check");
 const problems = [];
+
+/**
+ * 生成物里的路径一律正斜杠（参考手册正文、以及 `TOOL_TIERS` 里手写的 `"tools/x.ts"`）。
+ * Windows 上 `path.relative` 给反斜杠，不归一会同时坏两处：文档正文出现 `\`，
+ * 以及 `toolsByFile.get("tools/web.ts")` 全部 miss —— 后者会让完整性断言把**所有**工具
+ * 报成「没有登记」，于是真正漏登记的那一条被淹在假信号里。
+ */
+const toPosix = (p) => (sep === "/" ? p : p.split(sep).join("/"));
 
 function fail(message) {
   problems.push(message);
@@ -206,7 +214,8 @@ for (const file of httpFiles.sort()) {
   for (const match of read(file).matchAll(/\.(get|post|put|patch|delete)\(\s*"(\/[^"]*)"/g)) {
     routes.push(`${match[1].toUpperCase()} ${match[2]}`);
   }
-  if (routes.length > 0) routeGroups.push({ file: relative(ROOT, file), routes: [...new Set(routes)].sort() });
+  if (routes.length > 0)
+    routeGroups.push({ file: toPosix(relative(ROOT, file)), routes: [...new Set(routes)].sort() });
 }
 
 /* ══════════════════════════ 3. 工具 ══════════════════════════ */
@@ -228,7 +237,7 @@ const toolSourceFiles = walk(join(ROOT, "src/tools"), [".ts"]).filter((f) => !f.
 const toolsByFile = new Map();
 for (const file of toolSourceFiles) {
   const names = [...new Set([...read(file).matchAll(/name:\s*"([a-z_][a-z0-9_]*)"/g)].map((m) => m[1]))];
-  toolsByFile.set(relative(join(ROOT, "src"), file), names.sort());
+  toolsByFile.set(toPosix(relative(join(ROOT, "src"), file)), names.sort());
 }
 const declaredTools = new Set([...toolsByFile.values()].flat());
 const accountedTools = new Set(TOOL_TIERS.flatMap((entry) => entry.files.flatMap((f) => toolsByFile.get(f) ?? [])));
