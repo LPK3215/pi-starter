@@ -364,7 +364,7 @@ pi-starter/
 │   ├── architecture.svg
 │   ├── sse-protocol.svg
 │   ├── knowledge-retrieval.svg # 可插拔 RAG 检索管线
-│   ├── project_overview/ #   静态全景页（index.html + script.js + style.css）；docs/index.html 重定向到这里，Pages 发布的就是这条路径
+│   ├── project_overview/ #   静态全景页（index.html + script.js + style.css）；docs/index.html 重定向到这里——这是 GitHub Pages 经典模式从 `docs/` 发布的目录结构，本仓库当前**未启用** Pages（实测 404）
 │   ├── 使用指南.md      #   上手用：三种形态怎么跑、怎么加业务、怎么排错
 │   ├── 参考手册.md      #   生成：WS 协议 / REST / 工具 / 环境变量 / npm 脚本
 │   ├── 能力与边界.md    #   与 SDK 对齐的能力矩阵与边界

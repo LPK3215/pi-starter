@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **面向人的数字有了唯一来源**（`scripts/visualization/metrics.mjs`）：文件数 / 行数 / 用例数 / 路由数 / 门禁列表 / 依赖版本 / 覆盖率阈值集中在一处，`generate_readme_numbers.mjs` 与新的 `generate_overview.mjs` 都从它取。此前 README 表格、架构图、全景页各算各的，同一件事在三个地方有不同答案。配套 `scripts/coverage-thresholds.mjs`：阈值原先只能写在 `scripts/coverage.mjs` 里，而那个文件顶层就 spawn 整个测试套件，谁 `import` 它谁跑一遍测试——所以阈值搬出来，两处（门禁与页面）读同一份。
 - **全景页纳入漂移门禁**（`scripts/visualization/generate_overview.mjs` + `docs:overview` / `docs:overview:check`，已接进 `docs:check`）：`docs/project_overview/` 原先整页手写，现在数值、`src/` 顶层文件清单、`docs/` `scripts/` 根目录清单、完整 REST 路由表、`npm run verify` 门禁列表都由源码生成（标记区内），`data-metric` 元素的文本同时被回写成同一个值，**关掉 JS 与开着 JS 一致**。四条断言：结构树与 `src/` 子目录双向对齐、每个 `docs/*.md` 都在文档索引里、每条真实路由必须落进且只落进一个分组、本地引用文件必须存在且外部链接一律 https。负向验证逐条做过：把 `/health` 改成 `/healthz` 同时报「路由不存在」与「/health 没归组」（退 2 且不写文件）、把 `memory/` 改成 `ghost/` 两个方向都红、`../architecture.svg` 改成不存在的文件立刻红。
-- **两份 README 的文档导航补上全景页这一行**（此前 `docs/project_overview/` 只在目录树里出现，读者不会知道它是 Pages 发布的那一页），并写明它的数值是生成的。
+- **两份 README 的文档导航补上全景页这一行**（此前 `docs/project_overview/` 只在目录树里出现，读者不会知道它是 `docs/` 的入口页），并写明它的数值是生成的。目录树那行同时把 Pages 状态说清楚：**本仓库当前未启用 GitHub Pages**（实测 `https://lpk3215.github.io/pi-starter/` 与 `/project_overview/` 均 404），`docs/index.html` 的重定向只是「经典模式从 `docs/` 发布」所需的目录结构，不是一条已经能打开的链接。
 
 ### Fixed
 

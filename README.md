@@ -372,7 +372,7 @@ pi-starter/
 │   ├── architecture.svg
 │   ├── sse-protocol.svg
 │   ├── knowledge-retrieval.svg # pluggable RAG retrieval pipeline
-│   ├── project_overview/ #   static HTML overview page (index.html + script.js + style.css); docs/index.html redirects here, which is what Pages publishes
+│   ├── project_overview/ #   static HTML overview page (index.html + script.js + style.css); docs/index.html redirects here — the layout GitHub Pages classic mode serves from `docs/`, not enabled on this repo yet
 │   ├── 使用指南.md      #   getting started: three shapes, adding business logic, troubleshooting (Chinese)
 │   ├── 参考手册.md      #   GENERATED: WS protocol / REST / tools / env vars / npm scripts
 │   ├── 能力与边界.md    #   capability matrix & boundaries vs the SDK
