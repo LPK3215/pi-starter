@@ -16,6 +16,7 @@
 import {
   closeSync,
   copyFileSync,
+  cpSync,
   existsSync,
   mkdirSync,
   openSync,
@@ -108,7 +109,8 @@ export interface FileServiceOptions {
 
 export class FileService {
   readonly root: string;
-  private readonly maxPreviewBytes: number;
+  /** 预览上限。路由层要读它（`/files/raw` 的无 Range 拒绝必须与配置一致，而不是用模块常量）。 */
+  readonly maxPreviewBytes: number;
   private readonly maxWriteBytes: number;
   private readonly maxEntries: number;
   private readonly previewInList: boolean;
@@ -354,8 +356,19 @@ export class FileService {
     if (from === this.root) throw badRequest("不能重命名工作目录本身");
     if (!existsSync(from)) throw notFound(`源不存在：${this.toRelPath(from)}`);
     if (existsSync(to)) throw new AppError("conflict", `目标已存在：${this.toRelPath(to)}`);
+    let isDir = false;
+    try {
+      isDir = statSync(from).isDirectory();
+    } catch {
+      /* 让下面的 renameSync 报错 */
+    }
     mkdirSync(dirname(to), { recursive: true });
     renameSync(from, to);
+    // 目录不能走 `read()`：它只读文件，并且是在**改名已经成功之后**才抛 400 ——
+    // 表现是「客户端收到失败，磁盘却已经变了」，比单纯失败更难查。目录回目录描述。
+    if (isDir) {
+      return { path: this.toRelPath(to), name: basename(to), kind: "directory", size: 0, mtimeMs: Date.now() };
+    }
     return this.read(toRel);
   }
 
@@ -394,9 +407,16 @@ export class FileService {
     }
     if (isDir && !recursive) throw badRequest("复制目录需显式指定递归");
     mkdirSync(dirname(to), { recursive: true });
-    copyFileSync(from, to);
-    if (isDir) {
-      return { path: this.toRelPath(to), name: basename(to), kind: "directory", size: 0, mtimeMs: Date.now() };
+    try {
+      if (isDir) {
+        // 目录必须用 `cpSync`：`copyFileSync` 对目录直接抛 EISDIR —— 原实现校验完
+        // `recursive` 之后仍然无条件走 `copyFileSync`，于是「复制目录」100% 失败成 500。
+        cpSync(from, to, { recursive: true });
+        return { path: this.toRelPath(to), name: basename(to), kind: "directory", size: 0, mtimeMs: Date.now() };
+      }
+      copyFileSync(from, to);
+    } catch (err) {
+      throw new AppError("internal", `复制失败：${(err as Error).message}`, { cause: err });
     }
     return this.read(toRel);
   }

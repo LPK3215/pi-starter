@@ -39,8 +39,8 @@ Every `POST /chat` follows the same lifecycle: HTTP body → busy guard → `ses
 <!-- BEGIN:generated-numbers -->
 | Metric | Value |
 |---|---|
-| Backend source (`src/`, tests excluded) | 77 `.ts` files · 18991 lines |
-| Backend tests | 43 files · **391 cases** · 9262 lines |
+| Backend source (`src/`, tests excluded) | 77 `.ts` files · 19022 lines |
+| Backend tests | 44 files · **400 cases** · 9648 lines |
 | Frontend hand-written (`web/src`) | 36 files · 8751 lines |
 | Frontend cases | 11 |
 | HTTP route handlers (static count) | 55 |

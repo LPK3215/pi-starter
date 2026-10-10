@@ -16,13 +16,19 @@ import { basename } from "node:path";
 import type { Express, Request, Response } from "express";
 import { badRequest } from "./errors.js";
 import { asyncRoute } from "./routes.js";
-import {
-  FileService,
-  isBinaryExtension,
-  DEFAULT_MAX_PREVIEW_BYTES,
-} from "../files/service.js";
+import { FileService, isBinaryExtension } from "../files/service.js";
 
-/** 上传体积上限，与写入上限一致。 */
+/**
+ * 上传体积上限，与 `FileService` 的写入上限一致。
+ *
+ * 注意这是**第二层**上限。JSON body 上限（`createApp({ bodyLimit })`，默认 `1mb`）先挡一道，
+ * 而 base64 会放大约 4/3 —— 所以**默认配置下原始字节刚过 1MB 就已经被 body 解析器 413 掉，
+ * 下面这个 5MB 检查是不可达的**。只有把 `bodyLimit` 提到约 7mb 以上它才会生效。
+ *
+ * 两层都保留是有意的：body 层防的是「单个超大请求打满内存」，路由层防的是「写入超过
+ * FileService 允许的大小」。它们的关系由 `file-routes.test.ts` 的「两层叠加」用例锁定，
+ * 免得以后有人把 5MB 当成「默认就能传 5MB」。
+ */
 const MAX_UPLOAD_BYTES = 5 * 1024 * 1024;
 
 /** 取必填的相对路径；缺失即 400，而不是悄悄当成根目录。 */
@@ -121,8 +127,11 @@ export function registerFileRoutes(app: Express, options: FileRoutesOptions = {}
       // bytes=N- / bytes=N-M / bytes=-N（后缀区间：最后 N 字节）
       const hasStart = match[1] !== "";
       const hasEnd = match[2] !== "";
-      const start = hasStart ? Number(match[1]) : Math.max(0, st.size - Number(match[2] || 0));
-      const end = hasEnd ? Number(match[2]) : st.size - 1;
+      // 后缀区间要单独判：`bytes=-3` 里的 3 是**长度**，不是结束下标。原先把它当 end，
+      // 于是 start(=size-3) > end(=3) 恒成立 → 后缀请求**永远 416**（播放器从尾部 seek 全废）。
+      const suffix = !hasStart && hasEnd;
+      const start = suffix ? Math.max(0, st.size - Number(match[2])) : Number(match[1]);
+      const end = suffix || !hasEnd ? st.size - 1 : Number(match[2]);
       if (!Number.isFinite(start) || !Number.isFinite(end) || start > end || start >= st.size) {
         res.status(416).setHeader("Content-Range", `bytes */${st.size}`);
         res.end();
@@ -137,9 +146,11 @@ export function registerFileRoutes(app: Express, options: FileRoutesOptions = {}
     }
 
     // 无 Range：超过预览上限直接拒绝并指路 Range，避免无意的巨大响应。
-    if (st.size > DEFAULT_MAX_PREVIEW_BYTES) {
+    // 用 service 自己配置的上限（`maxPreviewBytes`），而不是模块常量——原先读常量，
+    // 于是 `new FileService({ maxPreviewBytes })` 只影响 /files/read，对 /files/raw 无效。
+    if (st.size > service.maxPreviewBytes) {
       res.status(413).json({
-        error: `文件超过 ${DEFAULT_MAX_PREVIEW_BYTES} 字节，请用 Range 请求分段获取`,
+        error: `文件超过 ${service.maxPreviewBytes} 字节，请用 Range 请求分段获取`,
         size: st.size,
       });
       return;

@@ -16,6 +16,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **不假装能搜**：后端没有 `search()` 时**不注册** `web_search`（与 `rag:smoke` 打印 SKIP 同一原则）；默认的 DuckDuckGo 无 JS 版解析是 best-effort，抽不到就如实说「没有命中」。
   - 能力标签 `net` → `inferRisk` 判 `medium`；与 `exec` 同口径**不进 `allTools`**，开了才登记进 `ToolRegistry`。`SECURITY.md` / `.env.example` / 两份 README 都已注明「未被缓解的部分」（URL 由模型决定，DNS 解析与建连之间存在 TOCTOU 窗口）。
 
+- **文件服务路由层测试（`src/http/file-routes.test.ts`，9 例）**：`file-routes.ts` 此前覆盖率 43.24%（全项目最低之一）而**没有任何测试**，可它正是把工作目录暴露成 HTTP 的那一层。覆盖：未提供 `FileService` 时 `/files/*` 完全不注册、`requirePath` 的 fail-closed（缺/空白 path = 400，不悄悄退回根目录）、敏感文件在 **read / raw / 列表预览** 三个出口都被拦且不回显内容、`recursive` 必须是布尔 `true`（字符串 `"true"` 不算数）、Range 语义（206 / `bytes=-N` 后缀区间 / 416 + `Content-Range: bytes */size` / 无 Range 超限 413 / `download=true` / 二进制扩展名给 octet-stream）、上传的**字节级往返**（历史 bug 是 `write` + `toString("utf8")` 损坏非 UTF-8 字节）。
+  覆盖率 43.24% → **100%**，全项目 89.80% → **90.45%**（棘轮阈值随之抬到 lines 90 / branches 79 / functions 83）。
+  同时把「上传上限是**两层叠加**」这件事写进了代码注释与测试：`/files/upload` 的 5MB 是第二层，默认 JSON body 上限 `1mb` 会先挡一道（base64 还放大 4/3），所以默认配置下原始字节刚过 1MB 就被 413，那个 5MB 检查**不可达**；只有把 `bodyLimit` 提到约 7mb 以上它才生效。
+
 - **参考手册（从源码生成）**：新增 `docs/参考手册.md` + `scripts/visualization/generate_reference.mjs`，把「能力面」整个算出来：34 条 WS 客户端命令与 21 个服务端帧（按分组 + JSDoc 摘要）、60+ REST 路由处理器、工具清单（装配档位 + 能力标签 + 风险）、全部 58 个环境变量、全部 npm 脚本、模块地图。此前 WS 协议有 57 个消息类型却**没有任何参考文档**，REST 有 60+ 路由而 README 只列了 4 个，22 个环境变量在两份 README 里一个字都没有。
   生成过程自带一致性断言（不通过即非零退出）：解析出的客户端命令集合必须与 `protocol.ts` 里带编译期守卫的 `CLIENT_MESSAGE_TYPES` 完全一致（**拿编译期保证校验解析器本身**）；`src/tools/*` 里的每个工具名必须在生成器的分组表里被登记，**新增工具忘了归类会直接让门禁红**；代码引用的 `PI_*` 必须都在 `.env.example` 登记过。`npm run docs:check` 已进 `verify` 与两套 CI。
   **刻意没做**：给协议命令强制要求 JSDoc。当前说明覆盖率是客户端 4/34、服务端 7/21，手册如实印出覆盖率，但不设成门禁——逼出来的空说明比没有说明更糟。
@@ -27,6 +31,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Linux / macOS 的 `exec` 主执行路径不再继承 `PI_API_KEY`（P1-2 漏网之鱼）**：`src/exec/runner.ts` 的 `/bin/sh` 分支此前直接传 `process.env`，而 `src/child-env.ts` 的模块说明声称「凡是 spawn 子进程的地方都从这里取 env」——它恰好是唯一没兑现的地方，也是**主平台**。现改为 `childProcessEnv()`，并修正同文件 `taskkill` 分支里那句「凡 spawn 口径一致」的注释。新增 `src/exec/runner.test.ts` 用例锁定：子进程读不到 `PI_API_KEY` / `PI_API_KEY_<PROVIDER>`，但 `PATH` 等必须保留（否则 shell 与外部工具跑不起来）。
 
 ### Fixed
+
+- **`/files/copy` 复制目录必然 500**（`FileService.copy`）：代码校验完 `recursive` 之后仍然**无条件**调 `copyFileSync`，而它对目录直接抛 `EISDIR` —— 于是「传 `recursive: true` 去复制目录」100% 失败成 500，且即使不抛也只会留下一个空壳。改用 `cpSync(..., { recursive: true })`，并把复制失败翻译成 `AppError` 而不是裸抛。
+- **给目录改名会「先改盘、再报错」**（`FileService.rename`）：`renameSync` 成功之后无条件 `this.read(toRel)`，而 `read` 只读文件，于是目录重命名永远在**磁盘已经变了之后**返回 400 —— 客户端看到失败、实际已生效，比单纯失败更难查。现按目标类型返回目录描述。
+- **`Range: bytes=-N` 后缀区间永远返回 416**（`/files/raw`）：把后缀长度当成了结束下标，`start(=size-N) > end(=N)` 恒成立。播放器从尾部 seek 全废。现按规范分开处理后缀区间与普通区间（`bytes=-0` 仍判 416，符合 RFC）。
+- **`FileService` 的 `maxPreviewBytes` 对 `/files/raw` 无效**：路由读的是模块常量 `DEFAULT_MAX_PREVIEW_BYTES` 而不是 service 的配置，于是这个配置项只影响 `/files/read`。现读 `service.maxPreviewBytes`（字段改为公开只读）。
+
+> 上面四条**都是写 `src/http/file-routes.test.ts` 时当场发现的** —— 路由层此前没有任何测试，而它正是把工作目录暴露成 HTTP 服务的那一层。
 
 - **快照周期内不再重复取会话统计（P2-1）**：`getSessionStats()` 在 SDK 里是 `sessionManager.getEntries()` —— 每次调用都会 `fileEntries.filter(...)` **全量复制再全量扫描**一遍会话条目，而快照每个周期都要读它。现改为**按事件失效、周期内复用**：只有流式增量（`message_update` / `tool_execution_update`）不作废缓存，其余事件一律作废（保守方向：宁多算一次，也不显示过期 token / cost）。`src/integration.test.ts` 有用例锁定「流式期间不重复取数、`message_end` 后必然重取」。
 - **投影签名的构造少了两次分配（P2-2）**：`projectMessage` 的签名从「数组 + `join("|")`」改为模板串 —— 同一个结果，但不再为每条消息先造 n 个中间字符串（这个签名每个快照周期都要为每条消息重建一次）。同时把 `estimateTokensCached` 的注释改正：它是 O(消息条数) 次 WeakMap 查询，**不是**注释原先声称的 O(新增消息数)。
