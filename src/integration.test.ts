@@ -244,6 +244,53 @@ test("集成：会话统计按事件失效——流式增量期间不重复全�
   hub.dispose();
 });
 
+test("集成：并发开新对话时，同时在线的 session 数不超过上限", async () => {
+  // 这条测的是「并发」而不是「连续」：`addConversation()` 在收完容量之后、入册之前有一个
+  // `await`（会话工厂要建 loader 与 AgentSession），而 WS 的 dispatch 本来就是并行的
+  // （`void this.dispatch(msg)`）。旧实现只在 `await` 前后各收一次容量，而补收跑在
+  // `convs.set()` 之前——刚分配出来的那个会话还不在 `convs` 里，收不到它，
+  // 于是同时在线的 session 会突破上限（实测恒为 cap+1）。
+  //
+  // 用一个带延迟的工厂把窗口放大：没有 `await` 的话这个 bug 根本不出现，
+  // 所以这里的「慢工厂」不是放水，而是把真实工厂的异步性复现出来。
+  const model: Model<any> = { provider: "test", id: "m1", name: "M1", contextWindow: 100_000 } as never;
+  const cap = 3;
+  let created = 0;
+  let peakLive = 0;
+  const live = new Set<number>();
+  const base = makeAgent();
+  const agent = {
+    ...base,
+    createSession: async () => {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      const id = ++created;
+      live.add(id);
+      peakLive = Math.max(peakLive, live.size);
+      const session = new FakeSession(`sess-${id}`, model);
+      const dispose = session.dispose.bind(session);
+      session.dispose = () => {
+        live.delete(id);
+        dispose();
+      };
+      return session as never;
+    },
+  } as BuiltAgent;
+
+  const hub = new SessionHub(agent, resolveRuntimeConfig(), process.cwd(), () => 6, cap);
+  const sink = collector();
+  const cs = await hub.attach("c1", sink.push);
+
+  await Promise.all(Array.from({ length: 12 }, () => cs.newConversation()));
+
+  assert.ok(
+    peakLive <= cap,
+    `同时在线的 session 数峰值必须不超过上限 ${cap}，实际 ${peakLive}`,
+  );
+  assert.equal(cs.listConversations().length, cap, "入册的对话数也必须停在 cap");
+  assert.ok(live.size <= cap, `最终存活的 session 数必须不超过 ${cap}，实际 ${live.size}`);
+  hub.dispose();
+});
+
 test("集成：并发会话数达上限后 LRU 回收最久未活动的对话", async () => {
   const agent = makeAgent();
   const hub = new SessionHub(agent, resolveRuntimeConfig(), process.cwd(), () => 6, 3);

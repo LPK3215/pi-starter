@@ -61,6 +61,18 @@ export const DEFAULT_MAX_OPEN_CONVERSATIONS = 8;
 export class ClientSession {
   readonly clientId: string;
   private readonly convs = new Map<string, Conversation>();
+  /**
+   * 已拿到名额、但还在 `await` 分配中（尚未入册）的对话数。
+   *
+   * `addConversation()` 在「收容量」与「入册」之间有一个 `await`（会话工厂要建 loader 与
+   * AgentSession）。只按 `convs.size` 判容量的话，并发调用会各自看到同一个值、各自放过自己，
+   * 于是同时在线的 session 会短暂突破上限（实测恒为 cap+1）。
+   *
+   * 把在途算进占用（`convs.size + inFlight`）才能让容量判定反映真实占用。
+   */
+  private inFlight = 0;
+  /** 排队等名额的请求（`acquireSlot` 的 pending resolver）。 */
+  private readonly slotWaiters: Array<() => void> = [];
   private activeId = "";
   private readonly agent: BuiltAgent;
   private readonly cfg: RuntimeConfig;
@@ -169,17 +181,33 @@ export class ClientSession {
       }
     }
 
-    // Enforce the cap BEFORE allocating: each conversation owns a full AgentSession, so
-    // allocating first and trimming after would briefly exceed the budget we are protecting.
-    this.evictForCapacity();
-
-    const session = factory
-      ? await factory(resumeFrom ? { resumeFrom } : undefined)
-      : this.agent.session;
-    // 上面的检查与这里的插入之间隔着 `await`：两个并发 `new_conversation`（WS 是 `void dispatch`，
-    // 命令会并行）都能先通过检查、再各自插入，把 size 抬到 cap+1——每个对话都持有一个完整
-    // AgentSession。分配完成后补收一次，确保上限是真正的上限。
-    this.evictForCapacity();
+    // 容量必须在 `await` **之前**按「在途」占住（`acquireSlot()`）。
+    //
+    // 这里是本方法唯一容易写错的地方，值得写清楚。旧实现是「先 `await` 分配，再补收一次」，
+    // 而补收跑在 `convs.set()` 之前——刚分配出来的那个会话还不在 `convs` 里，
+    // `evictForCapacity()` 遍历不到它，所以它收不掉。并发的多个 `new_conversation`
+    // （WS 的 `dispatch` 是并行的：`void this.dispatch(msg)`）会各自看到同一个 `convs.size`、
+    // 各自通过检查，于是每个都在上限之外多分配一个 session。
+    //
+    // 实测：cap=4 时并发 12 个请求，存活 session 的峰值是 5（cap+1）；cap=8 时是 9。
+    // 超出量恒为 +1 而不是无界增长，因为后续的调用会回收掉更早的那些——但「上限」这个词
+    // 在那一刻就是假的，而每个 AgentSession 都带一整套 loader 与事件订阅，代价不小。
+    //
+    // 现在改成先取名额（把在途计入占用）、取不到就排队等，任何时刻
+    // 「已入册 + 在途」都不超过 `maxOpenConversations`。
+    await this.acquireSlot();
+    let session: Awaited<ReturnType<NonNullable<BuiltAgent["createSession"]>>>;
+    try {
+      session = factory
+        ? await factory(resumeFrom ? { resumeFrom } : undefined)
+        : this.agent.session;
+    } catch (err) {
+      // 分配失败要把名额还回去，否则失败的调用会永久吃掉一个容量位。
+      this.releaseSlot();
+      throw err;
+    }
+    // 名额一直占到 `convs.set()` 之后才还：在那之前这条会话既不在 `convs` 里、
+    // 又已经真的持有一个 session，正是需要被计入占用的状态。
     let conv!: Conversation;
     conv = new Conversation({
       clientId: this.clientId,
@@ -206,20 +234,75 @@ export class ClientSession {
     if (collision && collision !== conv) collision.dispose();
     this.convs.set(conv.id, conv);
     this.activeId = conv.id;
+    // 入册后占用由 `convs` 接管，归还在途名额（并唤醒队列里的等待者）。
+    this.releaseSlot();
     this.emitConversations();
     conv.getState();
     return conv;
   }
 
   /**
-   * Close least-recently-active conversations until there is room for one more.
+   * 取一个并发名额。
+   *
+   * 判定的是 `convs.size + inFlight`——已入册的会话，加上「已拿到名额但还在 `await`
+   * 分配中」的会话。后者虽然不在 `convs` 里，却注定要占一个位置，不算进去就会并发超编
+   * （实测原实现下 cap+1）。
+   *
+   * 没名额就**排队等**：被唤醒后重新判定（`while` 而不是 `if`），因为名额可能被
+   * 更早被唤醒的那个抢先拿走。这是本类唯一的异步准入点，也是「上限在任何并发下都成立」
+   * 的根据。
+   *
+   * 为什么不把名额「直接派发」给队首：派发需要保证「名额一定被领走」，而领走之后
+   * 分配失败还要归还，一旦某次归还时队首已经不再需要名额，就会把名额丢掉、让后面的人
+   * 永久挂住。改成「归还即广播 + 每个等待者自己重试」，从结构上就不存在丢失名额的路径。
+   */
+  private async acquireSlot(): Promise<void> {
+    while (!this.tryTakeSlot()) {
+      await new Promise<void>((resolve) => {
+        this.slotWaiters.push(resolve);
+      });
+    }
+  }
+
+  /**
+   * 试取一个名额：够空间就占住并返回 true，否则返回 false（调用方去排队）。
+   *
+   * 先回收再判定：回收要靠 `evictForCapacity()`，而它淘汰的是非活动会话，
+   * 所以「有没有位置」这件事必须先腾出来才能算准。
+   */
+  private tryTakeSlot(): boolean {
+    this.evictForCapacity();
+    if (this.convs.size + this.inFlight >= this.maxOpenConversations) return false;
+    this.inFlight += 1;
+    return true;
+  }
+
+  /**
+   * 归还一个名额（分配失败，或已入册接管了这份占用），并广播唤醒全部等待者。
+   *
+   * 必须唤醒：否则排队的请求会一直等一个已经发生过的释放。
+   * 一次唤醒所有人而不是只唤醒队首，是为了避免「被唤醒的那个发现名额被抢走后
+   * 需要重新排队，而它身后的人再也没人叫」——`acquireSlot()` 的 `while` 会自己重试，
+   * 多余被叫醒的那些发现没名额就继续等，不会空转成死循环。
+   */
+  private releaseSlot(): void {
+    if (this.inFlight > 0) this.inFlight -= 1;
+    const waiters = this.slotWaiters.splice(0, this.slotWaiters.length);
+    for (const resolve of waiters) resolve();
+  }
+
+  /**
+   * Close least-recently-active conversations until the client is back within the cap。
+   *
+   * 只按 `convs` 回收（不含在途名额）：在途的会话还没入册、也不该被当成淘汰候选，
+   * 它们占的位置由 `tryTakeSlot()` 的判定负责。
    *
    * Deliberately evicts rather than refusing: the client asked for a new chat and an error
    * would be worse UX than silently retiring a cold background conversation. The active
    * conversation is never evicted, and we never drop below one.
    */
   private evictForCapacity(): void {
-    while (this.convs.size >= this.maxOpenConversations) {
+    while (this.convs.size + this.inFlight >= this.maxOpenConversations) {
       // Candidates: everything except the active one.
       const candidates = [...this.convs.values()].filter((conv) => conv.id !== this.activeId);
       if (candidates.length === 0) break; // only the active one remains — cannot evict
@@ -231,6 +314,7 @@ export class ClientSession {
         .debug("超出并发会话上限，回收最久未活动的对话", {
           victimId: victim.id,
           open: this.convs.size,
+          inFlight: this.inFlight,
           cap: this.maxOpenConversations,
         });
       this.rememberConversation?.(victim);
@@ -442,5 +526,12 @@ export class ClientSession {
     this.convs.clear();
     this.activeId = "";
     this.dormantCache = undefined;
+    // 还挂着等的请求要唤醒：连接都拆了，没人会再释放名额，让它们挂在这里等于泄漏
+    // 一批 pending Promise（`addConversation` 会让它们各自重新判定，然后因为容量为 0
+    // 而立刻拿到名额开始分配——但那时会话已经被拆掉，调用方拿到什么都没意义）。
+    // 所以这里只做唤醒，避免无界挂起；调用方的生命周期由它自己的 await 决定。
+    this.inFlight = 0;
+    const waiters = this.slotWaiters.splice(0, this.slotWaiters.length);
+    for (const resolve of waiters) resolve();
   }
 }

@@ -303,3 +303,83 @@ assistant-ui + Tailwind 4。手写代码只有一层胶水 `web/src/pi/`：
 | `shadcn` 是**运行时 CSS 源**，不是纯 CLI | `src/index.css` 第 3 行 `@import "shadcn/tailwind.css"`，Tailwind v4 在**编译 CSS 时**解析它（自定义变体 `data-open` / `data-closed` 等只在这里定义，实测产物 CSS 里存在）。同时 `check:official` 又把 `shadcn` 当 CLI 调。所以它既不是纯运行时依赖、也不是纯开发依赖——但产物已内联进 `web/dist`，**构建期依赖**才是它的准确归类 | `web/package.json`：`shadcn` 从 `dependencies` 移到 `devDependencies`（构建阶段 `npm ci --prefix web` 与 Dockerfile 的 web-builder 都装全量依赖，不受影响） |
 | 依赖审计缺一个「只对新增报错」的闸门 | 恒红的闸门等于没有闸门。改为与 `check-registry-sync.mjs` 同款的**基线化**门禁 | 新增 `web/scripts/check-audit.mjs` + `web/scripts/audit-baseline.json`：生产依赖（`--omit=dev`）必须 0 高危（硬门）；开发依赖里的已知通告登记后放过、只对**新增**或**影响范围变化**报错 |
 | `npm run verify` 与远端门禁口径不一致 | 远端有审计步骤、本地没有——这个不对称本身就是隐患 | 新增 `scripts/verify-audit.mjs`（根包 + `web/` 两段审计，缺 `web/node_modules` 时明确 SKIP），并接进 `npm run verify` |
+
+---
+
+## 13. 第三轮：并发下的会话容量（2026-10-10，基线 commit `05ad53b`）
+
+本轮不改文档判断，只记一条**在生产代码里实测到**的缺陷与它的修法。走查方式与前两轮一致：
+读源码 → 写一个只替换 SDK 边界的驱动 → 用真身代码量出数字。
+
+### 13.1 症状与根因
+
+`ClientSession.addConversation()` 在「收容量」与「入册」之间有一个 `await`
+（会话工厂要建 loader 与 AgentSession）。旧实现是「分配前收一次，分配后再补收一次」：
+
+```
+this.evictForCapacity();                 // 分配前
+const session = await factory(...);      // ← 并发的调用在这里交错
+this.evictForCapacity();                 // 「补收一次」
+...
+this.convs.set(conv.id, conv);           // 新会话到这里才入册
+```
+
+第二处 `evictForCapacity()` 跑在 `convs.set()` **之前**。它只遍历 `this.convs`，而本次
+刚 `await` 出来的会话还不在其中——补收收得掉旧的，收不掉刚分配的这个。并发的多个
+`new_conversation`（WS 的 `dispatch` 是并行的：`void this.dispatch(msg)`，
+`src/transport/ws.ts:328`）各自看到同一个 `convs.size`、各自通过检查，于是每个都在
+上限之外多分配一个完整 AgentSession。
+
+旧实现的那句注释其实已经写到了症状（「把 size 抬到 cap+1」），但结论写成了「补收一次
+确保上限是真正的上限」——补收没起到这个作用。
+
+### 13.2 实测（驱动真身 `ClientSession`，只在 session 工厂与 push 出口注入替身）
+
+度量的是「已分配但尚未 `dispose()` 的 session 数」的**峰值**：
+
+| cap | 并发请求数 | 工厂延迟 | 原实现峰值存活 | 修复后峰值存活 |
+|---|---|---|---|---|
+| 4 | 64 | 5 ms | **5** | 4 |
+| 4 | 64 | 50 ms | **5** | 4 |
+| 8 | 200 | 30 ms | **9** | 8 |
+| 2 | 32 | 100 ms | **3** | 2 |
+
+超出量恒为 **+1**，不是无界增长（后续调用会回收更早的那些）。但「上限」在那个时刻是
+假的，而每个 AgentSession 都带一整套 loader 与事件订阅；把工厂延迟调大或并发调高都
+不会让它变成 +2，所以它的性质是「稳态被短暂突破」而不是「无界泄漏」——
+这一点我第一轮汇报时说重了（当时写成「永久泄漏」），此处按实测改回准确表述。
+
+### 13.3 修法
+
+把「占名额」改成**同步判定 + 排队等待**的准入，并把在途计入占用：
+
+- `inFlight`：已拿到名额、但还在 `await` 分配中的会话数。容量判定看
+  `convs.size + inFlight`（真实占用），不再只看 `convs.size`。
+- `acquireSlot()`：取不到名额就挂在 `slotWaiters` 里等；被唤醒后**重新判定**
+  （`while` 而不是 `if`，因为名额可能被更早被唤醒的抢走）。
+- `releaseSlot()`：归还名额后广播唤醒**全部**等待者。一次只唤醒队首会有一个坏路径——
+  队首被唤醒后发现名额被抢走、重新排队，而它身后的人再也没人叫。广播 + 每个等待者
+  自己重试，从结构上不存在丢名额的分支。
+- 分配失败（工厂抛错）同样归还名额，否则失败调用会永久吃掉一个容量位。
+
+### 13.4 验证
+
+| 验证 | 结果 |
+|---|---|
+| 并发/应力（cap 4/8/2，请求 32–200，工厂延迟 5–100 ms） | 存活 session 峰值全部 `<= cap`（修复前为 `cap+1`） |
+| 无死锁（10 个并发请求，cap 3） | 全部完成，无请求挂住 |
+| 失败路径（连续 6 次工厂抛错后） | 名额全部归还，后续 4 个并发仍能成功 |
+| 仓库回归 `src/integration.test.ts` 新增一条 | 修复前 **fail**（峰值 4 > 上限 3），修复后 pass |
+| `npm run verify` | EXIT 0（491 后端 / 19 前端 / 23 冒烟 / 8 嵌入断言） |
+| `npm run test:coverage` | EXIT 0（lines 92.95 / branches 81.36 / functions 86.05，较上轮均上升） |
+| `npm run e2e` | EXIT 0（47 通过 / 0 跳过 / 0 失败） |
+| `npm run docs:check` | 一致（README.md / README.zh-CN.md / docs/参考手册.md，数字已重新生成） |
+| `npm --prefix web run lint` / `check:audit:ci` / `check:official:ci` | 均 EXIT 0 |
+
+### 13.5 仍然不做的
+
+- **不做「拒绝而非淘汰」的语义变更**：`evictForCapacity()` 的「淘汰最久未活动而不是
+  报错」是刻意的（客户端开新对话时给错误比悄悄退休一个冷对话更糟），本轮只修准入，
+  不动这个取舍。
+- **不给 `ClientSession` 加通用互斥队列**：只有这一处存在跨 `await` 的容量竞争，
+  为它引入一把全类互斥会把 `newConversation` 的并行度也一起收掉，代价不对等。
