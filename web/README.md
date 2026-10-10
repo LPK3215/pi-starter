@@ -105,6 +105,30 @@ npm run check:official -- --write-baseline   # 认下当前这批偏离（须在
 同步（`sync:official`）会把本地改动**覆盖**掉——包括我们有意做的适配；要保留本地改动就别同步，
 而是把偏离登记进 baseline。shadcn 内置件（button/skeleton/tooltip 等）不属本 registry，不比对。
 
+## 依赖审计（同样别靠眼看）
+
+```bash
+npm run check:audit              # 基线化审计闸门：生产依赖 0 高危（硬门）+ 开发依赖只报新增
+npm run check:audit -- --write-baseline   # 认下当前这批开发依赖通告（须在 PR 里可见地提交）
+```
+
+裸 `npm audit --audit-level=high` 在 `web/` 下会**常红**：7 条 high 全部递归自同一条通告
+`braces` 的 `GHSA-vfj7-8cjw-p6xm`（栈溢出 DoS），包链是 `shadcn -> fast-glob -> micromatch -> braces`。
+该通告覆盖到 `3.0.3`（即当前最新版），上游暂无修复发布；`npm audit fix --force` 给的方案是把
+`shadcn` 大版本回退到 `1.0.0`（会破坏 `components.json` v4 / 现有组件工作流）。常红的门禁会被加
+`|| true` 绕过，等于没有门禁。
+
+`scripts/check-audit.mjs` 沿用 `registry-baseline` 的同一套思路（记已知通告 + 只报新增），并在其上加一条硬门：
+
+- **生产依赖（`--omit=dev`）必须 0 高危** → 违反即退出 1，任何情况下都不放过；
+- 开发依赖里**新出现**的高/严重通告（不在 `scripts/audit-baseline.json`）→ 退出 1；
+- 基线里的通告**影响范围发生变化**（版本区间或波及包集合不一样）→ 也退出 1，提示重新复核；
+- 基线里的通告仍在且范围未变 → 打印但放行。
+
+`shadcn` 已从 `dependencies` 移到 `devDependencies`：产物已内联进 `dist/`，它是**构建期依赖**
+（`shadcn/tailwind.css` 由 `src/index.css` `@import`，自定义变体只在该文件里定义），开发期又当 CLI 用。
+两条 CI（`.github/workflows/ci.yml` 的 frontend 作业、`.cnb.yml` 的 frontend 流水线）都跑 `check:audit:ci`。
+
 ## 链路自检
 
 ```bash

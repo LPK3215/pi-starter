@@ -131,7 +131,11 @@ jobs:
       - name: Dependency audit (frontend)
         # web/ has its own lockfile and its own dependency tree; auditing only the root
         # package left the frontend uncovered entirely.
-        run: npm --prefix web audit --audit-level=high --registry=https://registry.npmjs.org
+        # Uses check:audit rather than a bare `npm audit`: one high advisory in the tree
+        # (braces via shadcn) has no available fix and would keep this job red forever.
+        # check:audit keeps a hard gate (production deps must be 0 high) plus a checked-in
+        # baseline (web/scripts/audit-baseline.json) so only NEW advisories fail.
+        run: npm --prefix web run check:audit:ci
 
       - name: Upload web dist artifact
         uses: actions/upload-artifact@v4

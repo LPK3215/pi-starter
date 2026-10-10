@@ -9,6 +9,9 @@
 #   4. audit    —— 高危依赖通告闸门（同上）
 #   5. frontend —— lint + official-check + build + audit，仅在 web/** 变更时触发
 #
+# verify 链里的 audit 与 frontend 的 audit 口径一致：生产依赖必须 0 高危，开发依赖走基线化
+# 门禁（web/scripts/check-audit.mjs + web/scripts/audit-baseline.json）。
+#
 # 前四条串在同一条流水线里：它们都只依赖根的 node_modules，`npm ci` 一次即可。
 # 前端刻意拆成独立 Pipeline 并用 `ifModify` 收窄触发面——它要装 web/ 自己那两万多个文件，
 # 不该让每个后端 PR 都等它。
@@ -57,7 +60,10 @@
       script: npm --prefix web run build
     - name: audit
       # web/ 有自己的 lockfile；只审计根包等于前端依赖完全没人管。
-      script: npm --prefix web audit --audit-level=high --registry=https://registry.npmjs.org
+      # 用 check:audit:ci 而不是裸 npm audit：裸命令会因为一条**无可用修复**的开发依赖
+      # 通告恒红，而恒红的闸门等于没有闸门。check:audit 的做法是「生产依赖 0 高危（硬门）
+      # + 开发依赖里的已知通告登记在 audit-baseline.json、只对新增报错」。
+      script: npm --prefix web run check:audit:ci
 
 main:
   pull_request:
