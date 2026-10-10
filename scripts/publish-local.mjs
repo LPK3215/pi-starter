@@ -335,12 +335,56 @@ function ghReady() {
 }
 
 // ---------------------------------------------------------------- CNB 后端
-function cnbReady() {
+/**
+ * 定位 cnb CLI 到底怎么调起来。Windows 上 npm 全局装的是 `cnb.cmd` shim，三条路都有坑：
+ *   · `execFileSync("cnb", …)`       → ENOENT（CreateProcess 跑不了那个无扩展名的 sh 脚本）
+ *   · `execFileSync("cnb.cmd", …)`   → EINVAL（Node 禁止不经 shell spawn .bat/.cmd）
+ *   · 只有经 cmd.exe 起得来，而 `shell: true` 下 Node **只拼接、不转义**参数（DEP0190）——
+ *     本脚本要传 slug、tag、以及 `--body-file` 的路径，拼接一次就是一次引号事故。
+ *
+ * 所以从 .cmd shim 里取出真正的 JS 入口，用 `node <entry> …` 直接跑：数组传参、不经 shell。
+ * 与 `scripts/npm-invocation.mjs` 对 npm 的处理同一思路，也补上了原先那个错：**预检走 shell、
+ * 实跑走 execFileSync**，于是 `cnb --version` 检得过、`cnb releases …` 必炸。
+ */
+function cnbCli() {
+  if (process.platform !== "win32") return { cmd: "cnb", prefix: [] };
+  let shim;
   try {
-    execSync("cnb --version", { stdio: "pipe" });
+    // `where` 只查路径、不执行任何带参数的命令，没有引号面。
+    shim = execSync("where cnb", { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] })
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .find((line) => /\.cmd$/i.test(line));
+  } catch {
+    return null;
+  }
+  if (!shim) return null;
+  const matched = /"([^"]*node_modules[^"]*\.js)"/i.exec(fs.readFileSync(shim, "utf8"));
+  if (!matched) return null;
+  const entry = matched[1].split("%dp0%").join(path.dirname(shim));
+  return fs.existsSync(entry) ? { cmd: process.execPath, prefix: [entry] } : null;
+}
+
+const CNB = cnbCli();
+
+/** 取不到 cnb 的真身就按「无法执行」红出去——不许退化成"Release 不存在"或"没装 CLI"。 */
+function requireCnb(what) {
+  if (CNB) return CNB;
+  console.error(
+    `\n[cnb] ${what}：无法执行 cnb CLI。\n` +
+      "Windows 上它是 npm 全局的 .cmd shim，本脚本会从其 JS 入口直接起（不经 cmd.exe，避免参数被拼接）。\n" +
+      "取不到入口通常是 cnb 没装或不在 PATH：`npm i -g @cnbcool/cnb-cli`，或先用 --no-release 只出包。"
+  );
+  process.exit(2);
+}
+
+function cnbReady() {
+  const cnb = requireCnb("预检");
+  try {
+    execFileSync(cnb.cmd, [...cnb.prefix, "--version"], { stdio: "pipe" });
   } catch {
     console.error(
-      `\n建 Release 需要 CNB CLI（cnb）：本仓主远程 ${remote} 在 CNB 上。\n` +
+      `\n建 Release 需要可用的 CNB CLI（cnb）：本仓主远程 ${remote} 在 CNB 上，但 \`--version\` 跑不起来。\n` +
         `只想在本地出包、不出 Release 的话，加 --no-release。`
     );
     process.exit(1);
@@ -352,7 +396,8 @@ function cnbRun(...argv) {
   const cmd = ["releases", ...argv];
   console.log(`\n$ cnb ${cmd.join(" ")}`);
   if (dryRun) return "";
-  return execFileSync("cnb", cmd, {
+  const cnb = requireCnb("写操作");
+  return execFileSync(cnb.cmd, [...cnb.prefix, ...cmd], {
     cwd: ROOT,
     stdio: ["ignore", "pipe", "inherit"],
   }).toString();
@@ -385,9 +430,16 @@ function parseCnbData(out) {
 function cnbQuery(...argv) {
   const cmd = ["releases", ...argv];
   console.log(`$ cnb ${cmd.join(" ")}`);
+  // 先确认 cnb 起得来，再进 try：否则「压根没跑起来」会被下面的 catch 吞成"查不到 Release"，
+  // 于是预览会说"将新建"，而真实原因只是这台机器调不动 CLI。
+  const cnb = requireCnb("只读查询");
   try {
-    return execFileSync("cnb", cmd, { cwd: ROOT, stdio: ["ignore", "pipe", "inherit"] }).toString();
+    return execFileSync(cnb.cmd, [...cnb.prefix, ...cmd], {
+      cwd: ROOT,
+      stdio: ["ignore", "pipe", "inherit"],
+    }).toString();
   } catch {
+    // cnb **跑起来了**但退出非 0（例如该 tag 还没有 Release）——这是语义结果，不是闸门坏了。
     return "";
   }
 }
