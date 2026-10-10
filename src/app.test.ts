@@ -12,6 +12,7 @@ import type { Model } from "@earendil-works/pi-ai";
 import { openDatabase } from "./db/index.js";
 import { AppError } from "./errors.js";
 import { loadKnowledgeFromDirs, searchKnowledge } from "./knowledge/index.js";
+import { MemoryStore } from "./memory/store.js";
 import { loadSkillsFromDirs } from "./skills/index.js";
 
 type Listener = (event: AgentSessionEvent) => void;
@@ -23,6 +24,7 @@ function fakeAgent(overrides: {
   knowledge?: BuiltAgent["knowledge"];
   promptTemplates?: BuiltAgent["promptTemplates"];
   database?: BuiltAgent["database"];
+  memory?: BuiltAgent["memory"];
 } = {}): BuiltAgent {
   const listeners = new Set<Listener>();
   const session = {
@@ -42,6 +44,7 @@ function fakeAgent(overrides: {
     model,
     builtinTools: "off",
     web: { enabled: false, toolNames: [] },
+    memory: overrides.memory ?? { enabled: false, toolNames: [] },
     skills: overrides.skills ?? [],
     knowledge: overrides.knowledge ?? [],
     promptTemplates: overrides.promptTemplates ?? [],
@@ -225,6 +228,64 @@ test("资源路由：/knowledge 列表、搜索、详情，且 /knowledge/search
     const doc = await json(`${url}/knowledge/faq`);
     assert.match(String((doc.body as { doc: { body: string } }).doc.body), /POST \/model/);
     assert.equal((await json(`${url}/knowledge/nope`)).status, 404);
+  } finally {
+    await close();
+    dispose();
+  }
+});
+
+test("记忆路由：未装配存储时 /memory 完全不注册", async () => {
+  const { app, dispose } = createApp({ agent: fakeAgent(), staticDir: false });
+  const { url, close } = await listen(app);
+  try {
+    // 404 而不是「存在但报错」——不注册比注册一个永远失败的端点诚实。
+    assert.equal((await json(`${url}/memory`)).status, 404);
+  } finally {
+    await close();
+    dispose();
+  }
+});
+
+test("记忆路由：GET 列表/检索、POST 写入、DELETE 删除，且与工具同一份 store", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "pi-memory-route-"));
+  const store = new MemoryStore({ filePath: join(dir, "memory.jsonl") });
+  const { app, dispose } = createApp({
+    agent: fakeAgent({ memory: { enabled: true, toolNames: ["remember", "recall"], store } }),
+    staticDir: false,
+  });
+  const { url, close } = await listen(app);
+  try {
+    const wrote = await json(`${url}/memory`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text: "用户偏好中文", tags: ["preference"] }),
+    });
+    assert.equal(wrote.status, 200);
+    const id = (wrote.body as { id: string }).id;
+    assert.ok(id);
+    assert.equal(store.size, 1, "路由写入必须进同一份 store");
+
+    const list = (await json(`${url}/memory`)).body as { hits: Array<{ text: string }>; total: number };
+    assert.equal(list.total, 1);
+    assert.equal(list.hits[0]?.text, "用户偏好中文");
+
+    const searched = (await json(`${url}/memory?q=中文`)).body as { hits: unknown[] };
+    assert.equal(searched.hits.length, 1);
+
+    // 正文缺失 = 客户端错误；超限 = 校验失败，两者都必须可读地拒绝。
+    assert.equal((await json(`${url}/memory`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" })).status, 400);
+    const tooLong = await json(`${url}/memory`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text: "x".repeat(5000) }),
+    });
+    assert.equal(tooLong.status, 400);
+    assert.equal(store.size, 1, "被拒的写入不该落库");
+
+    const removed = await json(`${url}/memory/${id}`, { method: "DELETE" });
+    assert.equal(removed.status, 200);
+    assert.equal(store.size, 0);
+    assert.equal((await json(`${url}/memory/${id}`, { method: "DELETE" })).status, 404);
   } finally {
     await close();
     dispose();

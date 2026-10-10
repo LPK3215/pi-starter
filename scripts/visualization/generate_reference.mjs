@@ -221,6 +221,7 @@ const TOOL_TIERS = [
   { tier: "数据库（连接成功时）", files: ["tools/database.ts"] },
   { tier: "`PI_BUILTIN_TOOLS=coding`", files: ["tools/exec.ts"] },
   { tier: "`PI_WEB=on`", files: ["tools/web.ts"] },
+  { tier: "记忆（`PI_MEMORY`，默认开）", files: ["tools/memory.ts"] },
 ];
 
 const toolSourceFiles = walk(join(ROOT, "src/tools"), [".ts"]).filter((f) => !f.endsWith(".test.ts"));

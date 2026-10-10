@@ -69,6 +69,10 @@ export function inferCapabilities(name: string): string[] {
     case "web_search":
       // 出站网络：读为主，但它是数据外泄通道，所以按 net 归类 → inferRisk 给 medium。
       return ["net"];
+    case "remember":
+    case "recall":
+      // 跨会话记忆：本地文件读写，不跑命令、无出站网络 → inferRisk 给 low。
+      return ["memory"];
     default:
       return ["custom"];
   }

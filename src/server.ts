@@ -282,6 +282,22 @@ if (agent.builtinTools === "coding") {
 if (agent.web.enabled) {
   registry.registerAll(webRegistrySpecs(agent.web.toolNames));
 }
+// 记忆工具同样不进 allTools（默认开但可关）：关掉时能力目录不该出现它们。
+// 名字取自装配结果，所以 `memory: false` 时这里一个都不登记。
+if (agent.memory.enabled) {
+  registry.registerAll(
+    agent.memory.toolNames.map((name) =>
+      defineToolSpec({
+        name,
+        description: `memory tool ${name}`,
+        source: "dynamic",
+        // capabilities / risk 由工具名推断（`inferCapabilities` → memory → low），
+        // 与生成器写进参考手册的那一列同源，避免两处各写一份标签。
+        origin: "memory",
+      }),
+    ),
+  );
+}
 registryRef = registry;
 
 /** MCP 桥：配置改动即生效（新增连接 / 断开移除 / 命令变更重连），无需重启。 */
@@ -315,6 +331,7 @@ logger.info("agent 就绪", {
   builtinToolDetail: describeBuiltinToolMode(agent.builtinTools),
   skills: agent.skills.map((s) => s.name),
   knowledge: agent.knowledge.map((d) => d.name),
+  memory: agent.memory.enabled ? agent.memory.toolNames : "off",
   database: { driver: agent.database.driver, path: agent.database.path },
 });
 

@@ -39,11 +39,11 @@
 <!-- BEGIN:generated-numbers -->
 | 指标 | 数值 |
 |---|---|
-| 后端源码（`src/`，不含测试） | 81 个 `.ts` · 19245 行 |
-| 后端测试 | 49 个文件 · **470 用例** · 11270 行 |
+| 后端源码（`src/`，不含测试） | 83 个 `.ts` · 19786 行 |
+| 后端测试 | 51 个文件 · **490 用例** · 11579 行 |
 | 前端手写代码（`web/src`） | 36 个文件 · 8751 行 |
 | 前端用例 | 19 |
-| HTTP 路由处理器（静态计数） | 55 |
+| HTTP 路由处理器（静态计数） | 58 |
 | 手写文档（`docs/*.md`） | 9 |
 | 最大单文件 | `src/conversation/conversation.ts`（1137 行） |
 
@@ -75,6 +75,7 @@
 - **工具即插即用**：`src/tools/` 下定义，`tools/index.ts` 登记，自动注册进 Agent
 - **技能管理**：`src/skills/<name>/SKILL.md`，走 SDK `DefaultResourceLoader.additionalSkillPaths`，目录由 `formatSkillsForPrompt` 注入，全文用内置 `read` 按 `<location>` 加载
 - **知识库**：`src/knowledge/*.md`，系统提示词只放目录，正文由 `search_knowledge` / `read_knowledge` 按需取（SDK 没有原生知识库）。检索后端在 `Retriever` 接口下可插拔：默认关键词（零依赖、行为不变），设 `PI_KNOWLEDGE_RETRIEVAL=vector` + OpenAI 兼容/Ollama embeddings 端点即切换为向量 RAG；以后实现 `VectorStore`（Qdrant/pgvector）可无缝插入，工具契约不变。
+- **跨会话记忆**（默认开，`PI_MEMORY=off` 关）：`remember` / `recall` 把该跨会话存活的东西——用户偏好、长期有效的项目事实、上次未完成的结论——落盘成 JSONL（默认 `~/.pi/agent/pi-starter-memory.jsonl`，原子写，单条 4KB / 总量 2000 条封顶）。它刻意**不进系统提示词**：模型按需检索。与只读的知识库不同，它是可写的，所以 `rules.md` 明确写了「该记什么、不该记什么」。换存储用 `buildAgent({ memory })`；`GET/POST/DELETE /memory` 把同一份记忆暴露成 REST。
 - **提示词模板**：`src/prompt-templates/<name>.md` 就是 SDK 的斜杠命令模板——`session.prompt("/name")` 会展开成完整正文再发（支持位置参数 `$1`、`$@`、默认值 `${1:-x}`）；走 `additionalPromptTemplatePaths` 加载，`~/.pi` 扫描关闭
 - **数据库**：Node 内置 `node:sqlite`，默认内存库 + 示例 `notes`；`GET /db` 探活，`db_query` 只读查询
 - **扩展机制**：`src/extensions/` 下用 `pi.on()` 挂钩子。已带 `guard`（执行前拦截）和 `audit`（耗时日志）

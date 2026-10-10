@@ -39,11 +39,11 @@ Every `POST /chat` follows the same lifecycle: HTTP body → busy guard → `ses
 <!-- BEGIN:generated-numbers -->
 | Metric | Value |
 |---|---|
-| Backend source (`src/`, tests excluded) | 81 `.ts` files · 19245 lines |
-| Backend tests | 49 files · **470 cases** · 11270 lines |
+| Backend source (`src/`, tests excluded) | 83 `.ts` files · 19786 lines |
+| Backend tests | 51 files · **490 cases** · 11579 lines |
 | Frontend hand-written (`web/src`) | 36 files · 8751 lines |
 | Frontend cases | 19 |
-| HTTP route handlers (static count) | 55 |
+| HTTP route handlers (static count) | 58 |
 | Hand-written docs (`docs/*.md`) | 9 |
 | Largest single file | `src/conversation/conversation.ts` (1137 lines) |
 
@@ -76,6 +76,7 @@ Truth source for the table above: [`package.json`](package.json). When versions 
 - **Optional web access** (`PI_WEB=on`): `web_fetch` reads an http(s) page as text; `web_search` appears only when a search backend is injected. Both are off by default (outbound network is an exfiltration channel), size-capped, and refuse loopback/private/link-local targets — including via DNS resolution and after redirects. Swap in your own backend with `buildAgent({ webClient })`; the tool contract and the model-facing surface do not change
 - **Skill management**: `src/skills/<name>/SKILL.md`, loaded via the SDK's `DefaultResourceLoader.additionalSkillPaths`; the catalog is injected by `formatSkillsForPrompt` and full text is read by the built-in `read` tool through `<location>`
 - **Knowledge base**: `src/knowledge/*.md` — the system prompt carries only the catalog; bodies are fetched on demand via `search_knowledge` / `read_knowledge` (the SDK has no native knowledge base). Retrieval is pluggable behind the `Retriever` interface: keyword by default (zero-dep, current behavior), or vector RAG via `PI_KNOWLEDGE_RETRIEVAL=vector` + an OpenAI-compatible / Ollama embeddings endpoint — swap in a `VectorStore` (Qdrant/pgvector) later without touching the tool.
+- **Cross-session memory** (on by default, `PI_MEMORY=off` to disable): `remember` / `recall` persist what should survive a conversation — user preferences, durable project facts, the last unfinished conclusion — to a JSONL file (default `~/.pi/agent/pi-starter-memory.jsonl`, atomic write, 4 KB per entry / 2000 entries capped). It is deliberately *not* part of the system prompt: the model retrieves it on demand. Unlike the knowledge base it is writable, so `rules.md` tells the model what belongs there. Swap the store with `buildAgent({ memory })`; `GET/POST/DELETE /memory` exposes the same store over REST
 - **Prompt templates**: `src/prompt-templates/<name>.md` are the SDK's slash-command templates — `session.prompt("/name")` expands them (positional `$1`, `$@`, defaults `${1:-x}`); loaded via `additionalPromptTemplatePaths`, with `~/.pi` scanning off
 - **Database**: Node's built-in `node:sqlite`, in-memory by default with sample `notes`; `GET /db` for liveness, `db_query` for read-only queries
 - **Extensions**: hooks via `pi.on()` under `src/extensions/`. Ships with `guard` (pre-execution interception) and `audit` (timing logs)
