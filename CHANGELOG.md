@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-10
+
 ### Security
 
 - **文件服务敏感文件名黑名单（P1-1）**：`FileService` 新增 `denyNames`（默认 `.env` / `.env.*` / `*.pem` / `*.key` / `*.p12` / `*.pfx` / `id_rsa` / `id_ed25519` / `auth.json` / `credentials*` / `.npmrc` / `.netrc`），在 `resolvePath` 之后按 basename 拦（fail-closed），`/files/read`、`/files/raw`、写入与目录列表（**含列表预览**）全部覆盖。此前 root 就是 `process.cwd()`，`.env` 正好躺在那里，`GET /files/read?path=.env` 会把 `PI_API_KEY` 原样吐出——与 `provider-keys.ts` 反复强调的「原始 key 及其任何派生形式永不出服务端」直接冲突。业务方可用 `denyNames` 覆盖默认名单。
@@ -305,5 +307,7 @@ Initial public scaffold release.
 - **Sample chat page** (`public/index.html`): local-only reference UI for trying the HTTP/SSE endpoints.
 - **Build pipeline** (`npm run build`, `scripts/dist-assets.cjs`): compiles TypeScript to `dist/` and copies prompt / skill / knowledge assets alongside the emitted JS.
 
-[Unreleased]: https://github.com/LPK3215/pi-starter/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/LPK3215/pi-starter/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/LPK3215/pi-starter/releases/tag/v0.3.0
+[0.2.0]: https://github.com/LPK3215/pi-starter/releases/tag/v0.2.0
 [0.1.0]: https://github.com/LPK3215/pi-starter/releases/tag/v0.1.0
