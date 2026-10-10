@@ -55,7 +55,7 @@ See the [Project Structure](README.md#project-structure) section of the README f
    - **Temp directories go through `tempDir()`** (`src/test-tmp.ts`), not a bare `mkdtempSync`. Test files used to leak 8.5k directories (~165 MB) into the system temp folder because nothing deleted them. `tempDir()` registers cleanup on process exit and reports removal failures instead of swallowing them.
    - **Platform-inapplicable assertions call `t.skip(reason)` and return.** Never `catch { return; }` — a test that never ran an assertion must not show up as a pass. Skips are printed and counted (see the Windows notes in the table below).
 
-4. **Update docs.** If you add a tool, endpoint, config key, or event, update `README.md` **and** `README.zh-CN.md` side by side so the two stay aligned. The generated surfaces are not edited by hand — run `npm run docs:svg && npm run docs:numbers && npm run docs:reference`; `npm run docs:check` fails if you forget.
+4. **Update docs.** If you add a tool, endpoint, config key, or event, update `README.md` **and** `README.zh-CN.md` side by side so the two stay aligned. The generated surfaces are not edited by hand — run `npm run docs:svg && npm run docs:numbers && npm run docs:reference && npm run docs:overview`; `npm run docs:check` fails if you forget. `docs/参考手册.md` and `docs/project_overview/` are the two places that enumerate routes: add a route to `API_GROUPS` in `scripts/visualization/generate_overview.mjs` or the build stops, because a route that matches no group silently disappears from the page.
 
 5. **Self-check** before opening a PR (same gates as CI):
 
@@ -84,9 +84,9 @@ See the [Project Structure](README.md#project-structure) section of the README f
 | `npm run rag:smoke` | Optional live check of the local in-process vector RAG (`@huggingface/transformers`); prints `SKIP` + exit 0 when the model host / native runtime is unreachable, so it never false-greens or blocks you |
 | `npm run clean` | Removes `dist/` |
 | `npm run test:web` | Frontend contract tests (`web/src/pi/*.test.ts`), headless, `fetch` stubbed |
-| `npm run test:coverage` | Coverage ratchet via Node's built-in `--experimental-test-coverage` (no c8/nyc). Thresholds only ever move **up**: lines 92 / branches 81 / functions 85, measured over `src/**` only |
-| `npm run docs:check` | Byte-compares every generated surface against source: `docs:numbers:check` (README tables) + `docs:reference:check` (`docs/参考手册.md`) + `docs:svg:check` (the three diagrams). Drift exits 1 and names the regeneration command |
-| `npm run docs:svg` / `docs:numbers` / `docs:reference` | Regenerate the diagrams / README numbers / reference manual |
+| `npm run test:coverage` | Coverage ratchet via Node's built-in `--experimental-test-coverage` (no c8/nyc). Thresholds live in `scripts/coverage-thresholds.mjs` (the only copy — the overview page reads them from there) and only ever move **up**, measured over `src/**` only |
+| `npm run docs:check` | Byte-compares every generated surface against source: `docs:numbers:check` (README tables) + `docs:reference:check` (`docs/参考手册.md`) + `docs:svg:check` (the three diagrams) + `docs:overview:check` (`docs/project_overview/`). Drift exits 1 and names the regeneration command; a broken assertion (route in the table that no longer exists, missing `src/` directory in the structure tree, dead local reference) exits 2 and blocks the write |
+| `npm run docs:svg` / `docs:numbers` / `docs:reference` / `docs:overview` | Regenerate the diagrams / README numbers / reference manual / overview page |
 | `npm run verify:audit` | Runs the **same** dependency-audit commands the remote gate runs (root package + `web/`), so "green locally" and "green remotely" mean the same thing. Three outcomes are kept apart: pass / advisories found / **could not execute** (exit 2 — a broken gate is never reported as a pass, nor as a vulnerability) |
 | `npm run smoke` | Real HTTP + WS transport checks (frame order, pending replay, origin, backpressure) without a model |
 | `npm run e2e` | Real processes: full turn → `SIGKILL` → restart → conversation recovered from disk (plus tool-call recovery, settings persistence, no ghost index entries, port released on shutdown) |

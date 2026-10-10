@@ -18,154 +18,44 @@
  *
  * 退出码：0 = 一致 / 已写入；1 = --check 发现漂移（CI 用）；2 = 找不到标记块（README 被改坏）。
  *
- * 数字口径（刻意写死在这里，改口径就地改）：
- *   - 用例数 = `npm test` 清单里每个文件顶层 `test(` 的声明数。实测与 `tsx --test` 报告的
- *     `ℹ tests N` 一致 —— 所以它是**可核对**的，而不是估计值。
- *   - 行数 = 文件字节按 \n 切分（与 `wc -l` 一致，不把结尾空行算成两行）。
+ * 计数口径住在 `metrics.mjs`（唯一来源）：README 表格和 `docs/project_overview/` 的 METRICS
+ * 块都从它取，所以两处不可能给出不同的数。原先本文件自带一套 walk/countLines/routeCount，
+ * 全景页再抄一份，就是这么长出「页面 37 files · 308 cases」这种早已不成立的数字的。
  */
 
-import { readFileSync, writeFileSync } from "node:fs";
-import { readdirSync, statSync } from "node:fs";
-import { join, relative, resolve, sep } from "node:path";
+import { readFileSync, writeFileSync, statSync } from "node:fs";
+import { join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+
+import { collectMetrics } from "./metrics.mjs";
 
 const ROOT = resolve(fileURLToPath(new URL("../..", import.meta.url)));
 const BEGIN = "<!-- BEGIN:generated-numbers -->";
 const END = "<!-- END:generated-numbers -->";
 
-/**
- * `path.relative` 在 Windows 上给的是反斜杠，而写进 README 的路径是正斜杠字面量。
- * 不归一的话 `--check` 会在 Windows 上恒报漂移——数字全对，只有分隔符不同，
- * 于是这条「防漂移」的检查本身变成了平台噪声。
- */
-const toPosix = (p) => (sep === "/" ? p : p.split(sep).join("/"));
-
-/** 递归收集目录下的文件（按扩展名过滤），跳过 node_modules / dist。 */
-function walk(dir, extensions, out = []) {
-  let entries;
-  try {
-    entries = readdirSync(dir, { withFileTypes: true });
-  } catch {
-    return out;
-  }
-  for (const entry of entries) {
-    if (entry.name === "node_modules" || entry.name === "dist" || entry.name.startsWith(".")) continue;
-    const full = join(dir, entry.name);
-    if (entry.isDirectory()) walk(full, extensions, out);
-    else if (extensions.some((ext) => entry.name.endsWith(ext))) out.push(full);
-  }
-  return out;
-}
-
-function countLines(file) {
-  const text = readFileSync(file, "utf8");
-  if (text === "") return 0;
-  return text.split("\n").length - (text.endsWith("\n") ? 1 : 0);
-}
-
-function sumLines(files) {
-  return files.reduce((total, file) => total + countLines(file), 0);
-}
-
-/** `npm test` 清单里的文件与用例数。 */
-function backendTests() {
-  const pkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
-  const files = pkg.scripts.test
-    .split(/\s+/)
-    .filter((piece) => piece.endsWith(".test.ts"))
-    .map((piece) => join(ROOT, piece));
-  let cases = 0;
-  for (const file of files) {
-    const text = readFileSync(file, "utf8");
-    cases += (text.match(/^test\(/gm) ?? []).length;
-  }
-  return { files, cases };
-}
-
-/**
- * 前端用例数：与后端同一口径（顶层 `test(` 计数）。
- *
- * 文件清单从 `package.json` 的 `test:web` 脚本里取，**不要写死单个文件** ——
- * 写死过一次，结果是加了 `logClient.test.ts` 之后这里仍然只报 11 个用例。
- * 这类「与文件一致地错」的漂移，`docs:numbers:check` 是抓不到的（它只能发现
- * 「文件里写的和算出来的不一致」），所以口径本身必须从脚本里读。
- */
-function frontendTests() {
-  const pkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
-  const files = String(pkg.scripts["test:web"] ?? "")
-    .split(/\s+/)
-    .filter((piece) => piece.endsWith(".test.ts"))
-    .map((piece) => join(ROOT, piece));
-  let cases = 0;
-  for (const file of files) cases += (readFileSync(file, "utf8").match(/^test\(/gm) ?? []).length;
-  return { files, cases };
-}
-
-/** 静态计数 HTTP 路由处理器（`router.get(...)` / `app.post(...)` 形态）。 */
-function routeCount() {
-  const dirs = [join(ROOT, "src/http"), join(ROOT, "src")];
-  const files = new Set();
-  for (const dir of dirs) {
-    for (const file of walk(dir, [".ts"])) {
-      if (file.endsWith(".test.ts")) continue;
-      // src 根目录只看 app.ts，避免把无关文件的 `.get(` 也数进来
-      if (dir.endsWith(`${"src"}`) && !file.endsWith(`${"app"}.ts`)) continue;
-      files.add(file);
-    }
-  }
-  let total = 0;
-  const pattern = /\.(?:get|post|put|patch|delete)\(\s*["'`]/g;
-  for (const file of files) {
-    total += (readFileSync(file, "utf8").match(pattern) ?? []).length;
-  }
-  return total;
-}
-
-function collect() {
-  const srcFiles = walk(join(ROOT, "src"), [".ts"]);
-  const srcTests = srcFiles.filter((file) => file.endsWith(".test.ts"));
-  const srcSource = srcFiles.filter((file) => !file.endsWith(".test.ts"));
-  const webFiles = walk(join(ROOT, "web/src"), [".ts", ".tsx"]);
-  const docsMd = walk(join(ROOT, "docs"), [".md"]);
-  const backend = backendTests();
-  const frontend = frontendTests();
-  return {
-    srcSource: { files: srcSource.length, lines: sumLines(srcSource) },
-    srcTests: { files: backend.files.length, cases: backend.cases, lines: sumLines(srcTests) },
-    web: { files: webFiles.length, lines: sumLines(webFiles) },
-    frontendTests: frontend.cases,
-    routes: routeCount(),
-    docs: docsMd.length,
-    largest: srcSource
-      .map((file) => ({ file: toPosix(relative(ROOT, file)), lines: countLines(file) }))
-      .sort((a, b) => b.lines - a.lines)
-      .slice(0, 1)[0],
-  };
-}
-
 function table(locale) {
-  const n = collect();
+  const n = collectMetrics();
   const zh = locale === "zh";
   const head = zh ? "| 指标 | 数值 |" : "| Metric | Value |";
   const sep = "|---|---|";
   const rows = zh
     ? [
-        ["后端源码（`src/`，不含测试）", `${n.srcSource.files} 个 \`.ts\` · ${n.srcSource.lines} 行`],
-        ["后端测试", `${n.srcTests.files} 个文件 · **${n.srcTests.cases} 用例** · ${n.srcTests.lines} 行`],
-        ["前端手写代码（`web/src`）", `${n.web.files} 个文件 · ${n.web.lines} 行`],
-        ["前端用例", `${n.frontendTests}`],
-        ["HTTP 路由处理器（静态计数）", `${n.routes}`],
-        ["手写文档（`docs/*.md`）", `${n.docs}`],
-        ["最大单文件", `\`${n.largest.file}\`（${n.largest.lines} 行）`],
+        ["后端源码（`src/`，不含测试）", `${n.srcFiles} 个 \`.ts\` · ${n.srcLines} 行`],
+        ["后端测试", `${n.testFiles} 个文件 · **${n.testCases} 用例** · ${n.testLines} 行`],
+        ["前端手写代码（`web/src`）", `${n.webFiles} 个文件 · ${n.webLines} 行`],
+        ["前端用例", `${n.frontendCases}`],
+        ["HTTP 路由处理器（`app.` / `router.` 上的方法）", `${n.routes}`],
+        ["手写文档（`docs/*.md`）", `${n.docFiles}`],
+        ["最大单文件", `\`${n.largestFile}\`（${n.largestLines} 行）`],
       ]
     : [
-        ["Backend source (`src/`, tests excluded)", `${n.srcSource.files} \`.ts\` files · ${n.srcSource.lines} lines`],
-        ["Backend tests", `${n.srcTests.files} files · **${n.srcTests.cases} cases** · ${n.srcTests.lines} lines`],
-        ["Frontend hand-written (`web/src`)", `${n.web.files} files · ${n.web.lines} lines`],
-        ["Frontend cases", `${n.frontendTests}`],
-        ["HTTP route handlers (static count)", `${n.routes}`],
-        ["Hand-written docs (`docs/*.md`)", `${n.docs}`],
-        ["Largest single file", `\`${n.largest.file}\` (${n.largest.lines} lines)`],
+        ["Backend source (`src/`, tests excluded)", `${n.srcFiles} \`.ts\` files · ${n.srcLines} lines`],
+        ["Backend tests", `${n.testFiles} files · **${n.testCases} cases** · ${n.testLines} lines`],
+        ["Frontend hand-written (`web/src`)", `${n.webFiles} files · ${n.webLines} lines`],
+        ["Frontend cases", `${n.frontendCases}`],
+        ["HTTP route handlers (`app.` / `router.` methods)", `${n.routes}`],
+        ["Hand-written docs (`docs/*.md`)", `${n.docFiles}`],
+        ["Largest single file", `\`${n.largestFile}\` (${n.largestLines} lines)`],
       ];
   const note = zh
     ? "> 本表由 `node scripts/visualization/generate_readme_numbers.mjs` 从源码生成，**请勿手改**；`npm run docs:numbers:check` 会在 CI 里挡住漂移。"

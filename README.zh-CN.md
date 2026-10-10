@@ -44,7 +44,7 @@
 | 后端测试 | 53 个文件 · **505 用例** · 12152 行 |
 | 前端手写代码（`web/src`） | 36 个文件 · 8751 行 |
 | 前端用例 | 19 |
-| HTTP 路由处理器（静态计数） | 58 |
+| HTTP 路由处理器（`app.` / `router.` 上的方法） | 47 |
 | 手写文档（`docs/*.md`） | 10 |
 | 最大单文件 | `src/conversation/conversation.ts`（1137 行） |
 
@@ -364,7 +364,7 @@ pi-starter/
 │   ├── architecture.svg
 │   ├── sse-protocol.svg
 │   ├── knowledge-retrieval.svg # 可插拔 RAG 检索管线
-│   ├── project_overview/ #   静态全景页（index.html + script.js + style.css）
+│   ├── project_overview/ #   静态全景页（index.html + script.js + style.css）；docs/index.html 重定向到这里，Pages 发布的就是这条路径
 │   ├── 使用指南.md      #   上手用：三种形态怎么跑、怎么加业务、怎么排错
 │   ├── 参考手册.md      #   生成：WS 协议 / REST / 工具 / 环境变量 / npm 脚本
 │   ├── 能力与边界.md    #   与 SDK 对齐的能力矩阵与边界
@@ -654,7 +654,7 @@ server.listen(3000);
 
 ## 文档导航
 
-按「要解决什么问题」分三类，先看这份索引再挑文档。
+按「要解决什么问题」分四类，先看这份索引再挑文档。
 
 **上手用：怎么把它跑起来、用起来**
 
@@ -663,6 +663,7 @@ server.listen(3000);
 | **[`docs/使用指南.md`](docs/使用指南.md)** | **三种形态（CLI / HTTP+SSE / 前端）怎么跑、怎么发第一句话、怎么加业务、出问题怎么定位；一页看完的入口** |
 | [`FAQ.md`](FAQ.md) | 安装 / 运行时 / 模型切换 / 部署 / 开发 常见问题 |
 | [`README.md`](README.md) | 英文主版（同章节 1∶1 对齐）；快速开始、二次开发都在里面 |
+| [`docs/project_overview/index.html`](docs/project_overview/index.html) | 整个项目的交互式全景观览页（架构 / 技术栈 / 能力 / 路由 / 质量）。其中的数值、文件清单、路由表、门禁列表由 `npm run docs:overview` 从源码生成 |
 
 **查接口：它对外到底暴露什么**
 
@@ -702,6 +703,7 @@ server.listen(3000);
 npm run docs:svg        # 三张图（架构 / 请求时序 / 检索）
 npm run docs:numbers    # 两份 README 的生成表格
 npm run docs:reference  # docs/参考手册.md（协议 / REST / 工具 / 环境变量 / 脚本）
+npm run docs:overview   # docs/project_overview/（数值 / 文件清单 / 路由表 / 门禁列表）
 npm run docs:check      # 任一处过期即退出 1 —— CI 挡的就是这个
 ```
 

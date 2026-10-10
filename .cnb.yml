@@ -24,7 +24,7 @@
     - name: install
       script: npm ci
     - name: verify
-      # 已含 docs:check（README 的数字与 docs/参考手册.md 都是生成的，漂移即失败）。
+      # 已含 docs:check（README 的数字、docs/参考手册.md 与 docs/project_overview/ 都是生成的，漂移即失败）。
       script: npm run verify
     - name: coverage
       # 覆盖率是**棘轮阈值**（scripts/coverage.mjs，只允许往上调），与 verify 里的 npm test

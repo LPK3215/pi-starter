@@ -27,6 +27,8 @@ import { readFileSync, writeFileSync, mkdirSync, readdirSync, existsSync, statSy
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { collectMetrics } from "./metrics.mjs";
+
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, "..", "..");
 const outPath = join(repoRoot, "docs", "architecture.svg");
@@ -105,23 +107,13 @@ const sseEvents = (() => {
   return [...seen];
 })();
 
-// Test counts
-const testFiles = (() => {
-  const out = [];
-  function walk(dir) {
-    for (const name of readdirSync(dir)) {
-      const p = join(dir, name);
-      const st = statSync(p);
-      if (st.isDirectory()) walk(p);
-      else if (name.endsWith(".test.ts")) out.push(p);
-    }
-  }
-  walk(join(repoRoot, "src"));
-  return out;
-})();
-const testCases = testFiles
-  .map((f) => (readFileSync(f, "utf8").match(/^test\(/gm) || []).length)
-  .reduce((a, b) => a + b, 0);
+// Test counts — read from `metrics.mjs`, the single source behind the README table and the
+// overview page. This used to walk `*.test.ts` on disk on its own: the numbers agreed, but the
+// disk walk counts files `npm test` never runs, so a deregistered test would have kept the SVG
+// green while the README dropped it.
+const metrics = collectMetrics();
+const testFileCount = metrics.testFiles;
+const testCases = metrics.testCases;
 
 // ---------- render ----------
 
@@ -258,7 +250,7 @@ row5 += text(cx + 16, y5 + 22, "Configuration surface", { size: 13, weight: "700
 row5 += text(cx + 16, y5 + 42, "• .env (PI_MODEL / PI_MODELS / PI_API_KEY / PI_BUILTIN_TOOLS / PI_DATABASE_PATH)", { size: 10, fill: C.muted });
 row5 += text(cx + 16, y5 + 58, "• ~/.pi/agent/models.json  ← npm run setup (merge-write)", { size: 10, fill: C.muted });
 row5 += text(cx + 16, y5 + 74, "• ~/.pi/agent/auth.json    ← mode 0o600, --force to overwrite", { size: 10, fill: C.muted });
-row5 += text(cx + 16, y5 + 90, `• Contract smoke tests: ${testFiles.length} files · ${testCases} cases`, { size: 10, fill: C.muted });
+row5 += text(cx + 16, y5 + 90, `• Contract smoke tests: ${testFileCount} files · ${testCases} cases`, { size: 10, fill: C.muted });
 row5 += text(cx + 16, y5 + 104, "• PI_SCOPED_MODELS · PI_KNOWLEDGE_RETRIEVAL=vector · PI_EMBEDDINGS_* · Dockerfile", { size: 10, fill: C.muted });
 
 // Arrows between rows (single column, centered)
@@ -323,4 +315,4 @@ console.log("  knowledge docs :", knowledgeDocs.length, "→", knowledgeDocs.joi
 console.log("  extensions     :", extensionNames.length, "→", extensionNames.join(", "));
 console.log("  http endpoints :", endpoints.length);
 console.log("  sse events     :", sseEvents.length, "→", sseEvents.join(", "));
-console.log("  tests          :", testFiles.length, "files ·", testCases, "cases");
+console.log("  tests          :", testFileCount, "files ·", testCases, "cases");

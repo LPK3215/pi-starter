@@ -167,6 +167,11 @@ tbody tr:hover { background: var(--panel-2); }
 tbody tr:last-child td { border-bottom: none; }
 .m-get { color: var(--accent-2); font-family: var(--mono); font-weight: 600; }
 .m-post { color: var(--accent); font-family: var(--mono); font-weight: 600; }
+.m-put { color: var(--accent-3); font-family: var(--mono); font-weight: 600; }
+.m-patch { color: var(--violet); font-family: var(--mono); font-weight: 600; }
+.m-delete { color: var(--pink); font-family: var(--mono); font-weight: 600; }
+/* group headers inside the generated route table */
+tbody th { font-family: var(--mono); color: var(--text); text-transform: none; letter-spacing: 0; font-size: 13px; background: var(--panel-2); }
 
 /* ---------- tree ---------- */
 .tree details { margin: 4px 0; }

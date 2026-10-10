@@ -7,9 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **面向人的数字有了唯一来源**（`scripts/visualization/metrics.mjs`）：文件数 / 行数 / 用例数 / 路由数 / 门禁列表 / 依赖版本 / 覆盖率阈值集中在一处，`generate_readme_numbers.mjs` 与新的 `generate_overview.mjs` 都从它取。此前 README 表格、架构图、全景页各算各的，同一件事在三个地方有不同答案。配套 `scripts/coverage-thresholds.mjs`：阈值原先只能写在 `scripts/coverage.mjs` 里，而那个文件顶层就 spawn 整个测试套件，谁 `import` 它谁跑一遍测试——所以阈值搬出来，两处（门禁与页面）读同一份。
+- **全景页纳入漂移门禁**（`scripts/visualization/generate_overview.mjs` + `docs:overview` / `docs:overview:check`，已接进 `docs:check`）：`docs/project_overview/` 原先整页手写，现在数值、`src/` 顶层文件清单、`docs/` `scripts/` 根目录清单、完整 REST 路由表、`npm run verify` 门禁列表都由源码生成（标记区内），`data-metric` 元素的文本同时被回写成同一个值，**关掉 JS 与开着 JS 一致**。四条断言：结构树与 `src/` 子目录双向对齐、每个 `docs/*.md` 都在文档索引里、每条真实路由必须落进且只落进一个分组、本地引用文件必须存在且外部链接一律 https。负向验证逐条做过：把 `/health` 改成 `/healthz` 同时报「路由不存在」与「/health 没归组」（退 2 且不写文件）、把 `memory/` 改成 `ghost/` 两个方向都红、`../architecture.svg` 改成不存在的文件立刻红。
+- **两份 README 的文档导航补上全景页这一行**（此前 `docs/project_overview/` 只在目录树里出现，读者不会知道它是 Pages 发布的那一页），并写明它的数值是生成的。
+
 ### Fixed
 
-- **发版顺序让每个 tag 都带着过期的派生文档，并让 `publish:local` 恒红**（`scripts/release.mjs`）：脚本的顺序是「跑门禁 → 回写版本号 → 打 tag → 推送」，而版本号是**派生文档的输入**——`docs/architecture.svg` 里就印着它。于是回写之后 tag 里的生成物必然旧一格，紧接着 `npm run publish:local` 再跑一次门禁时就红在 `docs:check` 上（v0.4.1 现场复现：`漂移：docs/architecture.svg`，同一个 tag 出不了包）。现在回写之后立刻重算派生文档（`docs:svg` / `docs:numbers` / `docs:reference`，项目定义了才跑）、再跑一次 `docs:check` 兜底，并把它们**一起收进 bump 提交**；不一致时**不打 tag**，并打印「此时版本文件尚未提交，`git checkout -- .` 回退」。另外补一条：回写后若工作区没有任何改动就直接失败——版本号已经是目标值，静默打个空 tag 更糟。
+- **「58 个 HTTP 路由处理器」里有 11 个不是路由**（`generate_readme_numbers.mjs`）：计数用的是裸 `.get(` 正则，于是 `src/http/log-routes.ts` 里 `search.get("limit")` 这类 **URLSearchParams 读取**被一并算进去，标榜「可验证的数字」其实不可验证。口径改为只认 `app.` / `router.` 上的方法，真数 **47**，标签同步写成 `HTTP route handlers (app. / router. methods)`；两份 README 的生成表已重算。
+- **全景页整页手写到过期**（`docs/project_overview/index.html`）：代码已是 v0.4.1，页面仍挂着 `release v0.2.0`、`308 cases · 37 files`（实际 505 · 53）、`17 项 WS 冒烟`（实际 23）；结构树缺 `conversation/` 与 `memory/` 两个目录；能力清单缺记忆、联网、HITL、会话导入等已上线的能力；**API 表里 `/interrupt`、`/compact`、`/thinking`、`GET /model`、`/session`、`/session/edit`、`/session/rollback`、`/mcp/servers`、`/subagents/run`、`/approvals/:id` 这几条 REST 路由根本不存在**（它们是 WS 命令或 SDK 工具）。现在版本、数值、路由、门禁都由生成器写，手写部分只保留说明文字；`e2e` 断言数（48）与 WS 冒烟断言数（23）改为统计脚本里的 `check(` 调用点，不再手抄。
+
+- **发版顺序让每个 tag 都带着过期的派生文档，并让 `publish:local` 恒红**（`scripts/release.mjs`）：脚本的顺序是「跑门禁 → 回写版本号 → 打 tag → 推送」，而版本号是**派生文档的输入**——`docs/architecture.svg` 里就印着它。于是回写之后 tag 里的生成物必然旧一格，紧接着 `npm run publish:local` 再跑一次门禁时就红在 `docs:check` 上（v0.4.1 现场复现：`漂移：docs/architecture.svg`，同一个 tag 出不了包）。现在回写之后立刻重算派生文档（`docs:svg` / `docs:numbers` / `docs:reference` / `docs:overview`，项目定义了才跑）、再跑一次 `docs:check` 兜底，并把它们**一起收进 bump 提交**；不一致时**不打 tag**，并打印「此时版本文件尚未提交，`git checkout -- .` 回退」。另外补一条：回写后若工作区没有任何改动就直接失败——版本号已经是目标值，静默打个空 tag 更糟。
 
 ### Changed
 

@@ -17,10 +17,9 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const ROOT = resolve(fileURLToPath(new URL("..", import.meta.url)));
+import { THRESHOLDS } from "./coverage-thresholds.mjs";
 
-/** 只降不升的棘轮阈值（略低于实测基线）。调高之前先跑一次看真实数字。 */
-const THRESHOLDS = { lines: 92, branches: 81, functions: 85 };
+const ROOT = resolve(fileURLToPath(new URL("..", import.meta.url)));
 
 const pkg = JSON.parse(readFileSync(resolve(ROOT, "package.json"), "utf8"));
 const files = pkg.scripts.test

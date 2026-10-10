@@ -309,7 +309,7 @@ if (bumps.length > 0) {
    * ——它同时覆盖「重算也修不掉」的情况。两者都算进这个 bump 提交，tag 就自洽了。
    */
   const npmScripts = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8")).scripts ?? {};
-  for (const script of ["docs:svg", "docs:numbers", "docs:reference"]) {
+  for (const script of ["docs:svg", "docs:numbers", "docs:reference", "docs:overview"]) {
     if (typeof npmScripts[script] === "string") sh(`npm run ${script}`);
   }
   try {

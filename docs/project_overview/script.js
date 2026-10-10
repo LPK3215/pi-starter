@@ -1,7 +1,58 @@
-/* π-starter project overview — interactions: nav highlight, progress, theme,
+/* π-starter project overview — interactions: metrics, nav highlight, progress, theme,
    tabs, copy, count-up, reveal, back-to-top, mobile menu. No dependencies. */
 (function () {
   "use strict";
+
+  /* ---------- metrics ----------
+     The object between the markers below is written by
+     scripts/visualization/generate_overview.mjs (`npm run docs:overview`), which reads
+     scripts/visualization/metrics.mjs — the same source behind the README metric tables.
+     `npm run docs:overview:check` fails the build when this page and the code disagree,
+     so no number on this page is hand-copied. Do not edit between the markers. */
+  /* BEGIN:generated-metrics */
+  var METRICS = {
+  "version": "0.4.1",
+  "releaseTag": "v0.4.1",
+  "license": "MIT",
+  "enginesNode": ">=22.19",
+  "sdkVersion": "0.83.0",
+  "expressVersion": "^5.2.1",
+  "typeboxVersion": "^1.1.39",
+  "wsVersion": "^8.18.0",
+  "transformersVersion": "^4.3.1",
+  "typescriptVersion": "^5.6.0",
+  "reactVersion": "^19.2.8",
+  "viteVersion": "^8.3.0",
+  "assistantUiVersion": "^0.15.25",
+  "maxOpenConversations": 8,
+  "wsPath": "/ws",
+  "defaultHost": "127.0.0.1",
+  "srcFiles": 84,
+  "srcLines": 19983,
+  "testFiles": 53,
+  "testCases": 505,
+  "frontendCases": 19,
+  "webFiles": 36,
+  "webLines": 8751,
+  "routes": 47,
+  "docFiles": 10,
+  "largestFile": "src/conversation/conversation.ts",
+  "largestLines": 1137,
+  "smokeChecks": 23,
+  "e2eChecks": 48,
+  "gateCount": 9,
+  "covLines": 92,
+  "covBranches": 81,
+  "covFunctions": 85,
+  "generatedAt": "2026-10-10"
+};
+  /* END:generated-metrics */
+
+  Array.prototype.forEach.call(document.querySelectorAll("[data-metric]"), function (el) {
+    var value = METRICS[el.getAttribute("data-metric")];
+    if (value !== undefined && value !== null) el.textContent = String(value);
+  });
+
   var reduceMotion = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
   /* ---------- theme: follow system, persist manual choice ---------- */
@@ -98,8 +149,16 @@
   });
 
   /* ---------- count-up numbers ---------- */
+  function targetOf(el) {
+    var key = el.getAttribute("data-metric");
+    if (key && typeof METRICS[key] === "number") return METRICS[key];
+    if (el.getAttribute("data-count") !== null) return parseInt(el.getAttribute("data-count"), 10) || 0;
+    // A metric the generator does not know about keeps the number that is already in the HTML,
+    // so the page degrades to the committed value instead of collapsing to zero.
+    return parseInt((el.textContent || "").replace(/[^\d]/g, ""), 10) || 0;
+  }
   function animateNum(el) {
-    var target = parseInt(el.getAttribute("data-count"), 10) || 0;
+    var target = targetOf(el);
     if (reduceMotion) { el.textContent = String(target); return; }
     var dur = 1200, start = null;
     function step(ts) {
@@ -111,7 +170,7 @@
     }
     requestAnimationFrame(step);
   }
-  var nums = document.querySelectorAll(".num[data-count]");
+  var nums = document.querySelectorAll(".num[data-metric], .num[data-count]");
   if ("IntersectionObserver" in window) {
     var nio = new IntersectionObserver(function (entries) {
       entries.forEach(function (en) {

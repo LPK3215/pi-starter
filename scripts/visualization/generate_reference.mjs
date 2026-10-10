@@ -34,8 +34,9 @@
  */
 
 import { readFileSync, writeFileSync, readdirSync, statSync } from "node:fs";
-import { join, relative, resolve, sep } from "node:path";
+import { join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { collectMetrics, toPosix } from "./metrics.mjs";
 import { CLIENT_MESSAGE_TYPES } from "../../src/protocol.ts";
 import { allTools } from "../../src/tools/index.ts";
 import { sessionToolPolicy } from "../../src/config.ts";
@@ -47,13 +48,8 @@ const OUT = join(ROOT, "docs/参考手册.md");
 const CHECK = process.argv.includes("--check");
 const problems = [];
 
-/**
- * 生成物里的路径一律正斜杠（参考手册正文、以及 `TOOL_TIERS` 里手写的 `"tools/x.ts"`）。
- * Windows 上 `path.relative` 给反斜杠，不归一会同时坏两处：文档正文出现 `\`，
- * 以及 `toolsByFile.get("tools/web.ts")` 全部 miss —— 后者会让完整性断言把**所有**工具
- * 报成「没有登记」，于是真正漏登记的那一条被淹在假信号里。
- */
-const toPosix = (p) => (sep === "/" ? p : p.split(sep).join("/"));
+// `toPosix` lives in `metrics.mjs` (with the incident that made it necessary); this file used to
+// carry its own copy, and the two could only drift apart on the one platform where it matters.
 
 function fail(message) {
   problems.push(message);
@@ -204,21 +200,20 @@ const documentedServer = serverEntries.filter((entry) => entry.doc).length;
 
 /* ══════════════════════════ 2. REST 接口 ══════════════════════════ */
 
-const httpFiles = [
-  ...walk(join(ROOT, "src/http"), [".ts"]),
-  join(ROOT, "src/app.ts"),
-  join(ROOT, "src/server.ts"),
-].filter((file) => !file.endsWith(".test.ts"));
-
-const routeGroups = [];
-for (const file of httpFiles.sort()) {
-  const routes = [];
-  for (const match of read(file).matchAll(/\.(get|post|put|patch|delete)\(\s*"(\/[^"]*)"/g)) {
-    routes.push(`${match[1].toUpperCase()} ${match[2]}`);
-  }
-  if (routes.length > 0)
-    routeGroups.push({ file: toPosix(relative(ROOT, file)), routes: [...new Set(routes)].sort() });
+/**
+ * 路由清单来自 `metrics.mjs` —— 与 README 的数字表、`docs/project_overview/` 的路由表同一口径。
+ *
+ * 这里原先自己再写一遍正则。同一件事分三处各算各的，正是那次「44 / 55 / 60+ 三个路由数」的成因：
+ * 每个生成器都对自己的 `--check` 通过，谁也不知道彼此对不上。
+ */
+const routesByFile = new Map();
+for (const route of collectMetrics().routeHandlers) {
+  if (!routesByFile.has(route.file)) routesByFile.set(route.file, new Set());
+  routesByFile.get(route.file).add(`${route.method} ${route.path}`);
 }
+const routeGroups = [...routesByFile.entries()]
+  .map(([file, set]) => ({ file, routes: [...set].sort() }))
+  .sort((a, b) => (a.file < b.file ? -1 : 1));
 
 /* ══════════════════════════ 3. 工具 ══════════════════════════ */
 

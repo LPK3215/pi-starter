@@ -44,7 +44,7 @@ Every `POST /chat` follows the same lifecycle: HTTP body → busy guard → `ses
 | Backend tests | 53 files · **505 cases** · 12152 lines |
 | Frontend hand-written (`web/src`) | 36 files · 8751 lines |
 | Frontend cases | 19 |
-| HTTP route handlers (static count) | 58 |
+| HTTP route handlers (`app.` / `router.` methods) | 47 |
 | Hand-written docs (`docs/*.md`) | 10 |
 | Largest single file | `src/conversation/conversation.ts` (1137 lines) |
 
@@ -372,7 +372,7 @@ pi-starter/
 │   ├── architecture.svg
 │   ├── sse-protocol.svg
 │   ├── knowledge-retrieval.svg # pluggable RAG retrieval pipeline
-│   ├── project_overview/ #   static HTML overview page (index.html + script.js + style.css)
+│   ├── project_overview/ #   static HTML overview page (index.html + script.js + style.css); docs/index.html redirects here, which is what Pages publishes
 │   ├── 使用指南.md      #   getting started: three shapes, adding business logic, troubleshooting (Chinese)
 │   ├── 参考手册.md      #   GENERATED: WS protocol / REST / tools / env vars / npm scripts
 │   ├── 能力与边界.md    #   capability matrix & boundaries vs the SDK
@@ -677,6 +677,7 @@ Grouped by the question you are trying to answer. Read this index first, then pi
 | **[`docs/使用指南.md`](docs/使用指南.md)** | **The three shapes (CLI / HTTP+SSE / web front end): how to run them, how to send a first message, how to add your own business logic, how to diagnose failures. One-page entry point. (Chinese)** |
 | [`FAQ.md`](FAQ.md) | Setup, runtime, model switching, deployment, development Q&A |
 | [`README.zh-CN.md`](README.zh-CN.md) | Chinese companion, mirrored section by section; Quick Start and secondary development live there too |
+| [`docs/project_overview/index.html`](docs/project_overview/index.html) | Interactive one-page panorama of the whole project (architecture, stack, capabilities, routes, quality). Its numbers, file lists, route table and gate list are generated from source by `npm run docs:overview` |
 
 **The interface: what it actually exposes**
 
@@ -716,6 +717,7 @@ Feature branches, PRs welcome. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the 
 npm run docs:svg        # three diagrams (architecture / request flow / retrieval)
 npm run docs:numbers    # the generated tables in both READMEs
 npm run docs:reference  # docs/参考手册.md (protocol / REST / tools / env / scripts)
+npm run docs:overview   # docs/project_overview/ (numbers, file lists, route table, gate list)
 npm run docs:check      # exits 1 if any generated surface is stale — this is what CI enforces
 ```
 
