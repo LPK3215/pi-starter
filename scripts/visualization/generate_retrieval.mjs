@@ -126,9 +126,24 @@ const svg = `<?xml version="1.0" encoding="UTF-8"?>
 </svg>
 `;
 
-mkdirSync(dirname(outPath), { recursive: true });
-writeFileSync(outPath, svg, "utf8");
-console.log("wrote", outPath);
+// `--check`：只比对、不写盘，漂移退出 1（接进 `npm run docs:check`）。理由同
+// `generate_architecture.mjs`。
+const check = process.argv.includes("--check");
+const previous = existsSync(outPath) ? readFileSync(outPath, "utf8") : null;
+if (check) {
+  if (previous === svg) {
+    console.log(`一致：${outPath}`);
+  } else {
+    console.error(
+      `漂移：${outPath} —— 跑 node scripts/visualization/generate_retrieval.mjs 重新生成`
+    );
+    process.exit(1);
+  }
+} else {
+  mkdirSync(dirname(outPath), { recursive: true });
+  writeFileSync(outPath, svg, "utf8");
+  console.log("wrote", outPath);
+}
 console.log("  retrievers         :", retrievers.join(", ") || "—");
 console.log("  embedding providers:", embeddingProviders.join(", ") || "—");
 console.log("  vector stores      :", stores.join(", ") || "—");

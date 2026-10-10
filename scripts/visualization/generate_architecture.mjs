@@ -288,11 +288,32 @@ const svg = `<?xml version="1.0" encoding="UTF-8"?>
 </svg>
 `;
 
-mkdirSync(dirname(outPath), { recursive: true });
-writeFileSync(outPath, svg, "utf8");
+/**
+ * `--check`：只比对、不写盘，漂移就退出 1（接进 `npm run docs:check`）。
+ *
+ * 为什么需要：本生成器一直是「跑一次就新鲜一次」，而**没有任何东西保证它被跑过**。
+ * 实际漂移过一次：README 上的架构图写着 `Contract smoke tests: 49 files · 470 cases`，
+ * 当时源码里已经是 `53 files · 504 cases` —— 图里的数字比手写文档更危险，因为它看起来是
+ * 机器生成的、于是不受怀疑。现在它与 README 数字、参考手册共用同一条门禁。
+ */
+const check = process.argv.includes("--check");
+const previous = existsSync(outPath) ? readFileSync(outPath, "utf8") : null;
+if (check) {
+  if (previous === svg) {
+    console.log(`一致：${outPath}`);
+  } else {
+    console.error(
+      `漂移：${outPath} —— 跑 node scripts/visualization/generate_architecture.mjs 重新生成`
+    );
+    process.exit(1);
+  }
+} else {
+  mkdirSync(dirname(outPath), { recursive: true });
+  writeFileSync(outPath, svg, "utf8");
 
-// Report what was picked up so drift is visible in the terminal too.
-console.log("wrote", outPath);
+  // Report what was picked up so drift is visible in the terminal too.
+  console.log("wrote", outPath);
+}
 console.log("  version        :", pkg.version);
 console.log("  node engines   :", pkg.engines?.node);
 console.log("  deps           :", deps.length);

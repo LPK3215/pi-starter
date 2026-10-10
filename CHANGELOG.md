@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **三张架构图纳入漂移门禁**（`docs:svg:check` 接进 `npm run docs:check`）：`generate_architecture.mjs` / `generate_request_flow.mjs` / `generate_retrieval.mjs` 原先只有「跑一次就新鲜一次」，**没有任何东西保证它被跑过**——README 上的架构图实际漂移过一次：图里写着 `Contract smoke tests: 49 files · 470 cases`，源码已经是 `53 files · 504 cases`。图里的数字比手写文档更危险，因为它看起来是机器生成的、于是不受怀疑。三个生成器现在都支持 `--check`（与 README 数字、参考手册同一口径：一致退 0 / 漂移退 1 并指名怎么重生成）。负向验证：往 `docs/architecture.svg` 末尾追加一个空格，`--check` 立刻退 1；重生成后回到退 0。同时刷新 `docs/architecture.svg` 到当前实况（另两张本来就一致）。
+
 ## [0.4.0] - 2026-10-10
 
 ### Added

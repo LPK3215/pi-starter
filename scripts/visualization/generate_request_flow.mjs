@@ -27,7 +27,7 @@
  *   - Do NOT delete this script; future diagram updates reuse it.
  */
 
-import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -201,9 +201,24 @@ const svg = `<?xml version="1.0" encoding="UTF-8"?>
 </svg>
 `;
 
-mkdirSync(dirname(outPath), { recursive: true });
-writeFileSync(outPath, svg, "utf8");
-
-console.log("wrote", outPath);
+// `--check`：只比对、不写盘，漂移退出 1（接进 `npm run docs:check`）。理由同
+// `generate_architecture.mjs`：生成器没人跑就会带着旧数字发布，而图里的数字看起来是
+// 机器生成的，比手写文档更不受怀疑。
+const check = process.argv.includes("--check");
+const previous = existsSync(outPath) ? readFileSync(outPath, "utf8") : null;
+if (check) {
+  if (previous === svg) {
+    console.log(`一致：${outPath}`);
+  } else {
+    console.error(
+      `漂移：${outPath} —— 跑 node scripts/visualization/generate_request_flow.mjs 重新生成`
+    );
+    process.exit(1);
+  }
+} else {
+  mkdirSync(dirname(outPath), { recursive: true });
+  writeFileSync(outPath, svg, "utf8");
+  console.log("wrote", outPath);
+}
 console.log("  sse events      :", allEvents.join(", "));
 console.log("  preview limit   :", previewLimit);

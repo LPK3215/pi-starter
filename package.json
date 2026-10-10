@@ -56,13 +56,15 @@
     "docs:numbers:check": "node scripts/visualization/generate_readme_numbers.mjs --check",
     "docs:reference": "tsx scripts/visualization/generate_reference.mjs",
     "docs:reference:check": "tsx scripts/visualization/generate_reference.mjs --check",
-    "docs:check": "npm run docs:numbers:check && npm run docs:reference:check",
+    "docs:check": "npm run docs:numbers:check && npm run docs:reference:check && npm run docs:svg:check",
     "verify": "npm run typecheck && npm run lint:unused && npm test && npm run test:web && npm run docs:check && npm run verify:audit && npm run smoke && npm run build && npm run verify:embed",
     "verify:all": "npm run verify && npm run e2e",
     "probe:providers": "node scripts/probe-providers.mjs",
     "lint:unused": "tsc --noEmit --noUnusedLocals --noUnusedParameters",
     "release": "node scripts/release.mjs",
-    "publish:local": "node scripts/publish-local.mjs"
+    "publish:local": "node scripts/publish-local.mjs",
+    "docs:svg": "node scripts/visualization/generate_architecture.mjs && node scripts/visualization/generate_request_flow.mjs && node scripts/visualization/generate_retrieval.mjs",
+    "docs:svg:check": "node scripts/visualization/generate_architecture.mjs --check && node scripts/visualization/generate_request_flow.mjs --check && node scripts/visualization/generate_retrieval.mjs --check"
   },
   "engines": {
     "node": ">=22.19"
