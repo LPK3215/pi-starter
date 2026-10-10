@@ -77,18 +77,33 @@ export class SqliteVectorStore implements VectorStore {
 
   async query(vector: number[], topK: number): Promise<VectorSearchResult[]> {
     const q = normalize(vector);
-    const rows = this.db.prepare("SELECT id, vector FROM pi_vectors").all() as unknown as Array<{
-      id: string;
-      vector: Uint8Array;
-    }>;
-    const scored: VectorSearchResult[] = [];
-    for (const row of rows) {
+    const k = Math.max(0, topK);
+    if (k === 0) return [];
+    // 用 `iterate()` 边取边评、只保留前 k 名：原来的 `.all()` 会把**整张表的向量字节**
+    // 一次性物化进内存（上限不受 topK 约束），库一大就把内存放大成库体积的函数。
+    // 排序也从"全量排序"降为"对 k 个元素做有界插入"。
+    const best: VectorSearchResult[] = [];
+    const stmt = this.db.prepare("SELECT id, vector FROM pi_vectors");
+    for (const row of stmt.iterate() as unknown as Iterable<{ id: string; vector: Uint8Array }>) {
       const stored = new Float32Array(row.vector.buffer.slice(row.vector.byteOffset, row.vector.byteOffset + row.vector.byteLength));
       if (stored.length !== q.length) continue; // 维度不符（不同模型）跳过，不静默算错
-      scored.push({ id: row.id, score: dot(q, stored) });
+      const item = { id: row.id, score: dot(q, stored) };
+      // 插入位置按**与下面 sort 完全相同的口径**（分数降序、同分按 id 升序）二分：
+      // 口径一致才能保证"截断到 k 条"的结果与全量排序后取前 k 逐字相同。
+      // 浮点分数几乎不会相等，localeCompare 只在同分时才走。
+      let lo = 0;
+      let hi = best.length;
+      while (lo < hi) {
+        const mid = (lo + hi) >> 1;
+        const b = best[mid]!;
+        const bGoesFirst = b.score > item.score || (b.score === item.score && b.id.localeCompare(item.id) < 0);
+        if (bGoesFirst) lo = mid + 1;
+        else hi = mid;
+      }
+      best.splice(lo, 0, item);
+      if (best.length > k) best.pop();
     }
-    scored.sort((a, b) => b.score - a.score || a.id.localeCompare(b.id));
-    return scored.slice(0, Math.max(0, topK));
+    return best;
   }
 
   /** 清掉某篇文档的全部 chunk（重索引/删除时可选调用）。 */
