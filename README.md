@@ -1,6 +1,10 @@
+<div align="center">
+
 # π-starter
 
-[中文](README.zh-CN.md) | **English**
+**An agent scaffold on the [pi-agent](https://github.com/earendil-works/pi) SDK** — clone it and it runs; add tools, extensions, or a new persona, and it becomes a vertical agent.
+
+[中文](README.zh-CN.md) · **English**
 
 <p>
   <a href="https://github.com/LPK3215/pi-starter/releases"><img alt="release" src="https://img.shields.io/github/package-json/v/LPK3215/pi-starter?label=release&color=blue"/></a>
@@ -13,18 +17,14 @@
   <a href="CODE_OF_CONDUCT.md"><img alt="Contributor Covenant" src="https://img.shields.io/badge/Contributor%20Covenant-2.1-4baaaa"/></a>
 </p>
 
-**Repository**: <https://github.com/LPK3215/pi-starter> · **Upstream SDK**: [earendil-works/pi](https://github.com/earendil-works/pi) · **Live overview (GitHub Pages)**: <https://lpk3215.github.io/pi-starter/>
+<p>
+  <a href="https://lpk3215.github.io/pi-starter/"><img alt="Live project overview" src="https://img.shields.io/badge/Live_demo-Project_overview-22c55e?style=for-the-badge"/></a>
+  <a href="https://lpk3215.github.io/pi-starter/archify/core-architecture.html"><img alt="Interactive architecture diagrams" src="https://img.shields.io/badge/Interactive-architecture_diagrams-38bdf8?style=for-the-badge"/></a>
+</p>
 
-An **agent scaffold** built on the [pi-agent](https://github.com/earendil-works/pi) SDK: clone it and it runs; add tools, extensions, or a new persona, and it becomes a vertical agent.
+**Repository**: <https://github.com/LPK3215/pi-starter> · **Upstream SDK**: [earendil-works/pi](https://github.com/earendil-works/pi)
 
-## Live demo
-
-No install needed — open these in a browser (served from GitHub Pages):
-
-- 🌐 **Project overview** — interactive one-page panorama (architecture, stack, capabilities, routes, quality): <https://lpk3215.github.io/pi-starter/>
-- 🕸️ **Interactive architecture diagrams** — click to zoom / search / focus (core trunk, full panorama, request workflow, `POST /chat` sequence, knowledge & memory dataflow): <https://lpk3215.github.io/pi-starter/archify/core-architecture.html>
-
-The overview page's **Interactive** section links out to all five diagrams, and every diagram links back to the overview.
+</div>
 
 ## Architecture
 

@@ -1,6 +1,10 @@
+<div align="center">
+
 # π-starter
 
-**中文** | [English](README.md)
+**基于 [pi-agent](https://github.com/earendil-works/pi) SDK 的 Agent 脚手架**：拿到就能跑，往上加工具、加扩展、改人设，就变成一个垂直 Agent。
+
+**中文** · [English](README.md)
 
 <p>
   <a href="https://github.com/LPK3215/pi-starter/releases"><img alt="release" src="https://img.shields.io/github/package-json/v/LPK3215/pi-starter?label=release&color=blue"/></a>
@@ -13,18 +17,14 @@
   <a href="CODE_OF_CONDUCT.md"><img alt="Contributor Covenant" src="https://img.shields.io/badge/Contributor%20Covenant-2.1-4baaaa"/></a>
 </p>
 
-**仓库地址**：<https://github.com/LPK3215/pi-starter> · **上游 SDK**：[earendil-works/pi](https://github.com/earendil-works/pi) · **在线全览（GitHub Pages）**：<https://lpk3215.github.io/pi-starter/>
+<p>
+  <a href="https://lpk3215.github.io/pi-starter/"><img alt="在线全景观览页" src="https://img.shields.io/badge/在线体验-全景观览页-22c55e?style=for-the-badge"/></a>
+  <a href="https://lpk3215.github.io/pi-starter/archify/core-architecture.html"><img alt="交互式架构图" src="https://img.shields.io/badge/交互式-架构图-38bdf8?style=for-the-badge"/></a>
+</p>
 
-基于 [pi-agent](https://github.com/earendil-works/pi) SDK 的 **Agent 脚手架**：拿到就能跑，往上加工具、加扩展、改人设，就变成一个垂直 Agent。
+**仓库地址**：<https://github.com/LPK3215/pi-starter> · **上游 SDK**：[earendil-works/pi](https://github.com/earendil-works/pi)
 
-## 在线体验
-
-无需安装，浏览器直接打开（GitHub Pages 托管）：
-
-- 🌐 **全景观览页** — 交互式单页全景（架构 / 技术栈 / 能力 / 路由 / 质量）：<https://lpk3215.github.io/pi-starter/>
-- 🕸️ **交互式架构图** — 可点击缩放 / 搜索 / 聚焦（主干图、全景图、业务流程、`POST /chat` 时序、知识与记忆数据流）：<https://lpk3215.github.io/pi-starter/archify/core-architecture.html>
-
-概览页的 **Interactive** 区块链向五张图，每张图也链回概览页。
+</div>
 
 ## 架构总览
 
