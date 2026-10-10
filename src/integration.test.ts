@@ -637,28 +637,42 @@ async function waitFrame(h: Harness, from: number, type: string, what: string): 
   await waitFor(() => h.frames.slice(from).some((f) => f.type === type), `${type} 帧（${what}）`, 8000);
 }
 
+/**
+ * 等到**最新快照**满足条件。快照才是权威源：判它的状态比「等到一个 snapshot 帧出现」更准，
+ * 后者可能只是握手时那份旧快照。
+ */
+async function waitState(h: Harness, predicate: (state: UiState) => boolean, what: string): Promise<void> {
+  await waitFor(() => {
+    const latest = h.frames.filter((f) => f.type === "snapshot").at(-1) as { state?: UiState } | undefined;
+    return latest?.state !== undefined && predicate(latest.state);
+  }, `快照状态：${what}`, 8000);
+}
+
 test("集成：WS set_plan_mode 真的改到权威状态（协议→hub→快照 全链路）", async () => {
   const planMode = new PlanModeController({ defaultEnabled: () => false });
   const h = await startHarness(undefined, undefined, { planMode });
   try {
     send(h, { type: "hello", protocolVersion: PROTOCOL_VERSION });
-    await settle(250);
+    await waitFrame(h, 0, "ready", "握手后的 ready 帧");
 
     // 能力目录必须带默认档：客户端要能在连上之前就知道新对话会不会进计划模式。
+    let from = h.frames.length;
     send(h, { type: "get_capabilities" });
-    await settle(150);
+    await waitFrame(h, from, "capabilities", "能力目录");
     const caps = h.frames.filter((f) => f.type === "capabilities").at(-1) as
       | { capabilities: UiCapabilities }
       | undefined;
     assert.equal(caps?.capabilities.planModeDefault, false);
 
+    from = h.frames.length;
     send(h, { type: "set_plan_mode", enabled: true });
-    await settle(200);
+    await waitFrame(h, from, "notice", "模式变更要通知客户端");
     const notices = h.frames.filter((f) => f.type === "notice") as { text: string }[];
     assert.ok(
       notices.some((n) => /计划模式已开启/.test(n.text)),
       "the client must be told the mode changed",
     );
+    await waitState(h, (state) => state.planMode === true, "planMode 落到权威快照");
     const latest = h.frames.filter((f) => f.type === "snapshot").at(-1) as { state: UiState } | undefined;
     assert.equal(
       latest?.state.planMode,
@@ -667,7 +681,7 @@ test("集成：WS set_plan_mode 真的改到权威状态（协议→hub→快照
     );
 
     send(h, { type: "set_plan_mode", enabled: false });
-    await settle(200);
+    await waitState(h, (state) => state.planMode === false, "planMode 回落到 false");
     const after = h.frames.filter((f) => f.type === "snapshot").at(-1) as { state: UiState } | undefined;
     assert.equal(after?.state.planMode, false);
   } finally {
@@ -679,10 +693,18 @@ test("集成：未装配计划模式时 set_plan_mode 不会假装成功", async
   const h = await startHarness();
   try {
     send(h, { type: "hello", protocolVersion: PROTOCOL_VERSION });
-    await settle(250);
+    await waitFrame(h, 0, "ready", "握手后的 ready 帧");
+
+    const from = h.frames.length;
     send(h, { type: "set_plan_mode", enabled: true });
-    await settle(200);
-    // 没有控制器 → 状态恒为 false。谎报开启会让客户端显示「已锁定」而实际没人拦。
+    // 没装配控制器时服务端仍然要回执，而且回的是「已关闭」。谎报开启会让客户端显示
+    // 「已锁定」而实际没人拦。这里**等回执**而不是睡一段时间：睡少了是假过，睡多了只是慢，
+    // 而回执本身携带了服务端的真实判断。
+    await waitFrame(h, from, "notice", "set_plan_mode 的回执");
+    const notices = h.frames.slice(from).filter((f) => f.type === "notice") as { text: string }[];
+    assert.ok(notices.some((n) => /计划模式已关闭/.test(n.text)), "回执必须如实说没开启");
+    assert.ok(!notices.some((n) => /已开启/.test(n.text)), "绝不能回「已开启」");
+    // 状态恒为 false（没有控制器 → 快照不会带上新增的计划模式位）。
     const latest = h.frames.filter((f) => f.type === "snapshot").at(-1) as { state: UiState } | undefined;
     assert.equal(latest?.state.planMode, false);
   } finally {
@@ -696,9 +718,10 @@ test("集成：hello → ready 优先，其余命令按序回放", async () => {
     // Sent BEFORE hello: must be queued, not dropped.
     send(h, { type: "prompt", text: "early command" });
     send(h, { type: "hello", protocolVersion: PROTOCOL_VERSION });
-    await settle(300);
+    await waitFrame(h, 0, "ready", "ready 首帧");
 
     assert.equal(h.frames[0]?.type, "ready", "ready must be the very first frame");
+    await waitFrame(h, 0, "snapshot", "attach 之后的快照");
     assert.ok(
       h.frames.some((f) => f.type === "snapshot"),
       "a snapshot must follow attach",
@@ -716,7 +739,7 @@ test("集成：HTTP 探针与指标端点可用且分离", async () => {
   try {
     // Attach a client session first, so the session gauges are meaningful.
     send(h, { type: "hello", protocolVersion: PROTOCOL_VERSION });
-    await settle(250);
+    await waitFrame(h, 0, "snapshot", "attach 完成（仪表读数才有意义）");
 
     const live = await fetch(`${h.base}/health`);
     assert.equal(live.status, 200);
@@ -774,7 +797,7 @@ test("集成：WS 分派层——畸形输入回可读 error 帧，且**一条�
   const h = await startHarness();
   try {
     send(h, { type: "hello", protocolVersion: PROTOCOL_VERSION });
-    await settle(250);
+    await waitFrame(h, 0, "ready", "握手后的 ready 帧");
 
     // 1) images 带 data: 前缀 —— 模型最容易写错的一种。
     let from = h.frames.length;
@@ -879,28 +902,37 @@ test("集成：连接关闭后 hub 回收会话（无泄漏）", async () => {
   const h = await startHarness();
   try {
     send(h, { type: "hello", protocolVersion: PROTOCOL_VERSION });
-    await settle(250);
+    await waitFrame(h, 0, "ready", "握手后的 ready 帧");
     send(h, { type: "new_conversation" });
-    await settle(200);
+    await waitFor(
+      () => {
+        const latest = h.frames.filter((f) => f.type === "conversations").pop() as
+          | { items?: unknown[] }
+          | undefined;
+        return (latest?.items?.length ?? 0) >= 2;
+      },
+      "第二条会话进入 conversations 列表",
+      8000,
+    );
     const list = h.frames.filter((f) => f.type === "conversations").pop() as
       | { items: unknown[] }
       | undefined;
     assert.ok((list?.items.length ?? 0) >= 2, "second conversation must be listed");
 
     h.socket.terminate();
+    // 这一处 **保留固定等待**：服务端要靠 close/error 事件才做 detach，而要证明的是
+    // 「旧连接已被摘掉」——那是个负向命题，没有帧可等。下面的新连接首帧是正向判据。
     await settle(300);
     // A fresh connection must get a clean attach, proving the old one was detached.
-    const before = h.frames.length;
     const fresh = new WebSocket(h.wsUrl, { origin: h.base });
     const freshFrames: ServerMessage[] = [];
     fresh.on("message", (d) => freshFrames.push(JSON.parse(d.toString("utf8")) as ServerMessage));
     fresh.on("error", () => {});
     await once(fresh, "open");
     fresh.send(JSON.stringify({ type: "hello", protocolVersion: PROTOCOL_VERSION }));
-    await settle(250);
+    await waitFor(() => freshFrames.length > 0, "新连接的首帧", 8000);
     assert.equal(freshFrames[0]?.type, "ready");
     fresh.terminate();
-    void before;
   } finally {
     await h.close();
   }
@@ -910,8 +942,9 @@ test("集成：断开后重建的客户端拿到全新快照（rev 链自愈的�
   const h = await startHarness();
   try {
     send(h, { type: "hello", protocolVersion: PROTOCOL_VERSION });
-    await settle(250);
+    await waitFrame(h, 0, "ready", "握手后的 ready 帧");
     h.socket.terminate();
+    // 保留固定等待：这里要的是「服务端已经处理完这次 close」，属于负向命题，没有帧可等。
     await settle(200);
 
     const fresh = new WebSocket(h.wsUrl, { origin: h.base });
@@ -922,7 +955,7 @@ test("集成：断开后重建的客户端拿到全新快照（rev 链自愈的�
     fresh.send(JSON.stringify({ type: "hello", protocolVersion: PROTOCOL_VERSION }));
     // A reconnecting client asks for a full rebuild; it must get one.
     fresh.send(JSON.stringify({ type: "get_state" }));
-    await settle(300);
+    await waitFor(() => frames.some((f) => f.type === "snapshot"), "重连后重建出的快照", 8000);
 
     const full = frames.filter((f) => f.type === "snapshot") as Array<{ state: UiState }>;
     assert.ok(full.length >= 1, "reconnect must yield a full snapshot");
@@ -961,9 +994,11 @@ test("集成：WS 切模型后 /info 与 /health/ready 报告的模型不再过�
     assert.equal(before.model, "test/m1", "precondition: starts on m1");
 
     send(h, { type: "hello", protocolVersion: PROTOCOL_VERSION });
-    await settle(250);
+    await waitFrame(h, 0, "ready", "握手后的 ready 帧");
     send(h, { type: "set_model", modelId: "test/m2" });
-    await settle(400);
+    // 等到**共享 session 真的换了模型**再去读 REST——否则读到的可能是切换前的值，
+    // 而这条测试防的正是「WS 切了、REST 还报旧的」。
+    await waitFor(() => `${agent.model.provider}/${agent.model.id}` === "test/m2", "set_model 落到共享 session", 8000);
 
     const truth = `${agent.model.provider}/${agent.model.id}`;
     assert.equal(truth, "test/m2", "the switch must actually reach the shared session");
