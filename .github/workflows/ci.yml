@@ -79,10 +79,10 @@ jobs:
         # endpoint and would otherwise fail every build with a 404.
         run: npm audit --audit-level=high --registry=https://registry.npmjs.org
 
-      - name: Generated numbers are up to date
-        # README's verifiable counts are generated (scripts/visualization/generate_readme_numbers.mjs).
-        # Without this step they silently rot back into hand-written lies.
-        run: npm run docs:numbers:check
+      - name: Generated docs are up to date
+        # README's verifiable counts and docs/参考手册.md (protocol / REST / tools / env) are
+        # generated from source. Without this step they silently rot back into hand-written lies.
+        run: npm run docs:check
 
       - name: Build
         run: npm run build

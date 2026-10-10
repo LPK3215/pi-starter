@@ -16,6 +16,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **不假装能搜**：后端没有 `search()` 时**不注册** `web_search`（与 `rag:smoke` 打印 SKIP 同一原则）；默认的 DuckDuckGo 无 JS 版解析是 best-effort，抽不到就如实说「没有命中」。
   - 能力标签 `net` → `inferRisk` 判 `medium`；与 `exec` 同口径**不进 `allTools`**，开了才登记进 `ToolRegistry`。`SECURITY.md` / `.env.example` / 两份 README 都已注明「未被缓解的部分」（URL 由模型决定，DNS 解析与建连之间存在 TOCTOU 窗口）。
 
+- **参考手册（从源码生成）**：新增 `docs/参考手册.md` + `scripts/visualization/generate_reference.mjs`，把「能力面」整个算出来：34 条 WS 客户端命令与 21 个服务端帧（按分组 + JSDoc 摘要）、60+ REST 路由处理器、工具清单（装配档位 + 能力标签 + 风险）、全部 58 个环境变量、全部 npm 脚本、模块地图。此前 WS 协议有 57 个消息类型却**没有任何参考文档**，REST 有 60+ 路由而 README 只列了 4 个，22 个环境变量在两份 README 里一个字都没有。
+  生成过程自带一致性断言（不通过即非零退出）：解析出的客户端命令集合必须与 `protocol.ts` 里带编译期守卫的 `CLIENT_MESSAGE_TYPES` 完全一致（**拿编译期保证校验解析器本身**）；`src/tools/*` 里的每个工具名必须在生成器的分组表里被登记，**新增工具忘了归类会直接让门禁红**；代码引用的 `PI_*` 必须都在 `.env.example` 登记过。`npm run docs:check` 已进 `verify` 与两套 CI。
+  **刻意没做**：给协议命令强制要求 JSDoc。当前说明覆盖率是客户端 4/34、服务端 7/21，手册如实印出覆盖率，但不设成门禁——逼出来的空说明比没有说明更糟。
+
 - **README 的可验证数字改为生成**：新增 `scripts/visualization/generate_readme_numbers.mjs`，把文件数 / 行数 / 用例数 / 路由数从源码算出来写进 `<!-- BEGIN:generated-numbers -->` 标记块，`npm run docs:numbers:check` 已进 `verify` 链与两套 CI。此前同一份 README 里 `42 test files · 376 cases` 与 `# 376 unit + integration tests` 对着不同的数字。
 
 ### Security

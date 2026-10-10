@@ -3,7 +3,7 @@
 # 这里漏掉什么，就等于那件事在远端**永远没有**回归保护。
 #
 # 对齐 .github/workflows/ci.yml 的作业划分：
-#   1. verify   —— typecheck + lint:unused + test + test:web + docs:numbers:check + smoke + build + verify:embed
+#   1. verify   —— typecheck + lint:unused + test + test:web + docs:check + smoke + build + verify:embed
 #   2. coverage —— 覆盖率棘轮阈值（scripts/coverage.mjs，零依赖，Node 内置覆盖率）
 #   3. e2e      —— 真进程 / 真 SIGKILL / 真重启恢复（Actions 有、这里原先没有）
 #   4. audit    —— 高危依赖通告闸门（同上）
@@ -21,7 +21,7 @@
     - name: install
       script: npm ci
     - name: verify
-      # 已含 docs:numbers:check（README 的可验证数字是生成的，漂移即失败）。
+      # 已含 docs:check（README 的数字与 docs/参考手册.md 都是生成的，漂移即失败）。
       script: npm run verify
     - name: coverage
       # 覆盖率是**棘轮阈值**（scripts/coverage.mjs，只允许往上调），与 verify 里的 npm test

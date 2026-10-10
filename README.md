@@ -44,7 +44,7 @@ Every `POST /chat` follows the same lifecycle: HTTP body → busy guard → `ses
 | Frontend hand-written (`web/src`) | 36 files · 8751 lines |
 | Frontend cases | 11 |
 | HTTP route handlers (static count) | 55 |
-| Hand-written docs (`docs/*.md`) | 7 |
+| Hand-written docs (`docs/*.md`) | 8 |
 | Largest single file | `src/session-hub.ts` (2169 lines) |
 
 > Generated from source by `node scripts/visualization/generate_readme_numbers.mjs` — **do not edit by hand**; `npm run docs:numbers:check` guards against drift in CI.
@@ -247,6 +247,8 @@ npm run ui:build   # emit web/dist — `npm run web` then serves the app at / (o
 Dev mode needs the Vite proxy to pass the original `Host` through: the backend enforces a same-authority check (`originAllowed` in `src/transport/ws.ts`), so setting `changeOrigin` on the proxy gets the browser handshake rejected with 403 while non-browser clients (which send no `Origin`) keep working.
 
 When embedding into an existing service use `createApp({ staticDir: false })` and mount your own frontend.
+
+The full surface — all **34 WS client commands**, **21 server frames**, **60+ REST route handlers**, the tool inventory with capability/risk tags, every environment variable and every npm script — is generated from source into **[`docs/参考手册.md`](docs/参考手册.md)**. `npm run docs:reference:check` gates it in CI, so it cannot drift.
 
 Probes are split by intent, so a dependency outage does not look like a dead process:
 

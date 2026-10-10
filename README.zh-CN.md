@@ -44,7 +44,7 @@
 | 前端手写代码（`web/src`） | 36 个文件 · 8751 行 |
 | 前端用例 | 11 |
 | HTTP 路由处理器（静态计数） | 55 |
-| 手写文档（`docs/*.md`） | 7 |
+| 手写文档（`docs/*.md`） | 8 |
 | 最大单文件 | `src/session-hub.ts`（2169 行） |
 
 > 本表由 `node scripts/visualization/generate_readme_numbers.mjs` 从源码生成，**请勿手改**；`npm run docs:numbers:check` 会在 CI 里挡住漂移。
