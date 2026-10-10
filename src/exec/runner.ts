@@ -431,7 +431,10 @@ function launch(command: string, cwd: string): ChildProcess {
   }
   return spawn("/bin/sh", ["-c", command], {
     cwd,
-    env: process.env,
+    // 与 Windows 分支、MCP、taskkill 同口径：不给子进程继承模型密钥。
+    // （原先这里直接传 `process.env`，是 `child-env.ts` 的说明「凡是 spawn 的地方都从这里取」
+    // 唯一没兑现的地方——而它恰好是 Linux/macOS 的主执行路径。）
+    env: childProcessEnv(),
     detached: true,
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -471,7 +474,8 @@ export function killProcessTree(pid: number): void {
   if (!Number.isInteger(pid) || pid <= 0) return;
   if (process.platform === "win32") {
     const killer = spawn("taskkill", ["/pid", String(pid), "/T", "/F"], {
-      // 同样不给子进程继承模型密钥——凡是 spawn 的地方口径一致，避免漏一个。
+      // 同样不给子进程继承模型密钥——凡是 spawn 的地方口径一致（`launch()` 的两个分支、
+      // MCP、这里），避免漏一个。
       env: childProcessEnv(),
       windowsHide: true,
       stdio: "ignore",

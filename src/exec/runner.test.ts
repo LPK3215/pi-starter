@@ -103,6 +103,34 @@ test("子进程的 cwd 是工作区内的真实目录", async () => {
   }
 });
 
+test("子进程不继承模型密钥，但保留其余环境（PATH 等）", async () => {
+  const root = workspace();
+  const env = new ExecEnvironment({ workspace: root });
+  const names = ["PI_API_KEY", "PI_API_KEY_ZHIPU"] as const;
+  const restore = names.map((name) => [name, process.env[name]] as const);
+  process.env.PI_API_KEY = "sk-should-not-leak";
+  process.env.PI_API_KEY_ZHIPU = "sk-also-should-not-leak";
+  try {
+    const view = await env.run({
+      command: nodeEval(
+        "process.stdout.write(JSON.stringify([process.env.PI_API_KEY ?? null, process.env.PI_API_KEY_ZHIPU ?? null, process.env.PATH ? 'has-path' : 'no-path']))",
+      ),
+    });
+    assert.equal(view.exitCode, 0);
+    const [key, zhipu, pathVar] = JSON.parse(view.stdout) as [string | null, string | null, string];
+    assert.equal(key, null, "PI_API_KEY 不该进子进程（Linux/macOS 的 /bin/sh 主路径同样如此）");
+    assert.equal(zhipu, null, "PI_API_KEY_<PROVIDER> 同样不该进子进程");
+    assert.equal(pathVar, "has-path", "其余环境变量必须保留，否则 shell 与外部工具跑不起来");
+  } finally {
+    for (const [name, value] of restore) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+    env.dispose();
+    remove(root);
+  }
+});
+
 test("空命令、超长命令、越界 cwd、不存在的 cwd 都不会启动任务", async () => {
   const root = workspace();
   const outside = workspace();
