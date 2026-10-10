@@ -8,7 +8,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ApprovalGate, approvalExtension } from "./approval/gate.js";
-import { ApprovalRulesStore, evaluateRules } from "./approval/rules.js";
+import { ApprovalRulesStore, evaluateRules, type ApprovalRule } from "./approval/rules.js";
 import { decideApproval } from "./approval/policy.js";
 import { composePrompt, defaultPromptTemplate, unknownTokens } from "./prompts/composer.js";
 import {
@@ -18,7 +18,7 @@ import {
   estimateTokens,
   planContextTrim,
 } from "./context/budget.js";
-import { PROTOCOL_VERSION, CLIENT_MESSAGE_TYPES, isClientMessage } from "./protocol.js";
+import { PROTOCOL_VERSION, CLIENT_MESSAGE_TYPES, isClientMessage, type UiApproval } from "./protocol.js";
 import { RUNTIME_DEFAULTS, resolveRuntimeConfig } from "./config.js";
 
 /* ─────────────────── D1：审批会话键不得恒为 "default" ─────────────────── */
@@ -94,6 +94,67 @@ test("D1 conversationOf 能定位到真正拥有该请求的会话", () => {
   const gate = new ApprovalGate({ rules: () => [], enabled: () => false, onRequest: () => {} });
   // enabled=false 时不会产生 pending，这里只断言接口不抛。
   assert.equal(gate.conversationOf("nope"), undefined);
+  gate.dispose();
+});
+
+test("D1 非法 / 缺失的审批 decision 一律判拒绝，不能变成放行", async () => {
+  const asked: UiApproval[] = [];
+  const askRule: ApprovalRule = {
+    id: "builtin:test.ask",
+    description: "ask always",
+    tools: "*",
+    field: "params",
+    match: { kind: "contains", value: "secret" },
+    action: "ask",
+  };
+  const gate = new ApprovalGate({
+    rules: () => [askRule],
+    enabled: () => true,
+    onRequest: (_key, request) => {
+      asked.push(request);
+    },
+  });
+  const ctx = { toolName: "read", args: { path: "secret.env" }, cwd: "/w" };
+  const askAgain = async () => {
+    const before = asked.length;
+    const pending = gate.request("conv-A", ctx);
+    // onRequest 在 Promise 构造器里同步触发；让出一次微任务只是为了让断言更直白。
+    await new Promise((r) => setTimeout(r, 0));
+    assert.ok(asked.length > before, "ask 档必须真的把审批请求发出去");
+    return { pending, requestId: asked[asked.length - 1]!.requestId };
+  };
+
+  // 未知 decision：以前只特判 "deny"，这里会落进 allow 分支——一个非法字段值就能绕过审批。
+  const a1 = await askAgain();
+  assert.equal(gate.resolve(a1.requestId, { decision: "yolo" }), true);
+  assert.equal((await a1.pending).decision, "deny", "非法 decision 必须 fail-closed");
+
+  // 缺失 / 空串同样必须拒绝。
+  const a2 = await askAgain();
+  gate.resolve(a2.requestId, { decision: "" });
+  assert.equal((await a2.pending).decision, "deny", "空 decision 必须 fail-closed");
+
+  // 大小写不符也不行（协议只认小写字面量）。
+  const a3 = await askAgain();
+  gate.resolve(a3.requestId, { decision: "Allow" });
+  assert.equal((await a3.pending).decision, "deny", "大小写不符必须 fail-closed");
+
+  // modify 却没带改写后的入参：不能退化成用**原始危险参数**执行。
+  const a4 = await askAgain();
+  gate.resolve(a4.requestId, { decision: "modify" });
+  assert.equal((await a4.pending).decision, "deny", "modify 缺入参必须 fail-closed");
+
+  // 合法路径不受影响：allow 放行；modify + 入参放行并回传改写。
+  const a5 = await askAgain();
+  gate.resolve(a5.requestId, { decision: "allow" });
+  assert.equal((await a5.pending).decision, "allow");
+
+  const a6 = await askAgain();
+  gate.resolve(a6.requestId, { decision: "modify", modifiedArgs: { path: "safe.txt" } });
+  const out = await a6.pending;
+  assert.equal(out.decision, "allow");
+  assert.deepEqual(out.modifiedArgs, { path: "safe.txt" });
+
   gate.dispose();
 });
 

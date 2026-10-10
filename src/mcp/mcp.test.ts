@@ -252,3 +252,51 @@ test("MCP 桥：并发 sync 只跑一轮，不会重复拉起子进程", async (
     bridge.dispose();
   }
 });
+
+test("MCP：握手中途停机就收尸，不再拉起子进程", async () => {
+  const client = new McpClient({ command: process.execPath, args: [script], requestTimeoutMs: 10_000 });
+  client.dispose();
+  // 已停机的客户端再 start() 会 spawn 出一个 dispose 已经扫不到的孤儿进程。
+  await assert.rejects(() => client.start(), /已停机/);
+  assert.equal(client.isReady, false);
+});
+
+test("MCP 桥：握手中途收到 dispose，既不注册工具也不留残连接", async () => {
+  const registry = createToolRegistry();
+  const bridge = new McpBridge({ servers: () => [serverConfig()], registry });
+  const inFlight = bridge.sync();
+  // 握手最长 15s：此时子进程还没进 `connected`，dispose() 扫不到它——旧实现会在握手完成后
+  // 把已停机的桥的 connected 填回去、并把工具重新注册进注册表（工具"复活"）。
+  bridge.dispose();
+  await inFlight.catch(() => {});
+  assert.equal(
+    registry.catalog().filter((tool) => tool.name.startsWith("mcp__")).length,
+    0,
+    "停机后不能再把工具注册进注册表",
+  );
+  assert.equal(bridge.toolDefinitions().length, 0);
+  assert.equal(bridge.status().length, 0);
+  bridge.dispose(); // 幂等
+});
+
+test("MCP 桥：sync 在途期间的配置变更会被补跑（改配置即生效）", async () => {
+  const registry = createToolRegistry();
+  let servers: McpServerConfig[] = [serverConfig()];
+  const bridge = new McpBridge({ servers: () => servers, registry });
+  try {
+    const first = bridge.sync(); // 第一轮：读到的配置是 [demo]，握手需要时间
+    // 握手还没结束就把配置清空：旧实现会把这次调用直接并给在途那一轮（返回同一 promise），
+    // 于是这次变更被丢掉——demo 会一直连着，直到下一次配置变更才消失。
+    servers = [];
+    const second = bridge.sync();
+    await Promise.all([first, second]);
+    assert.equal(
+      registry.catalog().filter((tool) => tool.name.startsWith("mcp__")).length,
+      0,
+      "在途期间清空配置必须生效，否则工具会残留到下一次变更",
+    );
+    assert.equal(bridge.status().length, 0);
+  } finally {
+    bridge.dispose();
+  }
+});

@@ -13,6 +13,8 @@
  *   3. 闸门不依赖传输层——通过 `onRequest` 回调把请求交给上层（Web 推送 / CLI 提示）。
  *   4. `decision = "modify"` 时把改写后的入参**回传给调用方**，由扩展合并进 `event.input`。
  *   5. 档位记忆走 `normalizeCategory()` 统一口径，写入与读取不会因 `builtin:` 前缀错位。
+ *   6. **应答也是 fail-closed**：只有协议里的 allow / modify 才放行，未知取值一律当拒绝。
+ *      （协议类型只是编译期约束，WS 上收到的是任意 JSON——只判 `"deny"` 会让非法值变成放行。）
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -54,6 +56,11 @@ export interface ApprovalGateOptions {
   onRequest: (key: string, request: UiApproval) => void;
   /** Timeout for a human response; on timeout the request is denied. Default 5 min. */
   timeoutMs?: number;
+}
+
+/** 只有真正的「对象」才算改写入参（数组 / null / 标量都不算）。 */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 interface PendingEntry {
@@ -150,14 +157,17 @@ export class ApprovalGate {
     const policy = this.policyFor(entry.key);
     this.setPolicy(entry.key, applyApprovalResponse(policy, response, entry.category));
 
-    if (response.decision === "deny") {
+    // **fail-closed**：只有协议里定义的 allow / modify 才放行，其余（未知字符串、缺字段、
+    // 大小写不符，甚至 "deny"）一律拒绝。以前只特判 "deny"，于是 `{"decision":"x"}` 会落进
+    // allow 分支——一个非法字段值就能让 ask 档工具在无人同意时执行，审批形同虚设。
+    const allowed = response.decision === "allow";
+    const modified = response.decision === "modify" && isRecord(response.modifiedArgs);
+    if (!allowed && !modified) {
       entry.resolve({ decision: "deny" });
       return true;
     }
     const outcome: ApprovalOutcome = { decision: "allow" };
-    if (response.decision === "modify" && response.modifiedArgs) {
-      outcome.modifiedArgs = response.modifiedArgs;
-    }
+    if (modified) outcome.modifiedArgs = response.modifiedArgs;
     entry.resolve(outcome);
     return true;
   }

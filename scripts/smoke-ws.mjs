@@ -63,7 +63,12 @@ const hub = {
     conv.getState();
     return cs;
   },
-  detach() {},
+  /** 记录被卸掉的 clientId：同一 socket 二次 hello 换了 id 时必须卸掉旧身份（否则旧会话泄漏）。 */
+  detached: [],
+  detach(clientId) {
+    this.detached.push(clientId);
+    this.sessions.delete(clientId);
+  },
   all() { return []; },
 };
 
@@ -162,6 +167,18 @@ frames.length = 0;
 socket.send(JSON.stringify({ type: "extension_ui_response", response: { id: "ghost", value: "x" } }));
 await new Promise((r) => setTimeout(r, 120));
 check("未知 id 的 extension_ui_response 回提示帧", frames.some((f) => f.type === "notice" && /no pending ui request/.test(f.text ?? "")));
+
+/* ── 5.6 同一 socket 二次 hello 换 clientId：旧会话必须被卸掉 ── */
+// 以前 attach 只 dispose **同 id** 的旧会话，旧 id 的 ClientSession 及其订阅会永远留在 hub.sessions；
+// 而 socket 关闭时只按最后的 clientId 清理，那些旧会话就是无界泄漏。
+frames.length = 0;
+socket.send(JSON.stringify({ type: "hello", clientId: "smoke-a", protocolVersion: PROTOCOL_VERSION }));
+await new Promise((r) => setTimeout(r, 120));
+socket.send(JSON.stringify({ type: "hello", clientId: "smoke-b", protocolVersion: PROTOCOL_VERSION }));
+await new Promise((r) => setTimeout(r, 200));
+check("re-hello with a new clientId detaches the previous session", hub.detached.includes("smoke-a"),
+  `detached=${hub.detached.join(",")}`);
+check("the previous clientId is gone from the hub", !hub.sessions.has("smoke-a"));
 
 /* ── 6. 跨站 WS 升级被拒 ── */
 const evil = new WebSocket(`ws://127.0.0.1:${port}/ws`, { origin: "http://evil.example" });

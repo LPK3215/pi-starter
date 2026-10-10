@@ -151,14 +151,22 @@ export class PiWsClient {
    *
    * 还没有权威快照（`state === null`）时无法判定归属：
    * - 刚发过切/建会话命令（`awaitingSnapshot`）：只认切换目标，避免抢跑的后台帧先建立身份；
+   * - `new_conversation`（目标 id 由服务端分配，此刻未知）：只有权威全量 `snapshot` 能建立身份；
    * - 首连（没有等待）：放行，让第一份快照建立身份。
    */
-  private belongsToView(conversationId: string | undefined): boolean {
+  private belongsToView(conversationId: string | undefined, frame: string): boolean {
     if (conversationId === undefined) return true; // 全局帧（conversations / models / notice…）
     const current = this.snap.state?.conversationId;
     if (current === undefined) {
       if (!this.awaitingSnapshot) return true;
-      return this.pendingConversationId === null || this.pendingConversationId === conversationId;
+      if (this.pendingConversationId === null) {
+        // 新建会话：目标 id 由服务端分配，此刻无从比对。放行 `snapshot` 之外的帧会让抢跑的
+        // 后台会话先占住身份（它的 delta 会被当成"新会话的"），随后真正的新会话快照反而
+        // 因为 id 不匹配被丢弃——用户看到的是别人的对话。后台会话只会推增量帧，放行全量
+        // 快照即可；而 `new_conversation` 的应答正是一份全量快照。
+        return frame === "snapshot";
+      }
+      return this.pendingConversationId === conversationId;
     }
     return current === conversationId;
   }
@@ -260,7 +268,7 @@ export class PiWsClient {
         break;
       }
       case "snapshot": {
-        if (!this.belongsToView(msg.state.conversationId)) {
+        if (!this.belongsToView(msg.state.conversationId, "snapshot")) {
           this.dropForeign(msg.state.conversationId, "snapshot");
           return;
         }
@@ -288,7 +296,7 @@ export class PiWsClient {
         //
         // 这里以前调的是 `resetConversationView()`——注释写"丢弃"，实现却是把**当前**视图
         // 清空。于是"看 B 时后台 A 在流式"会让 B 的消息被反复抹掉，比不过滤更糟。
-        if (!this.belongsToView(msg.conversationId)) {
+        if (!this.belongsToView(msg.conversationId, "snapshot_delta")) {
           this.dropForeign(msg.conversationId, "snapshot_delta");
           return;
         }
@@ -310,7 +318,7 @@ export class PiWsClient {
         break;
       }
       case "message_delta": {
-        if (!this.belongsToView(msg.conversationId)) {
+        if (!this.belongsToView(msg.conversationId, "message_delta")) {
           this.dropForeign(msg.conversationId, "message_delta");
           return;
         }
@@ -322,7 +330,7 @@ export class PiWsClient {
         break;
       }
       case "tool_status": {
-        if (!this.belongsToView(msg.conversationId)) {
+        if (!this.belongsToView(msg.conversationId, "tool_status")) {
           this.dropForeign(msg.conversationId, "tool_status");
           return;
         }
@@ -346,7 +354,7 @@ export class PiWsClient {
         break;
       }
       case "tool_delta": {
-        if (!this.belongsToView(msg.conversationId)) {
+        if (!this.belongsToView(msg.conversationId, "tool_delta")) {
           this.dropForeign(msg.conversationId, "tool_delta");
           return;
         }
@@ -360,14 +368,16 @@ export class PiWsClient {
         break;
       }
       case "run_start":
-        if (!this.belongsToView(msg.conversationId)) {
+        if (!this.belongsToView(msg.conversationId, "run_start")) {
           this.dropForeign(msg.conversationId, "run_start");
           return;
         }
-        this.patch({ runActive: true, tools: [], turnIndex: 0 });
+        // 后端正是在 agent_start（= 本帧）时把流式缓冲清零的，客户端必须同步：否则上一轮的
+        // 文本 / 思维链会与新轮的首个增量首尾相接（表现为流式内容重复或"串味"）。
+        this.patch({ runActive: true, tools: [], turnIndex: 0, streamText: "", streamThinking: "" });
         break;
       case "run_end":
-        if (!this.belongsToView(msg.conversationId)) {
+        if (!this.belongsToView(msg.conversationId, "run_end")) {
           this.dropForeign(msg.conversationId, "run_end");
           return;
         }
@@ -376,7 +386,7 @@ export class PiWsClient {
         this.patch({ runActive: msg.willRetry === true });
         break;
       case "turn_start":
-        if (!this.belongsToView(msg.conversationId)) {
+        if (!this.belongsToView(msg.conversationId, "turn_start")) {
           this.dropForeign(msg.conversationId, "turn_start");
           return;
         }
@@ -559,21 +569,30 @@ export class PiWsClient {
     decision: "allow" | "deny" | "modify",
     scope?: "once" | "category" | "all",
     modifiedArgs?: Record<string, unknown>,
-  ) {
-    this.send({
-      type: "approval_response",
-      requestId: approval.requestId,
-      decision,
-      scope,
-      modifiedArgs,
-    });
+  ): boolean {
+    // 离线时**必须保留这张卡片**：以前无条件清掉，用户以为已经放行，实际后端从没收到，
+    // 这一轮会一直卡在等审批（直到超时才被判拒绝），且卡片已经消失、无法重试。
+    if (
+      !this.send({
+        type: "approval_response",
+        requestId: approval.requestId,
+        decision,
+        scope,
+        modifiedArgs,
+      })
+    ) {
+      return false;
+    }
     this.patch({
       state: this.snap.state ? { ...this.snap.state, pendingApproval: null } : this.snap.state,
     });
+    return true;
   }
-  respondUi(request: UiExtensionRequest, response: UiExtensionResponse) {
-    this.send({ type: "extension_ui_response", response });
+  respondUi(request: UiExtensionRequest, response: UiExtensionResponse): boolean {
+    // 同理：没发出去就不能把反问从本地列表摘掉，否则对话框消失、后端仍在等应答。
+    if (!this.send({ type: "extension_ui_response", response })) return false;
     this.patch({ uiRequests: this.snap.uiRequests.filter((r) => r.id !== request.id) });
+    return true;
   }
 
   /** 收起提示条。notice/error 帧是一次性告知，不自己过期的话只会堆在顶上。 */

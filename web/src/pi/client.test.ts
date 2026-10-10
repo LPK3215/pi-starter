@@ -13,7 +13,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { PiWsClient } from "./client.js";
-import type { ServerMessage, UiMessage, UiState, UiStateLight } from "@pi/protocol";
+import type { ServerMessage, UiExtensionRequest, UiMessage, UiState, UiStateLight } from "@pi/protocol";
 
 /* ─────────────────── 全局替身 ─────────────────── */
 
@@ -179,6 +179,71 @@ test("跨会话：切换会话期间只接受目标会话的快照", () => {
 
   feed(client, snapshotOf("C"));
   assert.equal(client.getSnapshot().state?.conversationId, "C", "目标会话的快照必须被接受");
+});
+
+test("跨会话：新建会话期间，后台会话的增量帧不能抢占新会话身份", () => {
+  const { client } = connected();
+  feed(client, snapshotOf("A"));
+
+  // `new_conversation` 的目标 id 由服务端分配，此刻未知。
+  client.newConversation();
+  assert.equal(client.getSnapshot().state, null);
+
+  // 后台会话 B 的增量帧抢跑：放行它们会让 B 先占住身份，随后真正的新会话快照反而因 id
+  // 不匹配被丢弃——用户看到的是别人的对话（且他的消息被拼到 B 的缓冲上）。
+  feed(client, deltaOf("B", 5, 1, [{ role: "user", text: "来自后台 B" }]));
+  feed(client, { type: "message_delta", conversationId: "B", seq: 1, channel: "text", delta: "B 的流式文本" });
+  feed(client, { type: "run_start", conversationId: "B" });
+  assert.equal(client.getSnapshot().state, null, "抢跑的后台增量帧不能建立身份");
+  assert.equal(client.getSnapshot().streamText, "", "后台会话的流式文本不能进新会话的缓冲");
+
+  // 真正的新会话（id 由服务端分配）的快照必须被接受。
+  feed(client, snapshotOf("N"));
+  assert.equal(client.getSnapshot().state?.conversationId, "N", "新会话的权威快照必须能建立身份");
+});
+
+test("新一轮 run_start 清掉上一轮残留的流式缓冲", () => {
+  const { client } = connected();
+  feed(client, snapshotOf("A"));
+  feed(client, { type: "message_delta", conversationId: "A", seq: 1, channel: "text", delta: "上一轮的文本" });
+  assert.equal(client.getSnapshot().streamText, "上一轮的文本");
+
+  // 后端正是在 agent_start（= run_start）时清零自己的缓冲的，客户端必须同步。
+  feed(client, { type: "run_start", conversationId: "A" });
+  assert.equal(client.getSnapshot().streamText, "", "上一轮文本不能与新轮的增量拼接");
+  assert.equal(client.getSnapshot().streamThinking, "");
+  assert.deepEqual(client.getSnapshot().tools, [], "新一轮要清掉上一轮的工具轨迹");
+});
+
+test("离线应答不误清审批卡片 / 反问对话框", () => {
+  installGlobals();
+  FakeWebSocket.instances = [];
+  const client = new PiWsClient(); // 不 connect：没有 socket
+  feed(
+    client,
+    snapshotOf("A", { pendingApproval: { requestId: "appr-1", toolName: "bash", ruleId: "r", reason: "x", preview: "" } }),
+  );
+  const uiRequest: UiExtensionRequest = { id: "ui-1", method: "confirm", title: "t", message: "m" };
+  feed(client, { type: "extension_ui_request", request: uiRequest });
+
+  const approval = client.getSnapshot().state!.pendingApproval!;
+  assert.equal(client.approvalResponse(approval, "allow"), false);
+  assert.ok(
+    client.getSnapshot().state?.pendingApproval,
+    "离线放行失败时卡片必须留着——否则用户以为已批准，后端却仍在等审批",
+  );
+
+  assert.equal(client.respondUi(uiRequest, { id: "ui-1", confirmed: true }), false);
+  assert.equal(client.getSnapshot().uiRequests.length, 1, "离线应答失败时对话框必须留着");
+
+  // 有连接时：发得出去，本地卡片才允许清掉。
+  const { client: online } = connected();
+  feed(
+    online,
+    snapshotOf("A", { pendingApproval: { requestId: "appr-2", toolName: "bash", ruleId: "r", reason: "x", preview: "" } }),
+  );
+  assert.equal(online.approvalResponse(online.getSnapshot().state!.pendingApproval!, "deny"), true);
+  assert.equal(online.getSnapshot().state?.pendingApproval, null);
 });
 
 test("修订链断裂会请求全量快照自愈（同会话）", () => {

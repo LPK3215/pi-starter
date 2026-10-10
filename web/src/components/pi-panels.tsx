@@ -122,8 +122,8 @@ export function HitlDialog() {
     for (const id of answered.current) if (!present.has(id)) answered.current.delete(id);
     for (const n of notices) {
       if (answered.current.has(n.id)) continue;
-      answered.current.add(n.id);
-      piClient.respondUi(n, { id: n.id, value: "" });
+      // 只有真的发出去了才记为已应答：离线（send 返回 false）时留在列表里，等这帧变化再补发。
+      if (piClient.respondUi(n, { id: n.id, value: "" })) answered.current.add(n.id);
     }
   }, [notices]);
 

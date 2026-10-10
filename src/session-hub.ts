@@ -1382,6 +1382,10 @@ export class ClientSession {
     const session = factory
       ? await factory(resumeFrom ? { resumeFrom } : undefined)
       : this.agent.session;
+    // 上面的检查与这里的插入之间隔着 `await`：两个并发 `new_conversation`（WS 是 `void dispatch`，
+    // 命令会并行）都能先通过检查、再各自插入，把 size 抬到 cap+1——每个对话都持有一个完整
+    // AgentSession。分配完成后补收一次，确保上限是真正的上限。
+    this.evictForCapacity();
     let conv!: Conversation;
     conv = new Conversation({
       clientId: this.clientId,
@@ -1553,13 +1557,22 @@ export class ClientSession {
 
   /** 把一个新模型实例应用到本连接的所有对话（轮换时用，避免重复推进共享 session 的指针）。 */
   async applyModel(model: Model<any>): Promise<void> {
+    let failed = 0;
     for (const conv of this.convs.values()) {
       try {
         await conv.setModel(model);
-      } catch {
-        /* 单个对话切换失败不影响其余 */
+      } catch (err) {
+        // 静默吞掉会让 UI 显示「已轮换」、部分后台对话却仍跑旧模型，且没有任何可见信号。
+        failed += 1;
+        getLogger()
+          .child({ component: "session-hub", clientId: this.clientId })
+          .warn("轮换模型时某条对话切换失败", {
+            conversationId: conv.id,
+            error: err instanceof Error ? err.message : String(err),
+          });
       }
     }
+    if (failed > 0) this.notify("warn", `模型轮换未完全生效：${failed} 条对话切换失败`);
   }
 
   /** 轮换当前对话的思考档（仅作于当前活动对话）。 */

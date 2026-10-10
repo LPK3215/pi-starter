@@ -109,6 +109,8 @@ export function LogPanel({ onClose }: { onClose: () => void }) {
   const appendInFlight = useRef(false);
   /** 只让**最新**一次「选中条目」的链路请求写 context。 */
   const selectedSeq = useRef(0);
+  /** 只让**最新**一次「错误统计」请求写 stats / error。 */
+  const statsSeq = useRef(0);
 
   // 卸载清理：取消在途请求 + 清掉"已复制"计时器。
   // 原先只靠"下一次查询"顺手 abort，关闭面板时 in-flight fetch 会继续跑并在卸载后 setState。
@@ -218,12 +220,14 @@ export function LogPanel({ onClose }: { onClose: () => void }) {
     setDraft((d) => ({ ...d, levels: d.levels.includes(lv) ? d.levels.filter((x) => x !== lv) : [...d.levels, lv] }));
 
   const loadStats = async () => {
+    const seq = (statsSeq.current += 1);
     try {
       const s = await queryStats({ ...applied, level: applied.level?.length ? applied.level : ["error"] });
-      // 与 runQuery 同一口径：卸载后不再 setState（面板关闭即卸载）。
-      if (aliveRef.current) setStats(s.stats);
+      // 与 runQuery 同一口径：卸载后不再 setState；快速连点「错误统计」时先发后到的旧响应
+      // 也不能覆盖新统计（包括它的 catch 写入的 error）。
+      if (aliveRef.current && seq === statsSeq.current) setStats(s.stats);
     } catch (err) {
-      if (aliveRef.current) setError((err as Error).message);
+      if (aliveRef.current && seq === statsSeq.current) setError((err as Error).message);
     }
   };
 
@@ -504,5 +508,7 @@ function download(name: string, text: string): void {
   document.body.appendChild(a);
   a.click();
   a.remove();
-  URL.revokeObjectURL(url);
+  // 立刻 revoke 会让部分浏览器（Firefox/Safari 对大 Blob 更敏感）来不及把 URL 变成下载，
+  // 表现为下载被取消或空文件；等这一轮事件循环过去再释放。
+  setTimeout(() => URL.revokeObjectURL(url), 0);
 }

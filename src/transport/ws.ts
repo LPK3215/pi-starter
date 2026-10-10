@@ -352,7 +352,15 @@ class ClientConn {
     try {
       switch (msg.type) {
         case "hello": {
+          const previousClientId = this.clientId;
           this.clientId = msg.clientId?.trim() || randomUUID();
+          // 同一 socket 二次 `hello`（换了 clientId）必须先卸掉旧身份：`hub.attach` 只 dispose
+          // **同 id** 的旧会话，旧 id 的 ClientSession 及其会话订阅会永远留在 `hub.sessions` 里；
+          // 而 socket 关闭时的 `dispose()` 只按最后的 clientId 清理，那些旧会话就成了无界泄漏。
+          if (previousClientId && previousClientId !== this.clientId) {
+            runtime.hub.detach(previousClientId);
+            this.cs = undefined;
+          }
           // `ready` MUST be the first frame: attaching a conversation immediately emits
           // `conversations` + `snapshot`, and a strict client cannot interpret those before
           // it knows its clientId, protocol version and capabilities.

@@ -176,21 +176,23 @@ async function readLogForward(absPath: string, fromByte: number, q: Query, want:
   let offset = fromByte;
   let resume = fromByte;
   const rl = createInterface({ input: createReadStream(absPath, { start: fromByte }), crlfDelay: Infinity });
-  for await (const line of rl) {
-    const lineBytes = Buffer.byteLength(line) + 1; // +换行符（写入固定用 \n）
-    offset += lineBytes;
-    const e = parseAndMatch(line, q);
-    if (e) {
-      entries.push(e);
-      resume = offset;
-      if (entries.length >= want) {
-        rl.close();
-        return { entries, nextPos: resume, done: false };
+  // try/finally：扫描途中文件被轮转 / 归档（I/O 报错）时也必须关掉 readline 与底层文件流，
+  // 否则句柄泄漏；异常本身照常往上抛（由 asyncRoute 翻成 500）。
+  try {
+    for await (const line of rl) {
+      const lineBytes = Buffer.byteLength(line) + 1; // +换行符（写入固定用 \n）
+      offset += lineBytes;
+      const e = parseAndMatch(line, q);
+      if (e) {
+        entries.push(e);
+        resume = offset;
+        if (entries.length >= want) return { entries, nextPos: resume, done: false };
       }
     }
+    return { entries, done: true };
+  } finally {
+    rl.close();
   }
-  rl.close();
-  return { entries, done: true };
 }
 
 /* ── .log 回退（从 endByte 向下按块扫描换行，逐条反序产出） ── */
@@ -244,12 +246,16 @@ function readLogBackward(absPath: string, endByte: number | null, q: Query, want
 async function readGzAll(absPath: string, q: Query): Promise<LogEntry[]> {
   const out: LogEntry[] = [];
   const rl = createInterface({ input: createReadStream(absPath).pipe(createGunzip()), crlfDelay: Infinity });
-  for await (const line of rl) {
-    const e = parseAndMatch(line, q);
-    if (e) out.push(e);
+  // try/finally：解压流报错（归档被删 / 截断）时同样要关掉 readline 与两条流，避免句柄泄漏。
+  try {
+    for await (const line of rl) {
+      const e = parseAndMatch(line, q);
+      if (e) out.push(e);
+    }
+    return out;
+  } finally {
+    rl.close();
   }
-  rl.close();
-  return out;
 }
 
 /* ────────────────────────── 组装一页 ────────────────────────── */

@@ -137,6 +137,8 @@ export class McpBridge {
   private disposed = false;
   /** 正在进行的 sync：并发调用共用同一轮，避免两次 diff 拉起两个子进程。 */
   private inflight: Promise<McpServerStatus[]> | undefined;
+  /** 在途 sync 期间又来了新请求：跑完必须再补一轮，否则那次配置变更被静默丢弃。 */
+  private pendingSync = false;
 
   constructor(private readonly options: McpBridgeOptions) {}
 
@@ -169,17 +171,31 @@ export class McpBridge {
     return out;
   }
 
-  /** 依配置重算连接集合。可并发调用；同一时刻只会有一轮真正执行。 */
+  /**
+   * 依配置重算连接集合。可并发调用；同一时刻只会有一轮真正执行，
+   * 但**在途期间到达的请求会被记账并在跑完后补跑**——直接返回在途那一轮的 promise 会
+   * 把这次配置变更吞掉（`runSync` 在入口就读了 `servers()`，握手最长 15s）。
+   */
   async sync(): Promise<McpServerStatus[]> {
     if (this.disposed) return [];
-    if (this.inflight) return this.inflight;
-    this.inflight = this.runSync().finally(() => {
-      this.inflight = undefined;
-    });
+    this.pendingSync = true;
+    if (!this.inflight) {
+      this.inflight = (async () => {
+        let status = this.status();
+        while (this.pendingSync && !this.disposed) {
+          this.pendingSync = false;
+          status = await this.runSync();
+        }
+        return status;
+      })().finally(() => {
+        this.inflight = undefined;
+      });
+    }
     return this.inflight;
   }
 
   private async runSync(): Promise<McpServerStatus[]> {
+    if (this.disposed) return [];
     const log = getLogger().child({ component: "mcp" });
     const wanted = new Map<string, McpServerConfig>();
     for (const server of this.options.servers()) {
@@ -263,6 +279,13 @@ export class McpBridge {
         schema: descriptor.inputSchema,
       });
       byRemote.set(descriptor.name, full);
+    }
+
+    // 握手中途收到停机：此时 client 还没进 `connected`，`dispose()` 扫不到它，子进程会变孤儿；
+    // 而且下面还会把工具注册回已停机的注册表。已停机就自己收尸、放弃接入。
+    if (this.disposed) {
+      client.dispose();
+      return;
     }
 
     this.connected.set(server.name, {

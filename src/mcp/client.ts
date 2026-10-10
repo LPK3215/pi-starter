@@ -143,6 +143,9 @@ export class McpClient {
    * 握手失败会 kill 子进程——留一个没握上手的进程等于泄漏。
    */
   async start(spawnFn: SpawnFn = realSpawn): Promise<void> {
+    // 已停机的客户端不能再拉起进程：那会 spawn 出一个没人回收的孤儿（dispose 已经跑过，
+    // 不会再扫到它）。停机竞态下宁可让调用方拿到明确的失败。
+    if (this.disposed) throw new Error("MCP 客户端已停机，不再启动子进程");
     if (this.child) return;
     let child: McpProcessHandle;
     try {
