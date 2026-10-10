@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`docs:overview:check` 在远端红、本地绿**（`generate_overview.mjs`，CNB 构建 `cnb-t41-1k4iphsec` 实测）：清单取自 `git ls-files`，而 git 默认 `core.quotePath=true` 会把非 ASCII 路径转义成 `"docs/\344\275\277..."`；开发机普遍把它关成 false，CI 容器不继承任何人的 gitconfig——于是中文文件名一进 CI 就与页面里的清单对不上，报的是「漂移」而不是「环境不同」。改为固定 `git -c core.quotePath=false ls-files -z`（`-z` 顺带解决带换行的文件名）。复现与验证：在一份全新克隆里把 `core.quotePath` 设回 true，旧代码立刻漂移、新代码 in sync。同时把漂移信息做成**可诊断的**——打印变了的 `METRICS` 键、变了的标记区、以及第一处不同的行；只说「drift」的门禁等于让人手工复现 CI。
 - **「58 个 HTTP 路由处理器」里有 11 个不是路由**（`generate_readme_numbers.mjs`）：计数用的是裸 `.get(` 正则，于是 `src/http/log-routes.ts` 里 `search.get("limit")` 这类 **URLSearchParams 读取**被一并算进去，标榜「可验证的数字」其实不可验证。口径改为只认 `app.` / `router.` 上的方法，真数 **47**，标签同步写成 `HTTP route handlers (app. / router. methods)`；两份 README 的生成表已重算。
 - **全景页整页手写到过期**（`docs/project_overview/index.html`）：代码已是 v0.4.1，页面仍挂着 `release v0.2.0`、`308 cases · 37 files`（实际 505 · 53）、`17 项 WS 冒烟`（实际 23）；结构树缺 `conversation/` 与 `memory/` 两个目录；能力清单缺记忆、联网、HITL、会话导入等已上线的能力；**API 表里 `/interrupt`、`/compact`、`/thinking`、`GET /model`、`/session`、`/session/edit`、`/session/rollback`、`/mcp/servers`、`/subagents/run`、`/approvals/:id` 这几条 REST 路由根本不存在**（它们是 WS 命令或 SDK 工具）。现在版本、数值、路由、门禁都由生成器写，手写部分只保留说明文字；`e2e` 断言数（48）与 WS 冒烟断言数（23）改为统计脚本里的 `check(` 调用点，不再手抄。
 

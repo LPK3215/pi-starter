@@ -55,11 +55,19 @@ const esc = (value) =>
  *
  * 页面要说的是「仓库里有什么」，而工作目录里还躺着 `.env`、`logs/`、`dist/`、
  * 各种本地草稿目录——用文件系统列，这些会被一并印到公开页面上。
+ *
+ * `-z` 与 `core.quotePath=false` 不是可有可无的：git 默认把非 ASCII 路径转义成
+ * `"docs/\344\275\277..."`。开发机常把 `core.quotePath` 关成 false，于是本地全绿；
+ * CI 容器不继承这份 gitconfig，中文文件名一进转义就与页面里的清单对不上——
+ * 这条实测踩过一次：远端 `docs:overview:check` 报漂移，本地怎么跑都是绿的。
  */
 function trackedTopLevel(dirRel) {
   let out;
   try {
-    out = execFileSync("git", ["ls-files", dirRel], { cwd: ROOT, encoding: "utf8" });
+    out = execFileSync("git", ["-c", "core.quotePath=false", "ls-files", "-z", dirRel], {
+      cwd: ROOT,
+      encoding: "utf8",
+    });
   } catch (err) {
     fail(`git ls-files ${dirRel} failed; the listing cannot be trusted, so nothing is generated`);
     return { files: [], dirs: [] };
@@ -67,7 +75,7 @@ function trackedTopLevel(dirRel) {
   const prefix = dirRel === "." ? "" : `${dirRel.replace(/\/$/, "")}/`;
   const files = new Set();
   const dirs = new Set();
-  for (const line of out.split("\n").filter(Boolean)) {
+  for (const line of out.split("\0").filter(Boolean)) {
     const rest = line.slice(prefix.length);
     const slash = rest.indexOf("/");
     if (slash < 0) files.add(rest);
@@ -450,6 +458,48 @@ function assertReferences(html) {
 
 // ---------- main ----------
 
+/** 取出自 `before` 起第一个与 `after` 不同的行对，用于把漂移说清楚。 */
+function lineSample(before, after, limit = 3) {
+  const a = before.split("\n");
+  const b = after.split("\n");
+  const out = [];
+  for (let i = 0, j = 0; i < a.length || j < b.length; i += 1, j += 1) {
+    if (a[i] === b[j]) continue;
+    out.push(`    line ${i + 1}: - ${a[i] ?? "(eof)"}`, `    line ${j + 1}: + ${b[j] ?? "(eof)"}`);
+    if (out.length / 2 >= limit) break;
+  }
+  return out.join("\n");
+}
+
+/**
+ * 漂移时报出**是哪一块**变了。
+ *
+ * 只说「drift」的门禁在远端等于没说：CI 日志里看不到上下文，只能靠猜。
+ * 这次就是靠把 METRICS 键名与标记区名字打出来，才在一条日志里定位到 git 的路径转义。
+ */
+function describeDrift(beforeHtml, afterHtml, beforeJs, afterJs) {
+  const report = [];
+  const oldMetrics = readExistingMetrics(beforeJs);
+  const newMetrics = readExistingMetrics(afterJs);
+  if (oldMetrics && newMetrics) {
+    const keys = new Set([...Object.keys(oldMetrics), ...Object.keys(newMetrics)]);
+    const changed = [...keys].filter((k) => JSON.stringify(oldMetrics[k]) !== JSON.stringify(newMetrics[k]));
+    if (changed.length > 0) {
+      report.push(`  METRICS changed: ${changed.map((k) => `${k} ${oldMetrics[k]} -> ${newMetrics[k]}`).join(", ")}`);
+    }
+  }
+  for (const name of Object.keys(regionContent)) {
+    const re = new RegExp(`<!-- BEGIN:${name} -->([\\s\\S]*?)<!-- END:${name} -->`);
+    const a = re.exec(beforeHtml)?.[1];
+    const b = re.exec(afterHtml)?.[1];
+    if (a !== undefined && b !== undefined && a !== b) report.push(`  region ${name} changed`);
+  }
+  if (beforeJs !== afterJs && !report.some((r) => r.includes("METRICS"))) report.push("  METRICS block changed");
+  if (report.length === 0) report.push("  page text changed (data-metric fallbacks or prose outside a region)");
+  report.push(lineSample(beforeHtml, afterHtml), lineSample(beforeJs, afterJs));
+  return report.join("\n");
+}
+
 const check = process.argv.includes("--check");
 // `*.html` / `*.js` are `text eol=lf` in .gitattributes, but an editor or a tool can still hand
 // back a CRLF file. Normalising here is what makes the write idempotent: region separators are
@@ -464,6 +514,8 @@ const metrics = buildMetrics(raw);
 
 let html = readLf(HTML_FILE);
 let js = readLf(JS_FILE);
+const baseHtml = html;
+const baseJs = js;
 
 for (const [name, build] of Object.entries(regionContent)) {
   html = replaceRegion(html, name, build(raw));
@@ -483,10 +535,11 @@ if (problems.length > 0) {
   process.exit(2);
 }
 
-const drifted = js !== readLf(JS_FILE) || html !== readLf(HTML_FILE);
+const drifted = js !== baseJs || html !== baseHtml;
 if (check) {
   if (drifted) {
     console.error("drift: docs/project_overview no longer matches the source — run npm run docs:overview");
+    console.error(describeDrift(baseHtml, html, baseJs, js));
     process.exit(1);
   }
   console.log("in sync: docs/project_overview (numbers, file lists, route table and gate list come from source)");
@@ -504,3 +557,4 @@ console.log(
   `updated: docs/project_overview — ${Object.keys(applied.metrics).length} metrics, ` +
     `${metrics.routes} routes, ${raw.gates.length} gates, ${fallbacks.changed} fallback values written`,
 );
+console.log(describeDrift(baseHtml, html, baseJs, js));
