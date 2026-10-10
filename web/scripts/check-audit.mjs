@@ -11,7 +11,10 @@
  *   **基线化**门禁：
  *     · 已登记的 GHSA + 依赖链未变  -> 打印但不阻断（退出 0）；
  *     · 未登记的新通告              -> 失败（退出 1）——这才是需要人看的信号；
- *     · 登记过但**影响范围变了**    -> 失败（退出 1），逼人重新复核。
+ *     · 登记过但**影响范围变了**    -> 失败（退出 1），逼人重新复核；
+ *     · 登记过但**已不再出现**      -> 失败（退出 1），防基线烂掉；判定要**复跑一次确认**
+ *       （npm audit 偶发会返回不含通告的报告，实测遇到过）。这条语义来自被弃用的
+ *       `auto/web-audit-gate-2e54` 分支里的 `audit-gate.mjs`。
  *   再加一条硬门：**生产依赖（--omit=dev）必须保持 0 高危**。`shadcn` 已从 dependencies
  *   移到 devDependencies（它是构建期用 `shadcn/tailwind.css` 的 CSS 源 + 开发期 CLI，
  *   产物已内联进 web/dist，不是运行时依赖），所以生产依赖里本就不该有漏洞。
@@ -193,10 +196,38 @@ for (const a of advisories) {
   }
 }
 
+// 基线烂掉比新增通告更隐蔽：登记过的那条已经不再出现（依赖升级或移除了），
+// 闸门却仍在「按基线放过」一个并不存在的风险 —— 它自称覆盖着，实际什么都没挡。
+//
+// 但**一次消失不足以定罪**：`npm audit` 偶发会返回一份不含通告的报告（本仓实测遇到过一次），
+// 那份报告和"上游真的修好了"长得一模一样。所以这里只在**复跑一次仍然消失**时才判失败；
+// 复跑要是连不上或拿不到 JSON，按「审计结果不可信」退 2，绝不退化成"基线烂掉"或"通过"。
+let staleBaseline = [];
 for (const id of Object.keys(known)) {
-  if (!advisories.some((a) => a.id === id)) {
-    console.log(`[audit] 提示：baseline 里的 ${id} 已不再出现（依赖已升级或移除），可从 baseline 删除。`);
+  if (!advisories.some((a) => a.id === id)) staleBaseline.push({ id, entry: known[id] });
+}
+
+if (staleBaseline.length > 0) {
+  const again = runAudit({ omitDev: false });
+  if (again.unavailable || again.error) {
+    console.error(
+      `\n[audit] 需要复跑确认「基线里哪些通告已消失」，但第二次审计没拿到结果：\n  ${again.unavailable || again.error}\n` +
+        "判定不了就不判定 —— 这既不是「通告消失」，也不是「通过」。"
+    );
+    process.exit(2);
   }
+  const seenAgain = new Set(rootAdvisories(again.report).map((a) => a.id));
+  const confirmed = staleBaseline.filter((s) => !seenAgain.has(s.id));
+  if (confirmed.length < staleBaseline.length) {
+    console.log(
+      `[audit] 复跑显示这些通告其实还在，先前那份审计结果不完整，不按「基线烂掉」处理：` +
+        staleBaseline
+          .filter((s) => seenAgain.has(s.id))
+          .map((s) => s.id)
+          .join(", ")
+    );
+  }
+  staleBaseline = confirmed;
 }
 
 if (advisories.length > 0) {
@@ -209,14 +240,27 @@ if (advisories.length > 0) {
   }
 }
 
-if (failures.length > 0) {
-  console.error(`\n[audit] 以下 ${failures.length} 条需要处理：`);
-  for (const f of failures) {
-    console.error(`  - ${f.reason}：${f.a.id} ${f.a.package} (${f.a.severity}) range=${f.a.range}`);
-    if (f.prev) console.error(`      原记录 range=${f.prev.range}，现为 range=${f.a.range}`);
+if (failures.length > 0 || staleBaseline.length > 0) {
+  if (failures.length > 0) {
+    console.error(`\n[audit] 以下 ${failures.length} 条需要处理：`);
+    for (const f of failures) {
+      console.error(`  - ${f.reason}：${f.a.id} ${f.a.package} (${f.a.severity}) range=${f.a.range}`);
+      if (f.prev) console.error(`      原记录 range=${f.prev.range}，现为 range=${f.a.range}`);
+    }
+    console.error(`\n若是**已复核、且无可用修复**的新通告，把它登记进 ${BASELINE}（并在同一 PR 里写明理由）；`);
+    console.error("若确实可修，请升级依赖，不要往 baseline 里塞。");
   }
-  console.error(`\n若是**已复核、且无可用修复**的新通告，把它登记进 ${BASELINE}（并在同一 PR 里写明理由）；`);
-  console.error("若确实可修，请升级依赖，不要往 baseline 里塞。");
+  if (staleBaseline.length > 0) {
+    console.error(
+      `\n[audit] baseline 里有 ${staleBaseline.length} 条**已不再出现**的通告：` +
+        staleBaseline.map((s) => s.id).join(", ")
+    );
+    console.error(
+      "  闸门自称「按基线放过」它们，实际现在什么都不挡 —— 这是最隐蔽的一种烂掉：\n" +
+        `  请从 ${BASELINE} 删掉（或跑 node scripts/check-audit.mjs --write-baseline 重新生成），` +
+        "并在 PR 里写明是哪条依赖升级/移除导致的。"
+    );
+  }
   process.exit(1);
 }
 
