@@ -13,7 +13,7 @@
   <a href="CODE_OF_CONDUCT.md"><img alt="Contributor Covenant" src="https://img.shields.io/badge/Contributor%20Covenant-2.1-4baaaa"/></a>
 </p>
 
-**Repository**: <https://github.com/LPK3215/pi-starter> · **Upstream SDK**: [earendil-works/pi](https://github.com/earendil-works/pi)
+**Repository**: <https://github.com/LPK3215/pi-starter> · **Upstream SDK**: [earendil-works/pi](https://github.com/earendil-works/pi) · **Live overview (GitHub Pages)**: <https://lpk3215.github.io/pi-starter/>
 
 An **agent scaffold** built on the [pi-agent](https://github.com/earendil-works/pi) SDK: clone it and it runs; add tools, extensions, or a new persona, and it becomes a vertical agent.
 
@@ -372,7 +372,7 @@ pi-starter/
 │   ├── architecture.svg
 │   ├── sse-protocol.svg
 │   ├── knowledge-retrieval.svg # pluggable RAG retrieval pipeline
-│   ├── project_overview/ #   static HTML overview page (index.html + script.js + style.css + project_card.html, the exportable one-image card); docs/index.html redirects here — the layout GitHub Pages classic mode serves from `docs/`, not enabled on this repo yet
+│   ├── project_overview/ #   static HTML overview page (index.html + script.js + style.css + project_card.html, the exportable one-image card); docs/index.html redirects here — published by GitHub Pages classic mode from `docs/`, live at https://lpk3215.github.io/pi-starter/
 │   ├── 使用指南.md      #   getting started: three shapes, adding business logic, troubleshooting (Chinese)
 │   ├── 参考手册.md      #   GENERATED: WS protocol / REST / tools / env vars / npm scripts
 │   ├── 能力与边界.md    #   capability matrix & boundaries vs the SDK
@@ -677,7 +677,7 @@ Grouped by the question you are trying to answer. Read this index first, then pi
 | **[`docs/使用指南.md`](docs/使用指南.md)** | **The three shapes (CLI / HTTP+SSE / web front end): how to run them, how to send a first message, how to add your own business logic, how to diagnose failures. One-page entry point. (Chinese)** |
 | [`FAQ.md`](FAQ.md) | Setup, runtime, model switching, deployment, development Q&A |
 | [`README.zh-CN.md`](README.zh-CN.md) | Chinese companion, mirrored section by section; Quick Start and secondary development live there too |
-| [`docs/project_overview/index.html`](docs/project_overview/index.html) | Interactive one-page panorama of the whole project (architecture, stack, capabilities, routes, quality). Its numbers, file lists, route table and gate list are generated from source by `npm run docs:overview` |
+| [`docs/project_overview/index.html`](docs/project_overview/index.html) | Interactive one-page panorama of the whole project (architecture, stack, capabilities, routes, quality). Its numbers, file lists, route table and gate list are generated from source by `npm run docs:overview`. Published live on GitHub Pages: <https://lpk3215.github.io/pi-starter/> |
 | [`docs/project_overview/project_card.html`](docs/project_overview/project_card.html) | The same story as one shareable image: an 800 px card that exports itself to a 2x PNG. Its numbers come from the same generator, so the two pages cannot disagree |
 
 **The interface: what it actually exposes**

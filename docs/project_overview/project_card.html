@@ -53,7 +53,7 @@ h2 {
 }
 
 /* ---------- hero ---------- */
-.hero { padding: 34px 36px 26px; background: var(--panel); border-bottom: 3px solid var(--accent); }
+.hero { padding: 34px 36px 26px; background: linear-gradient(135deg, rgba(34,197,94,.20), rgba(56,189,248,.13) 46%, var(--panel)); border-bottom: 3px solid var(--accent); }
 .kicker { margin: 0 0 8px; font-size: 11px; letter-spacing: 2px; text-transform: uppercase; color: var(--accent-2); font-weight: 700; }
 .hero h1 { margin: 0; font-size: 54px; line-height: 1.05; font-weight: 800; letter-spacing: -1.5px; }
 .hero h1 .pi { color: var(--accent); }
@@ -67,15 +67,19 @@ h2 {
 .hero-chips .bl { color: var(--muted); }
 
 /* ---------- value ---------- */
-.value { display: block; gap: 14px; }
-.value-item { margin-bottom: 12px; }
+.value { display: flex; flex-direction: column; gap: 16px; }
+.value-item { border-left: 3px solid var(--accent-2); padding-left: 14px; }
 .value-item:last-child { margin-bottom: 0; }
 .value-item h3 { margin: 0 0 3px; font-size: 14.5px; color: var(--accent-3); font-weight: 700; }
 .value-item p { margin: 0; font-size: 14.5px; color: var(--muted); }
 .value-item p code { font-family: var(--mono); font-size: 13px; color: var(--text); }
 
 /* ---------- diagram ---------- */
-.diagram { padding: 22px 20px 18px; }
+/* The UA margin on <figure> (16px 40px) was never reset, which pushed the fixed 740px
+   inline SVG past the right card border (and clipped 1px on PNG export). Margin back to
+   zero, plus a panel fill and a separator, so the diagram sits on the same rhythm as the
+   bordered sections around it. */
+.diagram { margin: 0; padding: 24px 20px 20px; background: var(--panel); border-bottom: 1px solid var(--stroke); }
 .diagram svg { display: block; width: 740px; height: auto; margin: 0 auto; }
 .diagram figcaption { margin: 12px auto 0; width: 740px; font-size: 12.5px; color: var(--muted); }
 
@@ -119,7 +123,7 @@ pre.cmd .cm { color: #6b7f9e; }
 #actions button, #actions a.btn {
   font: inherit; font-size: 14px; cursor: pointer; text-decoration: none;
   color: #06131f; background: linear-gradient(90deg, var(--accent), var(--accent-2));
-  border: none; border-radius: 11px; padding: 10px 18px; font-weight: 700;
+  border: 1px solid transparent; border-radius: 11px; padding: 10px 18px; font-weight: 700;
 }
 #actions a.btn { background: var(--panel-2); color: var(--text); border: 1px solid var(--stroke); font-weight: 500; }
 #status { font-size: 13px; color: var(--muted); margin-left: auto; font-family: var(--mono); }

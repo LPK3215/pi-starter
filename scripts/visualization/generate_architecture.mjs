@@ -158,14 +158,15 @@ const header = `
   ${text(W - 40, 55, `v${pkg.version} · Node ${pkg.engines?.node ?? ""}`, { size: 14, weight: "600", fill: C.muted, anchor: "end" })}
 `;
 
-// Row 1: Entry points (CLI / HTTP+SSE / Library / RPC)
+// Row 1: Entry points (CLI / HTTP+SSE / WebSocket / Library / RPC) — five transports
 const y1 = 100;
 const rowH = 90;
 const entries = [
-  { title: "CLI", sub: "npm run dev", extra: "src/index.ts · /models, /model, /cycle" },
-  { title: "HTTP + SSE", sub: "npm run web", extra: `src/server.ts → app.ts · ${endpoints.length} endpoints` },
-  { title: "Library", sub: "import { buildAgent }", extra: "src/lib.ts · dist/lib.js" },
-  { title: "RPC stdio", sub: "--mode rpc", extra: "src/rpc.ts · official JSONL" },
+  { title: "CLI", sub: "npm run dev", extra: "src/index.ts · /model, /cycle" },
+  { title: "HTTP + SSE", sub: "npm run web", extra: `app.ts · ${endpoints.length} endpoints` },
+  { title: "WebSocket", sub: "GET /ws?session=", extra: "transport/ws.ts · snapshot+rev" },
+  { title: "Library", sub: "buildAgent()", extra: "src/lib.ts · dist" },
+  { title: "RPC stdio", sub: "--mode rpc", extra: "src/rpc.ts · JSONL" },
 ];
 const entryW = (W - 60) / entries.length;
 let row1 = "";
@@ -183,7 +184,7 @@ const row2H = 84;
 let row2 = "";
 row2 += box(30, y2, W - 60, row2H, { stroke: C.gold });
 row2 += text(50, y2 + 26, "Assembly · src/agent.ts", { size: 15, weight: "700", fill: C.gold });
-row2 += text(50, y2 + 50, "model + prompts + tools + skills + knowledge(+retrieval) + database + extensions → AgentSession · scopedModels cycling", { size: 12, fill: C.text });
+row2 += text(50, y2 + 50, "model + prompts + tools + skills + knowledge(+retrieval) + memory + database + extensions → AgentSession · scopedModels cycling", { size: 12, fill: C.text });
 row2 += text(50, y2 + 70, `config precedence: CLI flags > .env > default · built-in tools tier = "${process.env.PI_BUILTIN_TOOLS_HINT ?? "off"}"`, { size: 11, fill: C.muted });
 
 // Row 3: Business resources (4 columns)

@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **GitHub Pages 经典模式上线**：发布源 = `main` 分支 / `docs` 目录（legacy，不走 Actions 引擎，公开仓库零成本）。`docs/` 已满足经典模式三要件（`docs/index.html` 入口重定向到 `project_overview/index.html`、`docs/.nojekyll` 空文件、资源引用全部相对路径且外链一律 https），仓库内不存在第二份览览页文件。线上实测：`https://lpk3215.github.io/pi-starter/`、`/project_overview/index.html`、`/architecture.svg`、`/project_overview/style.css` 均返回 200；仓库 homepage 由空回填为该站点 URL。
+
+### Changed
+
+- **架构图口径对齐**（`scripts/visualization/generate_architecture.mjs` + 重生成 `docs/architecture.svg`）：传输层此前只画 4 个盒子（CLI / HTTP+SSE / Library / RPC stdio），**缺第 5 个 WebSocket**，而 README、概览页、名片都写的是「5 种传输」；Assembly 行也漏了 `memory`。补上 WebSocket 与 memory 后重生成，`docs:svg:check` 绿（列宽按 `(W-60)/entries.length` 自适应，为容纳 5 列收紧了每格说明文案避免溢出）。
+- **全景观览页与名片一轮视觉打磨**（改动全部落在 `BEGIN/END` 生成区与 `METRICS` 块之外，数值仍同源，`docs:overview:check` 绿）：浅色主题重映射 accent 色板（深色主题的亮色落到白底对比度仅 1.5–2.7、几乎失读，改为通过 WCAG AA 的深色变体）、三张深色 SVG 统一放进恒定深色的图框（避免浅色模式下白面板里出现三块黑洞）、Hero 增加 CTA 按钮并收紧与正文轴的双层内缩、顶部数字改为网格卡并加 `tabular-nums` 消除滚动计数左右抖动、API 表加粘性表头与斑马纹（桌面去掉横向滚动容器以让表头随页面吸顶，窄屏恢复滚动并解除吸顶）、`.callout` 由虚线边框改为左侧实线强调条（虚线在 UI 语义里等同占位草稿框）、intro 卡片的 emoji 图标换成内联单色 SVG（跨平台与 PNG 导出一致）、长 `<code>` 路径加 `overflow-wrap` 消除移动端横向溢出；名片 `project_card.html` 重置 `<figure>` 的 UA 默认 margin（此前把固定 740px 内联架构图顶到卡片右框外并造成 PNG 导出最右 1px 裁切）、补架构图底色与分隔线、导出与打开按钮等高、value 列表加左强调条并修掉 `.value` 的死 `gap`。
+- **两份 README 的 Pages 现行口径更正**：目录树注释、文档索引行、顶部仓库行里的「本仓库未启用 GitHub Pages（实测 404）」统一更正为「已上线 + 站点 URL」，两版章节一一对应。`0.4.2` 历史记录里的 404 描述按「不改历史」原则保留。
+
 ## [0.4.2] - 2026-10-10
 
 ### Added

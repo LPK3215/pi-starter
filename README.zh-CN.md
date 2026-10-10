@@ -13,7 +13,7 @@
   <a href="CODE_OF_CONDUCT.md"><img alt="Contributor Covenant" src="https://img.shields.io/badge/Contributor%20Covenant-2.1-4baaaa"/></a>
 </p>
 
-**仓库地址**：<https://github.com/LPK3215/pi-starter> · **上游 SDK**：[earendil-works/pi](https://github.com/earendil-works/pi)
+**仓库地址**：<https://github.com/LPK3215/pi-starter> · **上游 SDK**：[earendil-works/pi](https://github.com/earendil-works/pi) · **在线全览（GitHub Pages）**：<https://lpk3215.github.io/pi-starter/>
 
 基于 [pi-agent](https://github.com/earendil-works/pi) SDK 的 **Agent 脚手架**：拿到就能跑，往上加工具、加扩展、改人设，就变成一个垂直 Agent。
 
@@ -364,7 +364,7 @@ pi-starter/
 │   ├── architecture.svg
 │   ├── sse-protocol.svg
 │   ├── knowledge-retrieval.svg # 可插拔 RAG 检索管线
-│   ├── project_overview/ #   静态全景页（index.html + script.js + style.css + project_card.html，后者是可一键导出 PNG 的单图名片）；docs/index.html 重定向到这里——这是 GitHub Pages 经典模式从 `docs/` 发布的目录结构，本仓库当前**未启用** Pages（实测 404）
+│   ├── project_overview/ #   静态全景页（index.html + script.js + style.css + project_card.html，后者是可一键导出 PNG 的单图名片）；docs/index.html 重定向到这里——由 GitHub Pages 经典模式从 `docs/` 发布，已上线：https://lpk3215.github.io/pi-starter/
 │   ├── 使用指南.md      #   上手用：三种形态怎么跑、怎么加业务、怎么排错
 │   ├── 参考手册.md      #   生成：WS 协议 / REST / 工具 / 环境变量 / npm 脚本
 │   ├── 能力与边界.md    #   与 SDK 对齐的能力矩阵与边界
@@ -663,7 +663,7 @@ server.listen(3000);
 | **[`docs/使用指南.md`](docs/使用指南.md)** | **三种形态（CLI / HTTP+SSE / 前端）怎么跑、怎么发第一句话、怎么加业务、出问题怎么定位；一页看完的入口** |
 | [`FAQ.md`](FAQ.md) | 安装 / 运行时 / 模型切换 / 部署 / 开发 常见问题 |
 | [`README.md`](README.md) | 英文主版（同章节 1∶1 对齐）；快速开始、二次开发都在里面 |
-| [`docs/project_overview/index.html`](docs/project_overview/index.html) | 整个项目的交互式全景观览页（架构 / 技术栈 / 能力 / 路由 / 质量）。其中的数值、文件清单、路由表、门禁列表由 `npm run docs:overview` 从源码生成 |
+| [`docs/project_overview/index.html`](docs/project_overview/index.html) | 整个项目的交互式全景观览页（架构 / 技术栈 / 能力 / 路由 / 质量）。其中的数值、文件清单、路由表、门禁列表由 `npm run docs:overview` 从源码生成；已由 GitHub Pages 上线：<https://lpk3215.github.io/pi-starter/> |
 | [`docs/project_overview/project_card.html`](docs/project_overview/project_card.html) | 同一份内容的「可分享单图」版：800px 长图名片，自带一键导出 2x PNG。数值出自同一个生成器，所以两份页面不可能对不上 |
 
 **查接口：它对外到底暴露什么**

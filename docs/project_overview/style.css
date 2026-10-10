@@ -31,6 +31,15 @@
   --muted: #556480;
   --shadow: 0 10px 30px rgba(20,40,80,.12);
   --glass: rgba(255,255,255,.7);
+  /* accents are re-tuned for a light surface: the dark-theme values are bright
+     hues that collapse to 1.5-2.7:1 on white, so the API method tags, directory
+     names and hero numbers read as washed-out grey. These darker variants clear
+     WCAG AA against --panel (#fff) and --panel-2 (#f1f5fb). */
+  --accent: #15803d;
+  --accent-2: #0369a1;
+  --accent-3: #a16207;
+  --pink: #be185d;
+  --violet: #6d28d9;
 }
 
 * { box-sizing: border-box; }
@@ -48,7 +57,8 @@ body {
 }
 a { color: var(--accent-2); text-decoration: none; }
 a:hover { text-decoration: underline; }
-code { font-family: var(--mono); font-size: .9em; background: var(--panel-2); padding: .1em .4em; border-radius: 6px; }
+img { max-width: 100%; height: auto; }
+code { font-family: var(--mono); font-size: .9em; background: var(--panel-2); padding: .1em .4em; border-radius: 6px; overflow-wrap: anywhere; }
 
 /* ---------- progress bar ---------- */
 #progress {
@@ -86,7 +96,7 @@ code { font-family: var(--mono); font-size: .9em; background: var(--panel-2); pa
 
 /* ---------- hero ---------- */
 .hero {
-  max-width: var(--maxw); margin: 0 auto; padding: 72px 20px 40px;
+  max-width: var(--maxw); margin: 0 auto; padding: 64px 0 32px;
 }
 .hero-card {
   position: relative; overflow: hidden;
@@ -111,11 +121,24 @@ code { font-family: var(--mono); font-size: .9em; background: var(--panel-2); pa
   background: var(--panel-2); border: 1px solid var(--stroke); border-radius: 999px; padding: 6px 14px;
 }
 .badge .bl { color: var(--muted); }
-.stats { display: flex; flex-wrap: wrap; gap: 28px; }
-.stat { display: flex; flex-direction: column; }
-.stat .num, .num { font-size: 34px; font-weight: 800; color: var(--accent); line-height: 1; }
+.stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; margin-top: 6px; max-width: 640px; }
+.stat { display: flex; flex-direction: column; background: var(--panel-2); border: 1px solid var(--stroke); border-radius: 14px; padding: 14px 16px; }
+.stat .num, .num { font-size: 34px; font-weight: 800; color: var(--accent); line-height: 1; font-variant-numeric: tabular-nums; }
 .stat .label { color: var(--muted); font-size: 13px; margin-top: 4px; }
 .repo { margin-top: 20px; color: var(--muted); font-size: 14px; }
+/* hero calls-to-action: the page is a landing page, so the two real destinations
+   (the repo and the shareable card) are buttons, not links buried in muted prose. */
+.cta-row { display: flex; flex-wrap: wrap; gap: 12px; margin: 6px 0 26px; }
+.cta {
+  display: inline-flex; align-items: center; gap: 8px; font-weight: 600; font-size: 15px;
+  padding: 11px 20px; border-radius: 12px; text-decoration: none;
+  transition: transform .15s ease, box-shadow .15s ease, border-color .15s ease;
+}
+.cta svg { width: 18px; height: 18px; }
+.cta:hover { transform: translateY(-2px); text-decoration: none; }
+.cta.primary { background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: #06131f; box-shadow: 0 8px 22px rgba(34,197,94,.22); }
+.cta.ghost { background: var(--panel-2); color: var(--text); border: 1px solid var(--stroke); }
+.cta.ghost:hover { border-color: var(--accent-2); }
 
 /* ---------- sections ---------- */
 main { max-width: var(--maxw); margin: 0 auto; padding: 0 20px 40px; }
@@ -124,15 +147,17 @@ section { padding: 40px 0; border-top: 1px solid var(--stroke); scroll-margin-to
 .section-head .sub { color: var(--muted); margin: 0 0 22px; font-size: 15px; }
 .section-head h2::before { content: "▹ "; color: var(--accent); }
 
-.grid-2, .grid-3 { display: grid; gap: 18px; margin-bottom: 8px; }
+.grid-2, .grid-3 { display: grid; gap: 18px; margin-bottom: 8px; align-items: start; }
 .grid-2 { grid-template-columns: repeat(2, 1fr); }
 .grid-3 { grid-template-columns: repeat(3, 1fr); }
 
 .card {
   background: var(--panel); border: 1px solid var(--stroke); border-radius: var(--radius);
   padding: 22px; box-shadow: var(--shadow); transition: transform .18s ease, box-shadow .18s ease, border-color .18s;
+  display: flex; flex-direction: column;
 }
 .card h3 { margin: 0 0 8px; font-size: 18px; }
+.card h3 .ic { width: 19px; height: 19px; vertical-align: -3px; margin-right: 7px; color: var(--accent-2); }
 .card p { margin: 0; color: var(--muted); }
 .card:hover { transform: translateY(-3px); box-shadow: 0 16px 40px rgba(0,0,0,.4); border-color: var(--accent-2); }
 :root[data-theme="light"] .card:hover { box-shadow: 0 16px 34px rgba(20,40,80,.16); }
@@ -142,12 +167,14 @@ section { padding: 40px 0; border-top: 1px solid var(--stroke); scroll-margin-to
 
 .callout {
   background: linear-gradient(180deg, var(--panel-2), var(--panel));
-  border: 1px dashed var(--accent-2); border-radius: 12px; padding: 14px 18px; color: var(--text); margin-top: 18px; font-size: 15px;
+  border: 1px solid var(--stroke); border-left: 3px solid var(--accent-2); border-radius: 12px; padding: 14px 18px; color: var(--text); margin-top: 18px; font-size: 15px;
 }
 
-/* diagrams reuse docs SVGs (English, single source) */
-.diagram { background: var(--panel); border: 1px solid var(--stroke); border-radius: var(--radius); padding: 16px; margin: 0 0 18px; box-shadow: var(--shadow); overflow-x: auto; }
-.diagram img { width: 100%; height: auto; max-width: 960px; display: block; margin: 0 auto; }
+/* The three diagrams carry a hardcoded dark canvas, so the frame is always dark —
+   in light mode a white panel behind a dark SVG reads as three black holes. Keeping
+   the frame dark makes the image look intentional and identical across themes. */
+.diagram { background: #0b1220; border: 1px solid var(--stroke); border-radius: var(--radius); padding: 16px; margin: 0 0 18px; box-shadow: var(--shadow); }
+.diagram img { width: 100%; height: auto; max-width: 1080px; display: block; margin: 0 auto; }
 
 /* ---------- capability chips ---------- */
 .cap-grid { display: flex; flex-wrap: wrap; gap: 10px; }
@@ -158,12 +185,18 @@ section { padding: 40px 0; border-top: 1px solid var(--stroke); scroll-margin-to
 .chip:hover { transform: translateY(-2px); border-color: var(--accent); background: var(--panel-2); }
 
 /* ---------- tables ---------- */
-.table-wrap { overflow-x: auto; border: 1px solid var(--stroke); border-radius: var(--radius); }
+/* No horizontal scroll wrapper on desktop (the table fits the column), which is what
+   lets the header stay sticky against the page as it scrolls; the wrapper returns to
+   overflow-x:auto below 720px where the table genuinely overflows, and the header
+   un-pins there (a sticky header inside a scroll container would not move with the page). */
+.table-wrap { border: 1px solid var(--stroke); border-radius: var(--radius); }
 table { width: 100%; border-collapse: collapse; font-size: 14.5px; min-width: 480px; }
 th, td { text-align: left; padding: 12px 16px; border-bottom: 1px solid var(--stroke); }
 th { background: var(--panel-2); color: var(--muted); text-transform: uppercase; font-size: 12px; letter-spacing: 1px; }
+thead th { position: sticky; top: 59px; z-index: 3; box-shadow: 0 1px 0 var(--stroke); }
 tbody tr { background: var(--panel); transition: background .15s; }
-tbody tr:hover { background: var(--panel-2); }
+tbody tr:nth-child(even) { background: var(--panel-2); }
+tbody tr:hover { background: color-mix(in srgb, var(--accent-2) 12%, var(--panel)); }
 tbody tr:last-child td { border-bottom: none; }
 .m-get { color: var(--accent-2); font-family: var(--mono); font-weight: 600; }
 .m-post { color: var(--accent); font-family: var(--mono); font-weight: 600; }
@@ -192,7 +225,7 @@ tbody th { font-family: var(--mono); color: var(--text); text-transform: none; l
 /* ---------- tabs ---------- */
 .tabs { background: var(--panel); border: 1px solid var(--stroke); border-radius: var(--radius); padding: 18px; box-shadow: var(--shadow); }
 .tab-bar { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
-.tab-btn { background: var(--panel-2); border: 1px solid var(--stroke); color: var(--muted); border-radius: 10px; padding: 8px 14px; cursor: pointer; font-size: 14px; transition: all .15s; }
+.tab-btn { background: var(--panel-2); border: 1px solid var(--stroke); color: var(--muted); border-radius: 10px; padding: 8px 14px; cursor: pointer; font-size: 14px; transition: all .15s; flex: 1 1 auto; text-align: center; }
 .tab-btn:hover { color: var(--text); }
 .tab-btn.active { color: #06131f; background: linear-gradient(90deg, var(--accent), var(--accent-2)); border-color: transparent; font-weight: 600; }
 .tab-panel { display: none; }
@@ -249,5 +282,7 @@ tbody th { font-family: var(--mono); color: var(--text); text-transform: none; l
   .links.open { max-height: 460px; padding: 8px 16px 14px; }
   .grid-2, .grid-3 { grid-template-columns: 1fr; }
   .hero-card { padding: 32px 22px; }
-  .stats { gap: 18px; }
+  .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); max-width: none; gap: 14px; }
+  .table-wrap { overflow-x: auto; }
+  thead th { position: static; }
 }
