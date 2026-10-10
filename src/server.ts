@@ -28,6 +28,7 @@ import { defaultSessionIndexFile, scaffoldSessionDir, sessionCatalog } from "./s
 import { BUILTIN_TOOL_NAMES, createToolRegistry, defineToolSpec, type ToolRegistry } from "./tools/registry.js";
 import { allTools } from "./tools/index.js";
 import { execRegistrySpecs } from "./tools/exec.js";
+import { webRegistrySpecs } from "./tools/web.js";
 import { SettingsService, fileSettingsPort, defaultSettingsFile, sanitizeSettings } from "./settings.js";
 import { createPersistentRulesStore } from "./approval/rules.js";
 import { join, resolve } from "node:path";
@@ -275,6 +276,11 @@ registry.register(
 // 客户端 hello 时会用 enabledNames() 覆盖会话的激活集，漏登记等于工具被当场关掉。
 if (agent.builtinTools === "coding") {
   registry.registerAll(execRegistrySpecs());
+}
+// 联网工具同样不在 allTools 里：默认关，开了才登记（否则 off 档的能力目录也会出现它们）。
+// 名字取自装配结果，所以注入的 WebClient 没有 `search` 时这里不会有 web_search。
+if (agent.web.enabled) {
+  registry.registerAll(webRegistrySpecs(agent.web.toolNames));
 }
 registryRef = registry;
 

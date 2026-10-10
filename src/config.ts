@@ -548,6 +548,33 @@ export function resolveRetrievalConfig(
   return cfg;
 }
 
+/** 联网工具配置（`PI_WEB`）。默认关闭——出站网络是数据外泄通道，用的时候再开。 */
+export interface WebConfig {
+  enabled: boolean;
+  /** 单次抓取的默认字节上限；工具入参可覆盖，但都会被 `MAX_FETCH_MAX_BYTES` 夹住。 */
+  maxBytes?: number;
+  /** 单次抓取的默认超时（毫秒）。 */
+  timeoutMs?: number;
+}
+
+/**
+ * 解析 `PI_WEB`。
+ *
+ * 只有明确的 `on` / `true` / `1` 才算开——拼错（`PI_WEB=yes`）**不等于偷偷打开**，
+ * 与 `PI_BUILTIN_TOOLS` 的取值风格保持一致：宁可多打一次，不要静默放权。
+ */
+export function resolveWebConfig(env: Record<string, string | undefined> = process.env): WebConfig {
+  const raw = clean(env.PI_WEB)?.toLowerCase();
+  if (raw !== "on" && raw !== "true" && raw !== "1") return { enabled: false };
+  const maxBytes = Number(clean(env.PI_WEB_MAX_BYTES));
+  const timeoutMs = Number(clean(env.PI_WEB_TIMEOUT_MS));
+  return {
+    enabled: true,
+    ...(Number.isFinite(maxBytes) && maxBytes > 0 ? { maxBytes: Math.trunc(maxBytes) } : {}),
+    ...(Number.isFinite(timeoutMs) && timeoutMs > 0 ? { timeoutMs: Math.trunc(timeoutMs) } : {}),
+  };
+}
+
 /**
  * 解析 PI_SCOPED_MODELS（模型轮换列表）：逗号分隔，每项 `provider/modelId[:thinkingLevel]`。
  * 例：modelscope/Qwen/Qwen3-Next:high,zhipu/glm-4.5-air:off

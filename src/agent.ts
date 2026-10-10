@@ -23,6 +23,7 @@ import {
   requireConfiguredModel,
   sessionToolPolicy,
   parseScopedModelRefs,
+  resolveWebConfig,
   SETUP_HINT,
   type BuiltinToolMode,
 } from "./config.js";
@@ -56,6 +57,7 @@ import type { Model } from "@earendil-works/pi-ai";
 import { ExecEnvironment } from "./exec/runner.js";
 import { allTools } from "./tools/index.js";
 import { execToolsForMode } from "./tools/exec.js";
+import { webToolsForMode, type WebClient } from "./tools/web.js";
 import { allExtensions, type ExtensionFactory } from "./extensions/index.js";
 import { loadScaffoldSkills, resolveSkillPaths, type LoadedSkill } from "./skills/index.js";
 import {
@@ -226,6 +228,15 @@ export interface BuildAgentOptions {
   /** 内置编码工具档位。不传则走 .env / 默认 off */
   builtinTools?: BuiltinToolMode | string;
   /**
+   * 联网后端。传了就同时**开启**联网工具并换上这个实现（换搜索源 / 加缓存 / 加审计）。
+   *
+   * 不传时是否开启由 `PI_WEB` 决定（默认关）；两种情况下用的都是
+   * {@link WebClient} 这个接口，模型侧与工具契约完全一致。
+   */
+  webClient?: WebClient;
+  /** 显式开关联网工具（覆盖 `PI_WEB`）。传 `true` 时用默认 HTTP 后端。 */
+  web?: boolean;
+  /**
    * 模型轮换列表（官方 `scopedModels` + `session.cycleModel`）。不传则读 `PI_SCOPED_MODELS`；
    * 两者都缺时，默认用当前已配 Key 的可用模型派生一份（不改变初始选模，只是把轮换打开）。
    */
@@ -341,6 +352,11 @@ export interface BuiltAgent {
    */
   readonly model: Model<any>;
   builtinTools: BuiltinToolMode;
+  /**
+   * 联网工具状态。默认关；开了才有 `toolNames`（供能力目录与 `/info` 展示）。
+   * 与 `builtinTools` 的区别：那是**内置**工具档位，这是**脚手架自带**的可选能力。
+   */
+  web: { enabled: boolean; toolNames: string[] };
   skills: LoadedSkill[];
   knowledge: KnowledgeDoc[];
   /** 已生效的知识检索后端（默认 keyword；行为与向量库隔离时与从前一致）。 */
@@ -543,10 +559,16 @@ export async function buildAgent(options: BuildAgentOptions = {}): Promise<Built
   const execEnv =
     cfg.builtinTools === "coding" ? new ExecEnvironment({ workspace: process.cwd() }) : undefined;
 
+  // 联网工具：默认关（`PI_WEB=on` 或 `buildAgent({ web: true, webClient })` 才开）。
+  // 与 shell 一样不进 allTools——否则 off 档也会放行一个能把上下文发出去的工具。
+  const webCfg = resolveWebConfig();
+  const webEnabled = options.web ?? webCfg.enabled;
+  const webTools = webToolsForMode(webEnabled, options.webClient);
+
   const resolveToolList = (): ToolDefinition[] => {
     const live = options.dynamicTools?.() ?? [];
     const execTools = execToolsForMode(cfg.builtinTools, execEnv);
-    return [...allTools, ...dynamicTools, ...execTools, ...live, ...(options.extraTools ?? [])];
+    return [...allTools, ...dynamicTools, ...webTools, ...execTools, ...live, ...(options.extraTools ?? [])];
   };
 
   /**
@@ -712,6 +734,7 @@ export async function buildAgent(options: BuildAgentOptions = {}): Promise<Built
       return currentModel();
     },
     builtinTools: cfg.builtinTools,
+    web: { enabled: webTools.length > 0, toolNames: webTools.map((tool) => tool.name) },
     skills,
     knowledge,
     knowledgeRetrieval: retriever.kind,

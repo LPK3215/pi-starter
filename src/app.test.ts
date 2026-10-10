@@ -41,6 +41,7 @@ function fakeAgent(overrides: {
     session: session as unknown as BuiltAgent["session"],
     model,
     builtinTools: "off",
+    web: { enabled: false, toolNames: [] },
     skills: overrides.skills ?? [],
     knowledge: overrides.knowledge ?? [],
     promptTemplates: overrides.promptTemplates ?? [],

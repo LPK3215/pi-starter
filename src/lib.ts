@@ -226,6 +226,26 @@ export {
   type ToolSpec,
 } from "./tools/registry.js";
 
+// 联网能力：实现一个 WebClient 换成自己的搜索源 / 网关，传给 buildAgent({ webClient })。
+export {
+  DEFAULT_FETCH_MAX_BYTES,
+  HttpWebClient,
+  MAX_FETCH_MAX_BYTES,
+  WebError,
+  createWebFetchTool,
+  createWebSearchTool,
+  htmlToText,
+  isPrivateAddress,
+  webRegistrySpecs,
+  webToolsForMode,
+  type FetchedPage,
+  type SearchHit,
+  type WebClient,
+  type WebFetchOptions,
+} from "./tools/web.js";
+
+export { resolveWebConfig, type WebConfig } from "./config.js";
+
 export {
   ApprovalRulesStore,
   builtinApprovalRules,

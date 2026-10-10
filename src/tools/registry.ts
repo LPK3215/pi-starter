@@ -65,6 +65,10 @@ export function inferCapabilities(name: string): string[] {
     case "ask_user_question":
       // 反问人类是安全交互（不改数据、不跑命令），单列能力便于 UI 分组与策略豁免。
       return ["human.input"];
+    case "web_fetch":
+    case "web_search":
+      // 出站网络：读为主，但它是数据外泄通道，所以按 net 归类 → inferRisk 给 medium。
+      return ["net"];
     default:
       return ["custom"];
   }
