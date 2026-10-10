@@ -34,6 +34,22 @@
 
 <!-- TODO: 截图待补充 — CLI 会话示例与 web/ 前端浏览器截图 -->
 
+## Numbers
+
+<!-- BEGIN:generated-numbers -->
+| 指标 | 数值 |
+|---|---|
+| 后端源码（`src/`，不含测试） | 77 个 `.ts` · 18991 行 |
+| 后端测试 | 43 个文件 · **391 用例** · 9262 行 |
+| 前端手写代码（`web/src`） | 36 个文件 · 8751 行 |
+| 前端用例 | 11 |
+| HTTP 路由处理器（静态计数） | 55 |
+| 手写文档（`docs/*.md`） | 7 |
+| 最大单文件 | `src/session-hub.ts`（2169 行） |
+
+> 本表由 `node scripts/visualization/generate_readme_numbers.mjs` 从源码生成，**请勿手改**；`npm run docs:numbers:check` 会在 CI 里挡住漂移。
+<!-- END:generated-numbers -->
+
 ## 技术栈
 
 | 层级 | 库 / 运行时 | 版本 | 说明 |
@@ -47,7 +63,7 @@
 | HTTP | [Express](https://expressjs.com/) | `^5.2.1` | 单进程；Web 端每连接多对话并发 |
 | Schema | [TypeBox](https://www.npmjs.com/package/typebox) | `^1.1.39` | 工具 `parameters` 定义 |
 | WebSocket | [ws](https://www.npmjs.com/package/ws) | `^8.18.0` | 快照驱动的双向传输（`transport/ws.ts`） |
-| 测试 | Node 内置 test runner，走 `tsx --test` | `^4.22.4` | 42 个测试文件 · 376 用例 + 前端 11 用例，不调模型 |
+| 测试 | Node 内置 test runner，走 `tsx --test` | `^4.22.4` | 不调模型、不联网；具体数量见 [Numbers](#numbers) |
 | 构建 | `tsc -p tsconfig.build.json` + `scripts/dist-assets.cjs` | `^5.6.0` | 把 `prompts/`、`skills/`、`prompt-templates/`、`knowledge/` 拷到 `dist/` |
 
 上面这张表的单一真源是 [`package.json`](package.json)。版本变更时，代码与本表同步；架构 SVG 自动刷新（`node scripts/visualization/generate_architecture.mjs`）。
@@ -96,6 +112,11 @@
 PI_BUILTIN_TOOLS=off        # 默认：自定义工具 + read（技能加载）
 # PI_BUILTIN_TOOLS=readonly # 再加上 grep / find / ls
 # PI_BUILTIN_TOOLS=coding   # 再加上 bash / edit / write，以及 exec / exec_jobs / exec_stop
+
+PI_WEB=off                  # 默认：不出网。设为 on 后注册 web_fetch（注入搜索后端时还有
+# PI_WEB=on                 #   web_search）；内网 / 回环地址一律拒绝——未被缓解的部分见 SECURITY.md
+# PI_WEB_MAX_BYTES=262144
+# PI_WEB_TIMEOUT_MS=15000
 
 # 或临时覆盖
 npm run dev -- --builtin-tools coding
@@ -326,7 +347,7 @@ pi-starter/
 契约类冒烟测试（不调模型、不写真实 `~/.pi/agent`）：
 
 ```bash
-npm test            # 后端：376 个单测 / 集成测试
+npm test            # 后端：单元 + 集成（数量见 Numbers 一节）
 npm run test:web    # 前端：11 个 WS 客户端测试（复用 tsx，零新依赖）
 npm run smoke       # 23 项真实 WebSocket 端到端检查
 npm run typecheck   # 类型 + 协议完整性

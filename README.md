@@ -34,6 +34,22 @@ Every `POST /chat` follows the same lifecycle: HTTP body → busy guard → `ses
 
 <!-- TODO: 截图待补充 — sample CLI session and browser screenshot of the web/ frontend -->
 
+## Numbers
+
+<!-- BEGIN:generated-numbers -->
+| Metric | Value |
+|---|---|
+| Backend source (`src/`, tests excluded) | 77 `.ts` files · 18991 lines |
+| Backend tests | 43 files · **391 cases** · 9262 lines |
+| Frontend hand-written (`web/src`) | 36 files · 8751 lines |
+| Frontend cases | 11 |
+| HTTP route handlers (static count) | 55 |
+| Hand-written docs (`docs/*.md`) | 7 |
+| Largest single file | `src/session-hub.ts` (2169 lines) |
+
+> Generated from source by `node scripts/visualization/generate_readme_numbers.mjs` — **do not edit by hand**; `npm run docs:numbers:check` guards against drift in CI.
+<!-- END:generated-numbers -->
+
 ## Tech stack
 
 | Layer | Library / runtime | Version | Notes |
@@ -47,7 +63,7 @@ Every `POST /chat` follows the same lifecycle: HTTP body → busy guard → `ses
 | HTTP | [Express](https://expressjs.com/) | `^5.2.1` | single process; REST shares one session, WS runs several conversations per client (cap + LRU) |
 | Schema | [TypeBox](https://www.npmjs.com/package/typebox) | `^1.1.39` | tool `parameters` definitions |
 | WebSocket | [ws](https://www.npmjs.com/package/ws) | `^8.18.0` | snapshot-driven bidirectional transport (`transport/ws.ts`) |
-| Test runner | Node built-in test runner via `tsx --test` | `^4.22.4` | 42 test files · 376 cases + 11 frontend cases, no model calls |
+| Test runner | Node built-in test runner via `tsx --test` | `^4.22.4` | no model calls, no network; counts live in [Numbers](#numbers) |
 | Build | `tsc -p tsconfig.build.json` + `scripts/dist-assets.cjs` | `^5.6.0` | copies `prompts/ skills/ prompt-templates/ knowledge/` into `dist/` |
 
 Truth source for the table above: [`package.json`](package.json). When versions change, update the code and this table together (the Architecture SVG refreshes automatically via `node scripts/visualization/generate_architecture.mjs`).
@@ -57,6 +73,7 @@ Truth source for the table above: [`package.json`](package.json). When versions 
 - **Three entry points**: CLI (`npm run dev`) + HTTP SSE (`npm run web`) + official RPC stdio JSONL (`npm run dev -- --mode rpc`, for cross-language / subprocess integration). The backend API is the product; a React frontend lives in [`web/`](web) and speaks the same WS protocol from the browser
 - **Layered prompts**: `src/prompts/` holds `persona.md` (who the agent is) + `rules.md` (working constraints) — edit the files to change the personality
 - **Pluggable tools**: define them under `src/tools/`, register in `tools/index.ts`, and they are auto-registered into the agent
+- **Optional web access** (`PI_WEB=on`): `web_fetch` reads an http(s) page as text; `web_search` appears only when a search backend is injected. Both are off by default (outbound network is an exfiltration channel), size-capped, and refuse loopback/private/link-local targets — including via DNS resolution and after redirects. Swap in your own backend with `buildAgent({ webClient })`; the tool contract and the model-facing surface do not change
 - **Skill management**: `src/skills/<name>/SKILL.md`, loaded via the SDK's `DefaultResourceLoader.additionalSkillPaths`; the catalog is injected by `formatSkillsForPrompt` and full text is read by the built-in `read` tool through `<location>`
 - **Knowledge base**: `src/knowledge/*.md` — the system prompt carries only the catalog; bodies are fetched on demand via `search_knowledge` / `read_knowledge` (the SDK has no native knowledge base). Retrieval is pluggable behind the `Retriever` interface: keyword by default (zero-dep, current behavior), or vector RAG via `PI_KNOWLEDGE_RETRIEVAL=vector` + an OpenAI-compatible / Ollama embeddings endpoint — swap in a `VectorStore` (Qdrant/pgvector) later without touching the tool.
 - **Prompt templates**: `src/prompt-templates/<name>.md` are the SDK's slash-command templates — `session.prompt("/name")` expands them (positional `$1`, `$@`, defaults `${1:-x}`); loaded via `additionalPromptTemplatePaths`, with `~/.pi` scanning off
@@ -102,6 +119,12 @@ Enable built-in tools (priority: CLI flags > `.env` > default `off`):
 PI_BUILTIN_TOOLS=off        # default: custom tools + read (for skills)
 # PI_BUILTIN_TOOLS=readonly # plus grep / find / ls
 # PI_BUILTIN_TOOLS=coding   # plus bash / edit / write and exec / exec_jobs / exec_stop
+
+PI_WEB=off                  # default: no outbound network. "on" registers web_fetch (+ web_search
+# PI_WEB=on                 #   when a search backend is injected). Private/loopback targets are
+#                           #   refused; see SECURITY.md for what is NOT mitigated.
+# PI_WEB_MAX_BYTES=262144
+# PI_WEB_TIMEOUT_MS=15000
 
 # or a temporary override
 npm run dev -- --builtin-tools coding
@@ -346,8 +369,8 @@ pi-starter/
 Contract smoke tests (no model calls, never touch the real `~/.pi/agent`):
 
 ```bash
-npm test            # 376 unit + integration tests
-npm run test:web    # 11 frontend (WS client) tests — reuses tsx, adds no dependency
+npm test            # backend unit + integration (counts: see Numbers)
+npm run test:web    # frontend (WS client) tests — reuses tsx, adds no dependency
 npm run smoke       # 23 real WebSocket end-to-end checks
 npm run typecheck   # types + protocol completeness
 npm run lint:unused # dead code gate (the "declared but never wired" class of bug)
