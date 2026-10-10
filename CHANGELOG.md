@@ -39,6 +39,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 > 上面四条**都是写 `src/http/file-routes.test.ts` 时当场发现的** —— 路由层此前没有任何测试，而它正是把工作目录暴露成 HTTP 服务的那一层。
 
+- **`generate_readme_numbers.mjs` 的前端用例数写死了单个文件**：它只数 `web/src/pi/client.test.ts`，于是加了 `logClient.test.ts` 之后 README 里仍然报 11（实际 19）。现改为从 `package.json` 的 `test:web` 脚本读文件清单。**这类「与文件一致地错」的漂移 `docs:numbers:check` 是抓不到的**（它只能发现「文件里写的和算出来的不一致」），所以口径本身必须来自脚本，不能写成常量。
 - **快照周期内不再重复取会话统计（P2-1）**：`getSessionStats()` 在 SDK 里是 `sessionManager.getEntries()` —— 每次调用都会 `fileEntries.filter(...)` **全量复制再全量扫描**一遍会话条目，而快照每个周期都要读它。现改为**按事件失效、周期内复用**：只有流式增量（`message_update` / `tool_execution_update`）不作废缓存，其余事件一律作废（保守方向：宁多算一次，也不显示过期 token / cost）。`src/integration.test.ts` 有用例锁定「流式期间不重复取数、`message_end` 后必然重取」。
 - **投影签名的构造少了两次分配（P2-2）**：`projectMessage` 的签名从「数组 + `join("|")`」改为模板串 —— 同一个结果，但不再为每条消息先造 n 个中间字符串（这个签名每个快照周期都要为每条消息重建一次）。同时把 `estimateTokensCached` 的注释改正：它是 O(消息条数) 次 WeakMap 查询，**不是**注释原先声称的 O(新增消息数)。
 - **`docs/项目分析报告.md` 会主动误导读者（文档一致性）**：它写于 0.3.0 之前，把一批**已经修好**的问题仍列为现状（`/files/read?path=.env`、`PI_API_KEY` 继承、`db.query()` 全量载入、子代理队列无上限…），并且在同一份文档里给出两组互相矛盾的验证数字（§0 记 `smoke 23/23`、`e2e 39/0跳`，§8 表记 `smoke 17/17`、`e2e 35+1跳过`），`§1.2` 的文件数也自相矛盾。现改为**归档页**：明确标注「历史快照，不再是现状描述」，逐条给出「当时判断 → 现在状态 + 依据」的对照表，并指向 `智能体视角评估.md` / README 的 Numbers / CHANGELOG 三个现状来源。正文通过 git 历史保留。

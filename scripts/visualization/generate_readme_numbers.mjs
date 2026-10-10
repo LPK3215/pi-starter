@@ -75,16 +75,23 @@ function backendTests() {
   return { files, cases };
 }
 
-/** 前端用例数：同口径，单文件。 */
+/**
+ * 前端用例数：与后端同一口径（顶层 `test(` 计数）。
+ *
+ * 文件清单从 `package.json` 的 `test:web` 脚本里取，**不要写死单个文件** ——
+ * 写死过一次，结果是加了 `logClient.test.ts` 之后这里仍然只报 11 个用例。
+ * 这类「与文件一致地错」的漂移，`docs:numbers:check` 是抓不到的（它只能发现
+ * 「文件里写的和算出来的不一致」），所以口径本身必须从脚本里读。
+ */
 function frontendTests() {
-  const file = join(ROOT, "web/src/pi/client.test.ts");
+  const pkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
+  const files = String(pkg.scripts["test:web"] ?? "")
+    .split(/\s+/)
+    .filter((piece) => piece.endsWith(".test.ts"))
+    .map((piece) => join(ROOT, piece));
   let cases = 0;
-  try {
-    cases = (readFileSync(file, "utf8").match(/^test\(/gm) ?? []).length;
-  } catch {
-    cases = 0;
-  }
-  return { file, cases };
+  for (const file of files) cases += (readFileSync(file, "utf8").match(/^test\(/gm) ?? []).length;
+  return { files, cases };
 }
 
 /** 静态计数 HTTP 路由处理器（`router.get(...)` / `app.post(...)` 形态）。 */
