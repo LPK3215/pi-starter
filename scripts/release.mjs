@@ -17,7 +17,9 @@
 //   3. 检查 tag 是否已存在
 //   4. 把新版本号回写到 versionFiles 列出的每一处
 //   5. 提交版本回写 → 打 tag → 推送分支 + tag
-//   6. CI 收到 tag 后构建并发布 Release
+//   6. tag 推送后由该远程的 CI 构建并发布 Release。**CI 不保证可用**（Actions 计费锁定 /
+//      免费额度用尽 / 策略禁用都会让它一声不响地不出包）——这时用本地产物发布，语义相同：
+//        npm run publish:local -- --tag <tag>      见 pipeline.config.json 的 localPublish
 //
 // 用法（在项目根目录）：
 //   npm run release -- 0.2.4                # 普通发布（先跑门禁）
@@ -323,11 +325,19 @@ for (const r of remotes) {
   }
 }
 if (failed.length > 0) {
+  // 走到这里本地仓库已经被改动过（版本回写提交 + 本地 tag）。与其让作者去猜该 reset
+  // 还是该删 tag（猜错就是把已推分支搞乱），不如把撤销步骤原样打出来。
+  const undo = [`  git tag -d ${tag}    # 删掉本地 tag`];
+  if (bumps.length > 0) undo.push(`  git reset --hard HEAD~1    # 撤销"版本回写"提交（本次确实产生了回写）`);
+  undo.push(
+    `  注意：已推送成功的远程要各自单独回退，本脚本不会替你动已推送的引用。`,
+  );
   console.error(
     `\n[release] ${tag} 未推送到：${failed.join(", ")}\n` +
       `本地 tag 已打好，修好该远程后单独补推：${failed
         .map((f) => `git push ${f.replace(":", " ")}`)
-        .join(" && ")}`
+        .join(" && ")}\n\n` +
+      `[undo] 若决定放弃这次发布，本地状态这样还原：\n${undo.join("\n")}`
   );
   process.exit(1);
 }
@@ -344,7 +354,12 @@ try {
 }
 
 console.log(
-  `\n[release] ${tag} 已推送到 ${remotes.length} 个远程（${remotes.join(", ")}）。` +
-    `CI 收到 tag 后会构建并发布 Release${web ? "：" : "。"}`
+  `\n[release] ${tag} 已推送到 ${remotes.length} 个远程（${remotes.join(", ")}）。`
 );
-if (web) console.log(`  ${web}/releases`);
+// 不能写「CI 会出包」：这一步只保证**推到了**，能不能出包取决于该远程的 CI 是否真的在跑
+// （Actions 计费锁定 / 免费额度用尽 / 策略禁用都会让它不出包，且不会有任何报错）。
+console.log(
+  `若该远程的 CI 没有出包，用本地产物发布——同一条发版语义、可重跑：\n` +
+    `  npm run publish:local -- --tag ${tag}`
+);
+if (web) console.log(`\nRelease 页面：${web}/releases`);

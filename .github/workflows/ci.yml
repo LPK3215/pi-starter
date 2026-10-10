@@ -47,9 +47,11 @@ jobs:
         # compiler fail on them.
         run: npx tsc --noEmit --noUnusedLocals --noUnusedParameters
 
-      - name: Test
+      - name: Test (with coverage gate)
         # Contract smoke tests: no model calls, no ~/.pi/agent writes.
-        run: npm test
+        # Runs the suite once and enforces the ratchet thresholds from
+        # scripts/coverage.mjs — no c8/nyc dependency, no second test run.
+        run: npm run test:coverage
 
       - name: Test (frontend WS client)
         # Frontend's first tests: cross-conversation frame filtering and friends.
@@ -77,6 +79,11 @@ jobs:
         # endpoint and would otherwise fail every build with a 404.
         run: npm audit --audit-level=high --registry=https://registry.npmjs.org
 
+      - name: Generated numbers are up to date
+        # README's verifiable counts are generated (scripts/visualization/generate_readme_numbers.mjs).
+        # Without this step they silently rot back into hand-written lies.
+        run: npm run docs:numbers:check
+
       - name: Build
         run: npm run build
 
@@ -90,10 +97,9 @@ jobs:
 
   frontend:
     # 前端在此之前完全没有被 CI 覆盖（既不 typecheck 也不 build），一个独立作业即可补上。
-    # 只跑 lint 与 typecheck+build：`npm --prefix web run check:official` 当前**退出码为 1**
-    # （官方 registry 组件已有 11 处不同 / 3 处缺失），放进 CI 会把流水线变红——
-    # 那是需要单独决策的对齐工作，不是门禁。
-    name: Frontend (lint + typecheck + build)
+    # 组件与官方 registry 的比对也在这里：它已改为**基线化**检查（已知偏离登记在
+    # web/scripts/registry-baseline.json），只有**新增**偏离才失败，因此可以当门禁用。
+    name: Frontend (lint + official-check + typecheck + build)
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -114,8 +120,18 @@ jobs:
       - name: Lint
         run: npm --prefix web run lint
 
+      - name: Official component sync
+        # 基线化：只对**新增**偏离报错（`--tolerate-network` 让"拉不到上游 registry"按跳过
+        # 处理并退出 0，避免网络抖动被误判成内容问题）。
+        run: npm --prefix web run check:official:ci
+
       - name: Typecheck + build
         run: npm --prefix web run build
+
+      - name: Dependency audit (frontend)
+        # web/ has its own lockfile and its own dependency tree; auditing only the root
+        # package left the frontend uncovered entirely.
+        run: npm --prefix web audit --audit-level=high --registry=https://registry.npmjs.org
 
       - name: Upload web dist artifact
         uses: actions/upload-artifact@v4

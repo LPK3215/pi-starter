@@ -3,12 +3,13 @@
 # 这里漏掉什么，就等于那件事在远端**永远没有**回归保护。
 #
 # 对齐 .github/workflows/ci.yml 的作业划分：
-#   1. verify   —— typecheck + lint:unused + test + test:web + smoke + build + verify:embed
-#   2. e2e      —— 真进程 / 真 SIGKILL / 真重启恢复（Actions 有、这里原先没有）
-#   3. audit    —— 高危依赖通告闸门（同上）
-#   4. frontend —— lint + build，仅在 web/** 变更时触发
+#   1. verify   —— typecheck + lint:unused + test + test:web + docs:numbers:check + smoke + build + verify:embed
+#   2. coverage —— 覆盖率棘轮阈值（scripts/coverage.mjs，零依赖，Node 内置覆盖率）
+#   3. e2e      —— 真进程 / 真 SIGKILL / 真重启恢复（Actions 有、这里原先没有）
+#   4. audit    —— 高危依赖通告闸门（同上）
+#   5. frontend —— lint + official-check + build + audit，仅在 web/** 变更时触发
 #
-# 前三条串在同一条流水线里：它们都只依赖根的 node_modules，`npm ci` 一次即可。
+# 前四条串在同一条流水线里：它们都只依赖根的 node_modules，`npm ci` 一次即可。
 # 前端刻意拆成独立 Pipeline 并用 `ifModify` 收窄触发面——它要装 web/ 自己那两万多个文件，
 # 不该让每个后端 PR 都等它。
 
@@ -20,7 +21,12 @@
     - name: install
       script: npm ci
     - name: verify
+      # 已含 docs:numbers:check（README 的可验证数字是生成的，漂移即失败）。
       script: npm run verify
+    - name: coverage
+      # 覆盖率是**棘轮阈值**（scripts/coverage.mjs，只允许往上调），与 verify 里的 npm test
+      # 是两次运行：本地跑 verify 要快，远端要门禁，代价换来的是"覆盖率下降"也会被挡住。
+      script: npm run test:coverage
     - name: e2e
       # 真进程：握手 → 跑完一轮 → SIGKILL → 重启 → 断言会话从磁盘恢复。同进程的替身
       # 抓不到"何时/如何写会话转录"这类 SDK 升级引入的变化。
@@ -43,10 +49,15 @@
       script: npm ci --prefix web
     - name: lint
       script: npm --prefix web run lint
+    - name: check official components
+      # 基线化检查：只对**新增**偏离报错（已知偏离登记在 web/scripts/registry-baseline.json）。
+      # `:ci` 变体在拉不到上游 registry 时按跳过处理并退出 0，不把网络抖动当内容问题。
+      script: npm --prefix web run check:official:ci
     - name: build
-      # 只跑 lint + build：`check:official` 当前退出码为 1（官方 registry 组件已有 11 处
-      # 内容不同 / 3 处本地缺失），进门禁会把流水线变红——那是需要单独决策的对齐工作。
       script: npm --prefix web run build
+    - name: audit
+      # web/ 有自己的 lockfile；只审计根包等于前端依赖完全没人管。
+      script: npm --prefix web audit --audit-level=high --registry=https://registry.npmjs.org
 
 main:
   pull_request:
