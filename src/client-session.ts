@@ -17,7 +17,7 @@ import { AppError, badRequest } from "./errors.js";
 import { assertSessionFileAllowed, type StoredConversation } from "./sessions/store.js";
 import type { PlanModeController } from "./modes/plan-mode.js";
 import type { ServerMessage, UiApproval, UiConversation } from "./protocol.js";
-import { Conversation, type CompactionOutcome } from "./conversation/conversation.js";
+import { Conversation, type CompactionOutcome, type Session } from "./conversation/conversation.js";
 
 export interface ClientSessionOptions {
   clientId: string;
@@ -71,7 +71,7 @@ export class ClientSession {
    * 把在途算进占用（`convs.size + inFlight`）才能让容量判定反映真实占用。
    */
   private inFlight = 0;
-  /** 排队等名额的请求（`acquireSlot` 的 pending resolver）。 */
+  /** 排队等名额的请求（被唤醒后自己重试准入判定）。 */
   private readonly slotWaiters: Array<() => void> = [];
   private activeId = "";
   private readonly agent: BuiltAgent;
@@ -100,7 +100,6 @@ export class ClientSession {
   private dormantCache:
     | { index: readonly StoredConversation[]; liveKey: string; items: UiConversation[] }
     | undefined;
-
   constructor(options: ClientSessionOptions) {
     this.clientId = options.clientId;
     this.agent = options.agent;
@@ -196,49 +195,53 @@ export class ClientSession {
     // 现在改成先取名额（把在途计入占用）、取不到就排队等，任何时刻
     // 「已入册 + 在途」都不超过 `maxOpenConversations`。
     await this.acquireSlot();
-    let session: Awaited<ReturnType<NonNullable<BuiltAgent["createSession"]>>>;
+    let session: Session | undefined;
+    let handedOff = false;
     try {
       session = factory
         ? await factory(resumeFrom ? { resumeFrom } : undefined)
         : this.agent.session;
-    } catch (err) {
-      // 分配失败要把名额还回去，否则失败的调用会永久吃掉一个容量位。
+      let conv!: Conversation;
+      conv = new Conversation({
+        clientId: this.clientId,
+        session,
+        fallbackModel: this.agent.model,
+        cwd: this.cwd,
+        cfg: this.cfg,
+        push: (msg) => this.emit(msg),
+        listConversations: () => this.listConversations(),
+        onTurnEnd: () => {
+          this.rememberConversation?.(conv);
+          this.emitConversations();
+        },
+        keepRecent: this.keepRecent,
+        toolTimeoutMs: this.toolTimeoutMs(),
+        planMode: this.planMode,
+        ownsSession: Boolean(factory),
+      });
+      const saved = this.persistedConversations().find((entry) => entry.sessionId === conv.id);
+      conv.adoptSavedTitle(saved?.title);
+      this.rememberConversation?.(conv);
+      // Defensive: never leave a live wrapper for the same id behind (it would keep its subscription).
+      const collision = this.convs.get(conv.id);
+      if (collision && collision !== conv) collision.dispose();
+      this.convs.set(conv.id, conv);
+      this.activeId = conv.id;
+      this.emitConversations();
+      conv.getState();
+      // 所有权直到这里才算真正交接完成：`getState()` 也在「入册阶段」之内，它抛错时
+      // 这条对话虽然已经进了 `convs`，但整个调用是失败返回的，仍要按孤儿回收。
+      // 放在 `getState()` 之前会让那次抛错漏掉回收——正是下面 `finally` 要堵的洞。
+      handedOff = true;
+      return conv;
+    } finally {
+      // 任何失败路径（工厂抛错、包装/入册阶段抛错）都要把刚拿到手的 session 放掉，
+      // 否则它就是本次占位之外新造出来的孤儿——没人持有、也没人释放。
+      // 名额一直占到入册或失败为止：在那之前这条会话既不在 `convs` 里、又已经真的
+      // 持有一个 session，正是需要被计入占用的状态。
+      if (!handedOff && session && factory) session.dispose();
       this.releaseSlot();
-      throw err;
     }
-    // 名额一直占到 `convs.set()` 之后才还：在那之前这条会话既不在 `convs` 里、
-    // 又已经真的持有一个 session，正是需要被计入占用的状态。
-    let conv!: Conversation;
-    conv = new Conversation({
-      clientId: this.clientId,
-      session,
-      fallbackModel: this.agent.model,
-      cwd: this.cwd,
-      cfg: this.cfg,
-      push: (msg) => this.emit(msg),
-      listConversations: () => this.listConversations(),
-      onTurnEnd: () => {
-        this.rememberConversation?.(conv);
-        this.emitConversations();
-      },
-      keepRecent: this.keepRecent,
-      toolTimeoutMs: this.toolTimeoutMs(),
-      planMode: this.planMode,
-      ownsSession: Boolean(factory),
-    });
-    const saved = this.persistedConversations().find((entry) => entry.sessionId === conv.id);
-    conv.adoptSavedTitle(saved?.title);
-    this.rememberConversation?.(conv);
-    // Defensive: never leave a live wrapper for the same id behind (it would keep its subscription).
-    const collision = this.convs.get(conv.id);
-    if (collision && collision !== conv) collision.dispose();
-    this.convs.set(conv.id, conv);
-    this.activeId = conv.id;
-    // 入册后占用由 `convs` 接管，归还在途名额（并唤醒队列里的等待者）。
-    this.releaseSlot();
-    this.emitConversations();
-    conv.getState();
-    return conv;
   }
 
   /**
@@ -302,6 +305,8 @@ export class ClientSession {
    * conversation is never evicted, and we never drop below one.
    */
   private evictForCapacity(): void {
+    // 判定口径是「在册对话 + 在途分配」，不是只看 `convs.size`：并发的 `addConversation()`
+    // 在 await 工厂时已经占了名额，必须一并计入，否则多个请求会同时放行。
     while (this.convs.size + this.inFlight >= this.maxOpenConversations) {
       // Candidates: everything except the active one.
       const candidates = [...this.convs.values()].filter((conv) => conv.id !== this.activeId);
@@ -526,10 +531,9 @@ export class ClientSession {
     this.convs.clear();
     this.activeId = "";
     this.dormantCache = undefined;
-    // 还挂着等的请求要唤醒：连接都拆了，没人会再释放名额，让它们挂在这里等于泄漏
-    // 一批 pending Promise（`addConversation` 会让它们各自重新判定，然后因为容量为 0
-    // 而立刻拿到名额开始分配——但那时会话已经被拆掉，调用方拿到什么都没意义）。
-    // 所以这里只做唤醒，避免无界挂起；调用方的生命周期由它自己的 await 决定。
+    // 还挂着等的请求必须唤醒：连接已经拆了，再没有谁会归还名额，让它们挂在一个永远不会
+    // 被兑现的 Promise 上就是泄漏。唤醒后它们会重走准入判定 —— 此时 `convs` 已清空、
+    // `inFlight` 归零，于是各自拿到名额继续分配；调用方的生命周期由它自己的 await 决定。
     this.inFlight = 0;
     const waiters = this.slotWaiters.splice(0, this.slotWaiters.length);
     for (const resolve of waiters) resolve();
