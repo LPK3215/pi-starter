@@ -37,7 +37,7 @@
     { "name": "unused symbols", "cmd": "npm run lint:unused" }
   ],
 
-  "_localPublish说明": "CI 跑不起来时的**正式**发版路径（本仓的 Actions 目前因账号计费锁定无法启动）：`npm run publish:local`。语义与 CI 出包一致 —— 门禁 → 出包 → 把产物挂到该 tag 的 Release 上；可重跑（--clobber 覆盖产物）。",
+  "_localPublish说明": "CI 跑不起来时的**正式**发版路径（本仓的 Actions 目前因账号计费锁定无法启动）：`npm run publish:local`。语义与 CI 出包一致 —— 门禁 → 出包 → 把产物挂到该 tag 的 Release 上；可重跑（--clobber 覆盖产物）。建 Release 的后端按**主远程的宿主**自动选：CNB（cnb.cool）走 `cnb` CLI，GitHub 走 `gh`——本仓主远程是 CNB，所以走 cnb；自建域名等场景可用本配置的 `host` 字段（\"cnb\" / \"github\"）显式覆盖。",
   "localPublish": {
     "versionFrom": "package.json",
     "steps": [
