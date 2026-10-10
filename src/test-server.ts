@@ -69,9 +69,23 @@ export async function listenExistingServer(server: Server): Promise<TestServer> 
     if (!address || typeof address === "string") {
       throw new Error("listenTestServer: 无法取得端口");
     }
+    /**
+     * 端口要在这里就验掉，不能留给后面的 `fetch` 去撞。
+     *
+     * 全量并发跑（十几个文件各开各的 HTTP/WS 服务）时见过这样的失败：测试拿到的
+     * `url` 里端口是坏的，报错却是 undici 两帧之后的 `[TypeError: fetch failed] cause: bad port`，
+     * 真实端口值一个字都没留下，重跑又绿——等于把一个可以在源头说清的问题，
+     * 变成一个只能在下游猜的问题。
+     */
+    const port = address.port;
+    if (!Number.isInteger(port) || port <= 0 || port > 65535) {
+      throw new Error(
+        `listenTestServer: listen 给出了非法端口 ${String(port)}（address=${JSON.stringify(address)}）`
+      );
+    }
     return {
-      url: `http://127.0.0.1:${address.port}`,
-      port: address.port,
+      url: `http://127.0.0.1:${port}`,
+      port,
       server,
       close: async () => {
         // 先断连接再 close：fetch 的 keep-alive 连接会让 close 永不回调。
