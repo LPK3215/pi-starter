@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "POST /chat 请求时序",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [1050, 560],
+    "column_fit": "spread",
+    "views": [
+      { "id": "call", "label": "请求进入", "focus": ["client", "http", "session"], "note": "HTTP body 经忙闸进入 session.prompt。" },
+      { "id": "tool", "label": "工具循环", "focus": ["session", "ext", "tool"], "note": "tool_call → guard → 执行 → tool_result → audit。" },
+      { "id": "stream", "label": "事件回流", "focus": ["session", "sse", "client"], "note": "SDK 事件经 translateEvent 变 SSE 帧回流。" }
+    ]
+  },
+  "participants": [
+    { "id": "client", "type": "external", "label": "Client", "sublabel": "curl · web/" },
+    { "id": "http", "type": "backend", "label": "Express app", "sublabel": "src/app.ts" },
+    { "id": "session", "type": "external", "label": "Agent session", "sublabel": "SDK" },
+    { "id": "ext", "type": "security", "label": "Extensions", "sublabel": "guard · audit" },
+    { "id": "tool", "type": "backend", "label": "Tool", "sublabel": "src/tools" },
+    { "id": "sse", "type": "backend", "label": "SSE translator", "sublabel": "src/sse.ts" }
+  ],
+  "segments": [
+    { "from": 150, "to": 215, "label": "进入" },
+    { "from": 235, "to": 390, "label": "工具循环" },
+    { "from": 400, "to": 480, "label": "流式回流" }
+  ],
+  "messages": [
+    { "id": "m1", "from": "client", "to": "http", "y": 160, "label": "POST /chat { message }", "variant": "emphasis" },
+    { "id": "m2", "from": "http", "to": "session", "y": 200, "label": "session.prompt()", "variant": "emphasis", "note": "busy? → 429" },
+    { "id": "m3", "from": "session", "to": "ext", "y": 250, "label": "event: tool_call", "variant": "emphasis", "note": "pi.on → block?" },
+    { "id": "m4", "from": "ext", "to": "tool", "y": 295, "label": "execute tool" },
+    { "id": "m5", "from": "tool", "to": "session", "y": 335, "label": "tool result", "variant": "return", "note": "≤ 500 chars" },
+    { "id": "m6", "from": "session", "to": "ext", "y": 375, "label": "event: tool_result", "note": "pi.on → rewrite?" },
+    { "id": "m7", "from": "session", "to": "sse", "y": 415, "label": "message_update / tool_*", "variant": "emphasis" },
+    { "id": "m8", "from": "sse", "to": "client", "y": 460, "label": "SSE frames", "variant": "emphasis", "note": "6 event types" }
+  ],
+  "activations": [
+    { "participant": "http", "from": 195, "to": 470, "type": "backend" },
+    { "participant": "session", "from": 200, "to": 460, "type": "external" },
+    { "participant": "ext", "from": 245, "to": 380, "type": "security" },
+    { "participant": "tool", "from": 290, "to": 340, "type": "backend" },
+    { "participant": "sse", "from": 410, "to": 465, "type": "backend" }
+  ],
+  "cards": [
+    { "dot": "emerald", "title": "主路径", "items": ["入口都汇到 session.prompt 与 translateEvent", "SSE 词表在 sse.ts 定型；?format=jsonl 走原始 NDJSON"] },
+    { "dot": "rose", "title": "护栏钩子", "items": ["tool_call 前 guard 拦截，命中回 block", "tool_result 由 audit 记录耗时；deny 关不掉"] }
+  ]
+}

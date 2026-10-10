@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "pi-starter 核心架构（主干）",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [1180, 500],
+    "repository": {
+      "url": "https://github.com/LPK3215/pi-starter",
+      "provider": "github",
+      "link_mode": "web",
+      "revision": "ce8ccf178c216d071295a7d2e9e5c074f51867ce"
+    },
+    "views": [
+      { "id": "main", "label": "主干", "focus": ["entry", "asm", "conv", "sse"], "note": "请求进来到 SSE 输出的主线。" },
+      { "id": "loop", "label": "工具回环", "focus": ["conv", "guard", "tools", "store"], "note": "tool_call 经护栏放行后调用工具、读写存储。" },
+      { "id": "ext", "label": "外部内核", "focus": ["conv", "sdk", "model"], "note": "对话内核与模型推理来自外部 SDK/API。" }
+    ]
+  },
+  "components": [
+    { "id": "entry", "type": "backend", "label": "入口", "sublabel": "CLI · HTTP · WS", "pos": [30, 220], "size": [170, 58] },
+    { "id": "asm", "type": "backend", "label": "buildAgent()", "sublabel": "src/agent.ts", "pos": [240, 220], "size": [170, 58], "sources": [{ "path": "src/agent.ts" }] },
+    { "id": "conv", "type": "backend", "label": "Conversation 引擎", "sublabel": "回合 · 快照 rev", "pos": [450, 220], "size": [195, 58], "sources": [{ "path": "src/conversation/conversation.ts" }] },
+    { "id": "sse", "type": "backend", "label": "SSE 输出", "sublabel": "translateEvent()", "pos": [800, 220], "size": [175, 58] },
+    { "id": "sdk", "type": "external", "label": "pi SDK 内核", "sublabel": "ModelRuntime", "pos": [450, 60], "size": [195, 58] },
+    { "id": "model", "type": "external", "label": "模型 API", "sublabel": "OpenAI 兼容", "pos": [800, 60], "size": [175, 58] },
+    { "id": "guard", "type": "security", "label": "护栏", "sublabel": "guard · approval", "pos": [450, 380], "size": [195, 58], "sources": [{ "path": "src/extensions/guard.ts" }] },
+    { "id": "tools", "type": "backend", "label": "工具 · 知识检索", "sublabel": "tools · RAG", "pos": [700, 380], "size": [180, 58] },
+    { "id": "store", "type": "database", "label": "存储", "sublabel": "sqlite · 记忆", "pos": [930, 380], "size": [170, 58] }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "外部依赖", "wraps": ["sdk", "model"] },
+    { "kind": "region", "label": "输出 / 存储", "wraps": ["sse", "store"] }
+  ],
+  "connections": [
+    { "id": "c1", "from": "entry", "to": "asm", "label": "装配", "variant": "emphasis" },
+    { "id": "c2", "from": "asm", "to": "conv", "label": "AgentSession", "variant": "emphasis", "labelDy": -32 },
+    { "id": "c3", "from": "conv", "to": "sse", "label": "事件流", "variant": "emphasis" },
+    { "id": "c4", "from": "conv", "to": "sdk", "label": "session.prompt()", "fromSide": "top", "toSide": "bottom", "labelDy": -40 },
+    { "id": "c5", "from": "sdk", "to": "model", "label": "推理调用" },
+    { "id": "c6", "from": "conv", "to": "guard", "label": "tool_call", "fromSide": "bottom", "toSide": "top", "labelDy": 40 },
+    { "id": "c7", "from": "guard", "to": "tools", "label": "放行", "variant": "emphasis" },
+    { "id": "c8", "from": "tools", "to": "store", "label": "读写" }
+  ],
+  "cards": [
+    { "dot": "emerald", "title": "一句话主线", "items": ["入口 → buildAgent 装配 → Conversation 跑回合 → SSE 输出", "回合内核来自官方 pi-coding-agent SDK + 模型 API"] },
+    { "dot": "rose", "title": "护栏", "items": ["tool_call 先过 guard/approval，命中回 block", "放行后才调用工具、读写存储"] }
+  ]
+}

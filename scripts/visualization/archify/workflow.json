@@ -1,0 +1,48 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "对话回合业务流程",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [1060, 660],
+    "views": [
+      { "id": "happy", "label": "主流程", "focus": ["recv", "prompt", "guard", "tool", "events", "translate", "done"], "note": "从 HTTP body 到 SSE 回流的完整回合。" },
+      { "id": "gate", "label": "护栏闸门", "focus": ["guard", "block", "tool"], "note": "tool_call 前 guard/approval 决定放行或拒绝。" }
+    ]
+  },
+  "lanes": [
+    { "id": "client", "label": "Client" },
+    { "id": "runtime", "label": "Agent 运行时" },
+    { "id": "policy", "label": "护栏", "variant": "exception" },
+    { "id": "tools", "label": "工具与数据" }
+  ],
+  "phases": [
+    { "id": "intake", "label": "进入", "fromCol": 0, "toCol": 1 },
+    { "id": "turn", "label": "回合", "fromCol": 2, "toCol": 3, "variant": "emphasis" },
+    { "id": "out", "label": "回流", "fromCol": 4, "toCol": 5, "variant": "dashed" }
+  ],
+  "mainPath": ["recv", "prompt", "guard", "tool", "events", "translate", "done"],
+  "nodes": [
+    { "id": "recv", "lane": "client", "col": 0, "type": "backend", "label": "POST /chat", "sublabel": "busy? → 429", "width": 128 },
+    { "id": "prompt", "lane": "runtime", "col": 1, "type": "external", "label": "session.prompt()", "sublabel": "createAgentSession", "width": 132 },
+    { "id": "guard", "lane": "policy", "col": 2, "type": "security", "label": "guard · approval", "sublabel": "tool_call → allow?", "width": 132 },
+    { "id": "block", "lane": "policy", "col": 3, "type": "security", "label": "block: true", "sublabel": "deny · 超时", "width": 120 },
+    { "id": "tool", "lane": "tools", "col": 3, "type": "messagebus", "label": "execute tool", "sublabel": "src/tools", "tag": "≤ 500 chars", "width": 128 },
+    { "id": "events", "lane": "runtime", "col": 4, "type": "backend", "label": "tool_result", "sublabel": "SDK events", "width": 120 },
+    { "id": "translate", "lane": "runtime", "col": 5, "type": "backend", "label": "translateEvent()", "sublabel": "SSE / jsonl", "width": 132 },
+    { "id": "done", "lane": "client", "col": 5, "type": "frontend", "label": "SSE frames", "sublabel": "6 event types", "width": 120 }
+  ],
+  "edges": [
+    { "id": "e1", "from": "recv", "to": "prompt", "label": "message", "variant": "emphasis", "role": "main" },
+    { "id": "e2", "from": "prompt", "to": "guard", "label": "tool_call", "variant": "security", "role": "main" },
+    { "id": "e3", "from": "guard", "to": "tool", "label": "allowed", "variant": "emphasis", "role": "main" },
+    { "id": "e4", "from": "guard", "to": "block", "label": "deny", "variant": "security", "role": "error" },
+    { "id": "e5", "from": "tool", "to": "events", "label": "result", "variant": "emphasis", "role": "main" },
+    { "id": "e6", "from": "events", "to": "translate", "role": "main" },
+    { "id": "e7", "from": "translate", "to": "done", "label": "SSE", "variant": "emphasis", "role": "main", "fromSide": "top", "toSide": "bottom" }
+  ],
+  "cards": [
+    { "dot": "rose", "title": "护栏", "items": ["guard 拦截危险 bash / 路径逃逸", "approval: deny 关不掉、超时按 deny"] }
+  ]
+}

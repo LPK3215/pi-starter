@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "知识与记忆数据流",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [1075, 420],
+    "views": [
+      { "id": "rag", "label": "RAG 检索", "focus": ["docs", "chunk", "vecstore", "search", "prompt"], "note": "Markdown 经 embed→cosine→聚合到系统提示。" },
+      { "id": "mem", "label": "跨会话记忆", "focus": ["facts", "jsonl", "recall", "prompt"], "note": "remember 落 JSONL，recall 按需注入。" }
+    ]
+  },
+  "stages": [
+    { "label": "产生" },
+    { "label": "处理" },
+    { "label": "存储" },
+    { "label": "检索" },
+    { "label": "消费" }
+  ],
+  "nodes": [
+    { "id": "docs", "stage": 0, "row": 0, "type": "backend", "label": "knowledge/*.md", "sublabel": "文档集", "width": 140 },
+    { "id": "facts", "stage": 0, "row": 1, "type": "backend", "label": "remember()", "sublabel": "事实", "width": 130 },
+    { "id": "chunk", "stage": 1, "row": 0, "type": "backend", "label": "Retriever", "sublabel": "chunk → embed", "tag": "kw | vector", "width": 150 },
+    { "id": "vecstore", "stage": 2, "row": 0, "type": "database", "label": "VectorStore", "sublabel": "sqlite | mem", "width": 140 },
+    { "id": "jsonl", "stage": 2, "row": 1, "type": "database", "label": "memory JSONL", "sublabel": "原子写 0600", "width": 140 },
+    { "id": "search", "stage": 3, "row": 0, "type": "backend", "label": "search_knowledge", "sublabel": "cosine top-k", "width": 155 },
+    { "id": "recall", "stage": 3, "row": 1, "type": "backend", "label": "recall()", "sublabel": "读事实", "width": 130 },
+    { "id": "prompt", "stage": 4, "row": 0, "type": "external", "label": "system prompt", "sublabel": "目录 + 正文", "width": 145 }
+  ],
+  "flows": [
+    { "id": "f1", "from": "docs", "to": "chunk", "label": "Markdown", "variant": "emphasis" },
+    { "id": "f2", "from": "chunk", "to": "vecstore", "label": "embeddings" },
+    { "id": "f3", "from": "vecstore", "to": "search", "label": "cosine 打分", "variant": "emphasis" },
+    { "id": "f4", "from": "search", "to": "prompt", "label": "命中正文", "variant": "emphasis", "route": "straight" },
+    { "id": "f5", "from": "facts", "to": "jsonl", "label": "持久化", "classification": "user facts" },
+    { "id": "f6", "from": "jsonl", "to": "recall", "label": "按需读取" },
+    { "id": "f7", "from": "recall", "to": "prompt", "label": "注入事实" }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "两条通道", "items": ["知识是文档集，只读检索注入目录/正文", "记忆是事实库，可写、跨会话、owner-only"] }
+  ]
+}

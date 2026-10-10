@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **GitHub Pages 经典模式上线**：发布源 = `main` 分支 / `docs` 目录（legacy，不走 Actions 引擎，公开仓库零成本）。`docs/` 已满足经典模式三要件（`docs/index.html` 入口重定向到 `project_overview/index.html`、`docs/.nojekyll` 空文件、资源引用全部相对路径且外链一律 https），仓库内不存在第二份览览页文件。线上实测：`https://lpk3215.github.io/pi-starter/`、`/project_overview/index.html`、`/architecture.svg`、`/project_overview/style.css` 均返回 200；仓库 homepage 由空回填为该站点 URL。
+- **交互式架构图入 Pages**（`docs/archify/`，由 archify skill 生成）：自包含、可缩放/搜索/聚焦/引导视图的 HTML 页——`core-architecture`（主干）、`architecture-panorama`（全景）、`workflow-panorama`、`sequence-panorama`（`POST /chat` 时序）、`dataflow-panorama`（知识与记忆数据流）五个。概览页新增 `#interactive` 区块（iframe 预览核心图 + 五个直链 + 导航锚点）。它们是展示层补充，与受 `docs:svg:check` 门禁的静态 `docs/*.svg` 并存且各自定位明确（静态图仍为 CI 真源）。可重生成的 typed-JSON 蓝图存 `scripts/visualization/archify/`，出图前的材料提炼存 `diagram-input.md`（唯一输入源）。`docs:overview` 的 docs 树区域已随 `archify/` 重新生成，`npm run docs:check` 绿。
 
 ### Changed
 

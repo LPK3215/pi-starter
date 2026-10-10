@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "pi-starter 全景架构",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [1320, 560],
+    "repository": {
+      "url": "https://github.com/LPK3215/pi-starter",
+      "provider": "github",
+      "link_mode": "web",
+      "revision": "ce8ccf178c216d071295a7d2e9e5c074f51867ce"
+    },
+    "views": [
+      { "id": "turn", "label": "对话回合主路径", "focus": ["web", "entry", "asm", "conv", "sdk"], "note": "从前端到 SDK 内核的一次 prompt 主链路。" },
+      { "id": "guardrail", "label": "护栏与工具", "focus": ["conv", "ext", "res", "store"], "note": "tool_call 钩子与可插拔工具。" },
+      { "id": "external", "label": "外部运行时", "focus": ["conv", "sdk", "backends"], "note": "官方 SDK、MCP、embedding、向量检索。" }
+    ]
+  },
+  "components": [
+    { "id": "web", "type": "frontend", "label": "web/ 前端", "sublabel": "Vite · React", "pos": [40, 150], "size": [180, 58], "sources": [{ "path": "web/src/pi/usePiRuntime.ts" }] },
+    { "id": "entry", "type": "backend", "label": "入口 / 传输", "sublabel": "CLI·HTTP·WS·RPC", "pos": [300, 150], "size": [190, 58], "sources": [{ "path": "src/app.ts" }] },
+    { "id": "asm", "type": "backend", "label": "buildAgent()", "sublabel": "src/agent.ts", "pos": [570, 150], "size": [180, 58], "sources": [{ "path": "src/agent.ts" }] },
+    { "id": "conv", "type": "backend", "label": "Conversation", "sublabel": "会话栈 · 快照 rev", "pos": [830, 150], "size": [180, 58] },
+    { "id": "sdk", "type": "external", "label": "pi SDK", "sublabel": "ModelRuntime", "pos": [1090, 150], "size": [180, 58] },
+    { "id": "res", "type": "backend", "label": "可注入资源", "sublabel": "tools·skills·知识", "pos": [570, 320], "size": [180, 58] },
+    { "id": "ext", "type": "security", "label": "护栏", "sublabel": "guard·approval", "pos": [830, 320], "size": [180, 58], "sources": [{ "path": "src/extensions/guard.ts" }] },
+    { "id": "backends", "type": "external", "label": "外部后端", "sublabel": "MCP·embeddings", "pos": [1090, 320], "size": [180, 58] },
+    { "id": "store", "type": "database", "label": "状态与检索", "sublabel": "sqlite·memory", "pos": [570, 460], "size": [180, 58] }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "前端", "wraps": ["web"] },
+    { "kind": "region", "label": "单进程运行时", "wraps": ["entry", "asm", "conv", "res", "store"] },
+    { "kind": "security-group", "label": "护栏", "wraps": ["ext"] },
+    { "kind": "region", "label": "外部", "wraps": ["sdk", "backends"] }
+  ],
+  "connections": [
+    { "id": "web-entry", "from": "web", "to": "entry", "label": "SSE · ws", "variant": "emphasis" },
+    { "id": "entry-asm", "from": "entry", "to": "asm", "label": "装配", "variant": "emphasis" },
+    { "id": "asm-conv", "from": "asm", "to": "conv", "label": "会话", "variant": "emphasis" },
+    { "id": "conv-sdk", "from": "conv", "to": "sdk", "label": "prompt", "variant": "emphasis" },
+    { "id": "conv-ext", "from": "conv", "to": "ext", "label": "tool_call", "variant": "emphasis", "fromSide": "bottom", "toSide": "top", "labelDy": 40 },
+    { "id": "asm-res", "from": "asm", "to": "res", "label": "注入", "variant": "dashed", "fromSide": "bottom", "toSide": "top", "labelDy": 40 },
+    { "id": "ext-res", "from": "ext", "to": "res", "label": "放行", "variant": "emphasis", "fromSide": "left", "toSide": "right" },
+    { "id": "res-store", "from": "res", "to": "store", "label": "SQL", "fromSide": "bottom", "toSide": "top", "labelDy": 26 },
+    { "id": "sdk-backends", "from": "sdk", "to": "backends", "label": "MCP", "fromSide": "bottom", "toSide": "top", "labelDy": 40 }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "入口（5 种传输）", "items": ["CLI（npm run dev）", "HTTP + SSE（npm run web）", "WebSocket（/ws 快照 + rev）", "Library（import buildAgent）", "RPC stdio（--mode rpc）"] },
+    { "dot": "emerald", "title": "装配与资源", "items": ["buildAgent(): model+prompts+tools+skills+knowledge+memory+database+extensions", "会话栈 SessionHub → ClientSession → SnapshotEmitter", "Retriever: KeywordRetriever | VectorRetriever"] },
+    { "dot": "rose", "title": "护栏", "items": ["guard 拦截危险 bash / 路径逃逸 / 敏感文件", "approval gate: deny 关不掉、超时按 deny", "工具看门狗"] },
+    { "dot": "violet", "title": "外部", "items": ["pi-coding-agent SDK + ModelRuntime", "providers · MCP · embeddings · 向量后端", "web/ React 复用 src/protocol.ts"] }
+  ]
+}
