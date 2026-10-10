@@ -173,7 +173,7 @@ export class McpClient {
         {
           protocolVersion: "2024-11-05",
           capabilities: {},
-          clientInfo: { name: "pi-starter", version: "0.3.0" },
+          clientInfo: { name: "pi-starter", version: "0.4.0" },
         },
         timeoutMs,
       );
