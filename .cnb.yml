@@ -1,30 +1,57 @@
 # CNB 流水线（cnb.cool）。GitHub Actions 在本仓因账号计费锁定跑不起来（见
-# pipeline.config.json 的 _localPublish说明），所以远端门禁由这里承担。
+# pipeline.config.json 的 _localPublish说明），所以远端门禁由这里承担——
+# 这里漏掉什么，就等于那件事在远端**永远没有**回归保护。
 #
-# 只做一件事：在 PR 与 main 的 push 上跑 `npm run verify`（typecheck + 死代码检查 +
-# 后端测试 + 前端 WS 客户端测试 + 运行时冒烟 + 构建 + 嵌入路径自检）。这条命令就是
-# scripts/verify.mjs / release.mjs 用的同一份门禁，不另立一套。
+# 对齐 .github/workflows/ci.yml 的作业划分：
+#   1. verify   —— typecheck + lint:unused + test + test:web + smoke + build + verify:embed
+#   2. e2e      —— 真进程 / 真 SIGKILL / 真重启恢复（Actions 有、这里原先没有）
+#   3. audit    —— 高危依赖通告闸门（同上）
+#   4. frontend —— lint + build，仅在 web/** 变更时触发
 #
-# 刻意**不**跑 `npm --prefix web run build`：那要先装 web/node_modules（两万多个文件），
-# 让每次 PR 多花数分钟；前端构建目前只在需要出包时由本地 `npm run ui:build` 负责。
-# 需要时再补一条独立 pipeline，别把这里的门禁拖慢。
+# 前三条串在同一条流水线里：它们都只依赖根的 node_modules，`npm ci` 一次即可。
+# 前端刻意拆成独立 Pipeline 并用 `ifModify` 收窄触发面——它要装 web/ 自己那两万多个文件，
+# 不该让每个后端 PR 都等它。
+
+.verify-chain: &verify-chain
+  name: verify
+  docker:
+    image: node:24
+  stages:
+    - name: install
+      script: npm ci
+    - name: verify
+      script: npm run verify
+    - name: e2e
+      # 真进程：握手 → 跑完一轮 → SIGKILL → 重启 → 断言会话从磁盘恢复。同进程的替身
+      # 抓不到"何时/如何写会话转录"这类 SDK 升级引入的变化。
+      script: npm run e2e
+    - name: audit
+      # 只有 5 个运行时依赖，把高危通告当闸门而不是"想起来才跑一次扫描"。
+      # 钉住公共 registry：部分镜像没实现 advisories 端点，会 404 让每次构建都红。
+      script: npm audit --audit-level=high --registry=https://registry.npmjs.org
+
+.frontend-check: &frontend-check
+  name: frontend
+  ifModify:
+    - web/**
+    # 前端把 src/protocol.ts 别名成 @pi/protocol，改后端协议同样要重编前端。
+    - src/protocol.ts
+  docker:
+    image: node:24
+  stages:
+    - name: install
+      script: npm ci --prefix web
+    - name: lint
+      script: npm --prefix web run lint
+    - name: build
+      # 只跑 lint + build：`check:official` 当前退出码为 1（官方 registry 组件已有 11 处
+      # 内容不同 / 3 处本地缺失），进门禁会把流水线变红——那是需要单独决策的对齐工作。
+      script: npm --prefix web run build
 
 main:
   pull_request:
-    - name: verify
-      docker:
-        image: node:24
-      stages:
-        - name: install
-          script: npm ci
-        - name: verify
-          script: npm run verify
+    verify: *verify-chain
+    frontend: *frontend-check
   push:
-    - name: verify
-      docker:
-        image: node:24
-      stages:
-        - name: install
-          script: npm ci
-        - name: verify
-          script: npm run verify
+    verify: *verify-chain
+    frontend: *frontend-check

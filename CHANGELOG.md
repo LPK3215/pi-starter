@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **agent 自己的内置工具也不许碰敏感文件（高危，与 P1-1 同一条铁律的另一半）**：`guard` 原先只判「路径在不在工作目录内」，而 `.env` **恰好就在**工作目录里——于是默认配置下 `read` 就能把模型 Key 读进上下文（`read` 在任何档位都可用；审批 `builtin:secret.access` 是 `ask`，而 `toolApprovalEnabled` 默认 `false` 时 ask 被压制为 allow）。现 `guard` 对 `read`/`write`/`edit`/`ls`/`grep`/`find` 追加敏感文件名拦截，**与 HTTP 文件服务共用同一份名单**（新模块 `src/secret-files.ts`）。
 - **sqlite 向量库落盘权限收紧（注释曾承诺 0o600，实际从未设置）**：`new DatabaseSync(path)` 按进程 umask 建文件（通常 0o644），而向量可能反映私有文档内容。现显式 `chmodSync(path, 0o600)`，与 `provider-keys.ts` / `setup.ts` 的做法一致（Windows 上尽力而为）。
 - **`denyNames` 的两个绕过点**：① 只看字面 basename —— root 内 `notes.txt -> .env` 的链接可读到 `.env`，现追加**真实目标 basename** 校验；② 更危险的是 `list()` 的**预览**走绝对路径直接读、不经过 `resolvePath`，条目一旦被列出就把 `.env` 内容当预览吐出——现在真实目标命中名单的条目**连列都不列**。
+- **【安全】审批应答 fail-open：非法 / 缺失的 `decision` 一律放行**：`ApprovalGate.resolve()` 原先只特判 `"deny"`，其余取值全部落进 allow 分支——而协议类型只是**编译期**约束，WS 上收到的是任意 JSON，于是 `{"decision":"x"}`（或漏字段、大小写不符写成 `"Allow"`）就能让 `ask` 档工具在无人同意时执行，审批形同虚设。现改为 fail-closed：只有 `allow` 与 `modify` 放行，其余全部按拒绝；`modify` 未带 `modifiedArgs` 也判拒绝（否则等于拿**原始危险参数**执行）。`deny` 仍是硬闸门，不受策略记忆影响，语义不变。
 
 ### Fixed
 
@@ -66,6 +67,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **日志面板的竞态**：① 被新请求取代的旧请求在 `finally` 里仍会 `setLoading(false)`，把新请求刚点亮的指示器提前熄掉（`abort` 的 rejection 是微任务）；② 2 秒一次的自动刷新会 abort 掉用户刚点的「加载更多」，表现为点了没反应；③ 快速先后点两条记录时，先发后到的链路响应会覆盖后选的条目；④ 「导出」「错误统计」在面板卸载后仍 `setState`（甚至弹出下载）。现用请求序号（只让最新一次写结果与 loading）、`appendInFlight` 让轮询避让、以及补上缺失的 `aliveRef` 守卫。
 - **导出谎报"已截断"**：`queryAllForExport` 把 `collected.length >= maxEntries` 探在 `hasMore` 之前——结果总数**恰好等于**上限且已无下一页时，一条都没丢却提示"结果超过导出上限，请缩小时间范围"。现先判是否还有下一页。
 
+#### 第四轮审计：协议边界与生命周期（审批应答 / WS 会话身份 / MCP 停机 / 日志句柄）
+
+- **同一 socket 二次 `hello` 换 `clientId` 会泄漏旧会话**：`attach()` 只 dispose **同 id** 的旧会话，而 socket 关闭时的 `dispose()` 又只按**最后**的 `clientId` 清理——于是换身份后，旧 `ClientSession` 及其全部会话订阅永远留在 `hub.sessions` 里，并且仍在往同一个 socket 推帧。现换身份前先 `hub.detach(旧 id)`。
+- **并发 `new_conversation` 能突破 `maxOpenConversations`**：容量检查（`evictForCapacity()`）与插入之间隔着 `await factory()`，而 WS 是 `void dispatch`、命令天然并行——两个并发新建都能先通过检查、再各自插入，把 `size` 抬到 `cap+1`（每个对话都持有一个完整 AgentSession）。现分配完成后再补收一次。
+- **【资源】MCP 握手中途 `dispose()` 留下孤儿子进程，并把工具注册回已停机的注册表**：子进程此时还没进 `connected`，`dispose()` 扫不到它；而握手完成后代码会继续往下走，`connected.set()` + `registry.register()` 把一个「已停机」的桥又填了回来（工具复活）。现 `connect()` 在注册前重查 `disposed` 并自己收尸，`McpClient.start()` 也拒绝在停机后拉起子进程。
+- **【功能】并发 `sync()` 会丢掉配置变更**：在途时到达的调用直接返回那一轮的 promise，而 `runSync()` 在入口就读了 `servers()`——握手最长 15s，期间改的配置**不会生效**，要等下一次变更才被发现。现记账并在跑完后补跑一轮（「两次并发 sync 只拉起一份子进程」这条既有保证不变）。
+- **读日志出错时不关句柄**：`readLogForward()` / `readGzAll()` 没有 `try/finally`，扫描途中文件被轮转 / 归档（I/O 报错）时 `readline` 与底层流都不会释放（`readLogBackward()` 一直有 `finally`，现对齐）。
+- **模型轮换静默失败**：`applyModel()` 把每条对话的切换失败**整个吞掉**（连日志都没有），UI 显示「已轮换」、部分后台对话却仍在跑旧模型，且零信号。现逐条告警，有失败时另推一条 notice。
+
+#### 第四轮审计（前端）：离线误清状态、后台帧抢占新会话身份
+
+- **离线时点「允许」会把卡片清掉**：`approvalResponse()` / `respondUi()` 不检查 `send()` 的返回值就清本地 `pendingApproval` / 反问列表——用户以为已放行，后端却从没收到（这一轮会一直卡在等审批、直到超时才被判拒绝），而卡片已经消失、无法重试。现仅在真正发出后才清；`respondUi()` 返回布尔，`HitlDialog` 据此决定是否把 notify 记成「已应答」。
+- **新建会话期间，后台会话的增量帧会抢占新会话身份**：`belongsToView()` 在 `pendingConversationId === null`（`new_conversation` 的目标 id 由服务端分配，此刻未知）时对**任意** `conversationId` 放行——抢跑的后台会话的 `snapshot_delta` 会先把身份占住，随后真正的新会话快照反而因 id 不匹配被丢弃，用户看到的是别人的对话、自己的消息被拼到对方缓冲上。现该状态下只放行权威全量 `snapshot`。
+- **流式缓冲跨轮残留**：`run_start` 没有清 `streamText` / `streamThinking`（后端在 `agent_start` 时是清的），上一轮的文本 / 思维链会与新轮的首个增量首尾相接。
+- **日志面板「错误统计」竞态**：快速连点时会先发后到的旧响应覆盖新结果（并可能写入 error）。现与 `runQuery()` 同口径加请求序号守卫。
+- **导出 `URL.revokeObjectURL` 过早**：紧挨着 `a.click()` 就 revoke，Firefox / Safari 对大 Blob 可能来不及取走 URL，表现为下载被取消或空文件。现延后到下一轮事件循环。
+
+#### 第五轮审计：性能与配额（热路径 / 无界增长）
+
+- **快照判断 `overBudget` 每周期按字符重算全部消息**：`planTrim()` 内部用**未缓存**的 `estimateConversationTokens()`，而 `buildState()` 每个快照周期都要调它一次（流式期间每 2s 一次，n = 会话总字符数）——调用方手上本来就有逐条 token 缓存。现给 `TrimPlanInput` 加可选 `estimatedTokens`，由持有缓存的调用方把总数传进来（与 `estimateConversationTokens()` 同一套公式，结论逐字一致）。
+- **`GET /db/notes` 无行数上限**：`notes` 可被 `insertNote` 无界写入，整表进响应会把内存与延迟放大成外部输入的函数。现与 `db.query()` 同口径限行。
+- **文件日志的保留策略只在启动时生效一次**：`sweepRetention()` 原先只在进程启动跑——长跑进程里 `retentionDays` 形同虚设，分段文件在同一进程生命周期内无限累积（单文件受 `maxSize` 限，**段数**不受限）。现每次轮转也清理。
+- **`search_knowledge` 的 `limit` 直接来自模型且无上界**：一句 `limit: 100000` 就能把整库正文拖进一轮上下文。现夹到 `[1, 50]`（非数值 / 越界一律回落默认值）。
+- **`toolStartTimes` 在 abort 时按 `toolCallId` 泄漏**：配对的 `tool_execution_end` 因打断而不来时条目就留在会话里。现与 `toolDurations` 同口径封顶（500，丢最早）。
+- **审批策略表按 sessionId 只增不减**：每个曾出现过的会话 key 留一条，随进程生命周期单调增长。现设上限 1024 并挤出最早的一条——代价顶多是那条早已关闭的会话重新问一次（`deny` 是硬闸门，不受策略影响）。
+
 ### Changed
 
 - **快照构建去掉一次全量重投影（P2-2）**：`planTrim()` 现在接受已投影好的消息数组，`buildState` 复用本次的 `allMessages`。原先每周期会把 `currentMessages()` 跑两遍（连带两遍会话树遍历），流式输出时每 60ms 重复一次。
@@ -74,6 +101,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`createSessionHubFromOptions()`（P3-5，非破坏式）**：新增具名参数入口并在 `server.ts` 使用；原 8 位置参数版 `createSessionHub()` 保留为转调具名形式的 `@deprecated` 适配器，**既有嵌入方零改动**（`lib.ts` 两个都导出）。
 - **CI 补上前端**：`web/` 此前在 CI 里**完全没有被覆盖**（既不 typecheck 也不 build，只有一个跑不起来的 lockfile 存在）。现新增独立的 `frontend` 作业（ubuntu 单作业，不进 9 路矩阵）：`npm ci --prefix web` → `lint` → `typecheck + build` → 上传 `web/dist`；并在矩阵作业的 Test 之后加 `npm run test:web`（复用根 tsx，**不需要 web/node_modules**——已实测在移走 `web/node_modules` 后 7/7 通过，所以不会给矩阵作业增加安装成本）。
   注意：**没有**把 `npm --prefix web run check:official` 放进 CI——它当前**退出码为 1**（官方 registry 组件已有 11 处内容不同 / 3 处本地缺失）。那是需要单独决策的对齐工作，直接进门禁会把流水线变红。
+- **`npm run verify` 补上 `lint:unused`**：README / CONTRIBUTING 一直宣称门禁含死代码检查，而脚本里其实只有 `typecheck + test + test:web + smoke + build + verify:embed`（CI 是**另外**单独跑那一步的）——文档在描述一条不存在的链条。现在脚本与文档一致：`typecheck → lint:unused → test → test:web → smoke → build → verify:embed`。
+- **`pipeline.config.json` 的远程声明漂移**：`remotes` 写着 `["origin","cnb"]`，但本仓只配置了 `origin`（CNB）——按原值发版必然卡在「推镜像」那一步失败。现改为实际值，并改掉那条与事实相反的注释（原文断言「origin = GitHub，cnb = CNB」）。
 
 ### Added
 
@@ -148,10 +177,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **事件翻译补全**：`auto_retry_end`（官方重试结算事件）之前被 `onEvent` 的 `default` 吐掉，现译成 notice（"重试成功（第 N 次恢复）" / "重试失败：..."）。
   - **文档修正**：`docs/官方SDK接口文档.md` §7 Settings 字段名按 `dist/*.d.ts` 校正（初版凭印象写的 `compaction.threshold`/`retry.maxAttempts`/`images.maxDimension` 等与真源不符，`disabledTools` 实为脚手架自设项），补全真实字段与覆盖状态。
   - **验证**：`config.test.ts` +2（新增字段/枚举校验）、`hooks.example.test.ts` +2（tool_result 脱敏）；已跑 `npm run verify:all`（含真进程 e2e：握手→跑完一轮→SIGKILL→重启恢复→脏索引过滤→工具调用配对恢复）全链绿——**332 测试 / 0 失败 / smoke 21/21 / build / 嵌入自检**。
+- **`.cnb.yml`（远端门禁）**：本仓此前**没有任何远端门禁在跑**——`git remote` 只有 `origin`（CNB），而 GitHub Actions 按 `pipeline.config.json` 自己的说明因账号计费锁定无法启动；也就是说前四轮所有加固在合并后都没有自动回归保护。现在 PR 与 `main` 的 push 都会跑：`verify`（含上面那条完整链）、`e2e`（真进程 / 真 SIGKILL / 真重启恢复）、`audit`（高危依赖闸门，钉住公共 registry——部分镜像没实现 advisories 端点会 404 让每次构建都红），以及仅在 `web/**` 或 `src/protocol.ts` 变更时才触发的 `frontend`（lint + build）。前端刻意拆成独立 Pipeline 并用 `ifModify` 收窄触发面：它要装自己那两万多个文件，不该让每个后端 PR 都等它。配置已过流水线校验器（YAML + 语义 + Schema）。
+- **`npm run probe:providers` / `npm --prefix web run probe:ws`**：`scripts/probe-providers.mjs` 此前是**没有任何入口**的孤儿脚本（`docs/项目分析报告.md` 自己也把它记为「半废弃」），`web/scripts/probe-ws.mjs` 也只有 `web/README.md` 里的一条裸 `node` 命令。现都补上 npm 入口。
+- **回归测试**：第四、五轮每条修复都配了断言——审批非法 `decision` 的 5 种取值（未知 / 空串 / 大小写不符 / `modify` 缺入参 / 合法放行与回传改写）、二次 `hello` 必须卸掉旧会话（`smoke-ws.mjs` 里走**真实 socket** 的断言）、MCP 停机后工具不得复活、并发 `sync` 必须补跑新配置、`estimatedTokens` 确实被采用且与自算同口径、审批策略表上限。后端 376 / 前端 11 / smoke 23。
 
 ### Documentation
 
 - **可视化资产与 README 同步**：`generate_architecture.mjs` 补上官方 RPC 入口、检索层、新 env（`PI_SCOPED_MODELS`/`PI_KNOWLEDGE_RETRIEVAL`/`PI_EMBEDDINGS_*`）；新增 `scripts/visualization/generate_retrieval.mjs` → `docs/knowledge-retrieval.svg`（可插拔 RAG 检索管线，后端类名从源码动态读取）；中英 README 架构图注与知识库节同步引用新图，章节结构一一对齐。徽章均为 shields.io 动态端点（版本自动跟随）；SVG 资产英文单版。
+- **文档事实性纠错（第五轮，逐条对照源码核过）**：`src/lib.ts` 导出的是 `setupPiAgentDir` 而不是 `setup`（照抄会把嵌入方带偏）；`/agent/health` 被写成「模型 / 技能 / 知识库 / 数据库探活」——那是 `/agent/info`，`/health` 只是存活探针，且 `/agent/health/ready`、`/agent/metrics` 与 `publish.yml` 都未被记录；`docs/前端调研.md` 把并不存在的 `queue_update` 列成服务端推送帧；`.env.example` 漏了 9 个运行时变量（`PI_HOST`、`PI_WS_PATH`、`PI_PROTOCOL_VERSION`、`PI_SNAPSHOT_INTERVAL_MS`、`PI_STREAMING_SNAPSHOT_INTERVAL_MS`、`PI_WS_HEARTBEAT_MS`、`PI_SNAPSHOT_RETRY_MS`、`PI_WS_BACKPRESSURE_BYTES`、`PI_WS_MAX_CONSECUTIVE_DROPS`）；FAQ / SECURITY / `.env.example` 三处都声称 `PI_API_KEY`「运行时不读」，与 `loadEnvFile` 会把整份 `.env` 灌进服务进程的事实相反（真正那道闸是 `child-env.ts` 对子进程的剔除）；各处陈旧的测试计数（中英 README、`docs/能力与边界.md`、`docs/项目分析报告.md`）与 `web/README.md` 的 registry 文件数（17 → 20）一并校正。
 
 ## [0.2.0] - 2026-10-09
 
