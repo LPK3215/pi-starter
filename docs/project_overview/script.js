@@ -11,8 +11,8 @@
      so no number on this page is hand-copied. Do not edit between the markers. */
   /* BEGIN:generated-metrics */
   var METRICS = {
-  "version": "0.4.1",
-  "releaseTag": "v0.4.1",
+  "version": "0.4.2",
+  "releaseTag": "v0.4.2",
   "license": "MIT",
   "copyright": "2026 LPK3215",
   "repoSlug": "github.com/LPK3215/pi-starter",
