@@ -20,10 +20,12 @@
  *   node scripts/check-audit.mjs                    # 门禁：登记过的放过，新增的判失败
  *   node scripts/check-audit.mjs --write-baseline   # 认下当前这批通告（必须在 PR 里可见地提交）
  *   node scripts/check-audit.mjs --tolerate-network # 网络不可达时按"跳过"处理并退出 0（CI 用）
+ *                                                  # 注意：npm 自身起不动**不**属于这一类，仍退 2
  */
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { npmInvocation, resolveNpm } from "../../scripts/npm-invocation.mjs";
 
 const REGISTRY = "https://registry.npmjs.org";
 const BASELINE = fileURLToPath(new URL("./audit-baseline.json", import.meta.url));
@@ -34,16 +36,29 @@ const writeBaseline = flags.includes("--write-baseline");
 const tolerateNetwork = flags.includes("--tolerate-network");
 
 /**
+ * npm 的定位与调用方式见 `scripts/npm-invocation.mjs`，这里只说为什么不能省掉那次探测：
+ * Windows 上 `npm` 是 `npm.cmd`，不经 shell 就 spawn 不了（实测 ENOENT）；而**加了** shell 之后，
+ * 「命令不存在」会被 cmd.exe 的退出码 1 伪装成一次正常的审计失败。两种错法这条闸门都犯过：
+ * 恒红，以及把坏掉的闸门当成"今天没网"退出 0（后者更糟，因为它一边不检查一边自称跳过）。
+ * 所以先探 `npm --version`，探不通就是**闸门坏了**，与依赖、与网络都无关。
+ */
+const npm = resolveNpm();
+
+/**
  * 跑一次 npm audit --json。
  * `--omit=dev` 时只审计生产依赖（用于「生产依赖必须为 0」那条硬门）。
  * 退出码：npm audit 有漏洞时返回非 0，这是**预期**的（我们靠 JSON 判断，不靠退出码）。
  */
 function runAudit({ omitDev }) {
+  if (!npm) {
+    return { unavailable: "找不到可用的 npm（试过 node 同侧的 npm-cli.js 与 PATH 上的 npm）" };
+  }
   const args = ["audit", "--json", `--registry=${REGISTRY}`];
   if (omitDev) args.push("--omit=dev");
+  const { cmd, args: argv, shell } = npmInvocation(npm, args);
   let stdout;
   try {
-    stdout = execFileSync("npm", args, { cwd: WEB_ROOT, encoding: "utf8", maxBuffer: 32 * 1024 * 1024 });
+    stdout = execFileSync(cmd, argv, { cwd: WEB_ROOT, encoding: "utf8", maxBuffer: 32 * 1024 * 1024, shell });
   } catch (err) {
     stdout = err.stdout;
     // 网络故障 / registry 端点异常时 stdout 可能不是 JSON；交给调用方判空。
@@ -100,9 +115,23 @@ function loadBaseline() {
   }
 }
 
-const full = runAudit({ omitDev: false });
-if (full.error) {
-  const msg = `无法完成 npm audit（网络或 registry 故障）：\n  ${full.error}`;
+/**
+ * 失败分两类，只有第二类可以被 `--tolerate-network` 放过：
+ *   · `unavailable`（npm 压根没起来）→ 闸门坏了，退出 2，**不接受跳过**。
+ *     上一版把这一类并进"网络故障"，于是 Windows 上 `check:audit:ci` 恒退 0：
+ *     一条根本不跑的闸门，还打印着"没验证不等于验证通过"。
+ *   · `error`（跑完了但拿不到 JSON）→ 网络 / registry 端点问题，按跳过退出 0 并说明。
+ */
+function handleAuditFailure(result, what) {
+  if (result.unavailable) {
+    console.error(
+      `\n[audit] ${what}：npm 无法执行 —— ${result.unavailable}\n` +
+        "这是闸门跑不起来，不是「今天没网」，也不是「依赖有漏洞」。按失败退出 2。"
+    );
+    process.exit(2);
+  }
+  if (!result.error) return;
+  const msg = `无法完成${what}：\n  ${result.error}`;
   if (tolerateNetwork) {
     console.error(`\n${msg}\n（--tolerate-network：按"跳过"处理，退出码 0 —— 没验证不等于验证通过。）`);
     process.exit(0);
@@ -111,16 +140,11 @@ if (full.error) {
   process.exit(2);
 }
 
+const full = runAudit({ omitDev: false });
+handleAuditFailure(full, "npm audit（全量）");
+
 const prod = runAudit({ omitDev: true });
-if (prod.error) {
-  const msg = `无法完成生产依赖审计：\n  ${prod.error}`;
-  if (tolerateNetwork) {
-    console.error(`\n${msg}\n（--tolerate-network：按"跳过"处理，退出码 0。）`);
-    process.exit(0);
-  }
-  console.error(`\n${msg}`);
-  process.exit(2);
-}
+handleAuditFailure(prod, "生产依赖审计（--omit=dev）");
 
 const advisories = rootAdvisories(full.report);
 const prodAdvisories = rootAdvisories(prod.report);
