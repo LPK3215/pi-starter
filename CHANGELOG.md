@@ -16,6 +16,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **不假装能搜**：后端没有 `search()` 时**不注册** `web_search`（与 `rag:smoke` 打印 SKIP 同一原则）；默认的 DuckDuckGo 无 JS 版解析是 best-effort，抽不到就如实说「没有命中」。
   - 能力标签 `net` → `inferRisk` 判 `medium`；与 `exec` 同口径**不进 `allTools`**，开了才登记进 `ToolRegistry`。`SECURITY.md` / `.env.example` / 两份 README 都已注明「未被缓解的部分」（URL 由模型决定，DNS 解析与建连之间存在 TOCTOU 窗口）。
 
+- **`setup.ts` 与资源路由的测试**（49 个测试文件 / 467 用例，覆盖率 92.53% → **92.66%**）：
+  - `setup.test.ts` 扩充 6 例（`setup.ts` 82% → 86.65%）：`ensureEnvFile` 的三条路径（无 `.env` 时复制并 **0600**、已有 `.env` 不覆盖、两者都缺则明确报错）、多 provider 时**没找到密钥的只进 `authKeyMissing` 且不落盘**而默认 provider 缺密钥才致命、`PI_API_KEY_<PROVIDER>` 优先且名字里的 `-` 换算成 `_`、`auth.json` 0600 / agent 目录 0700 的权限。其中复制 `.env` 那条测试用 `withEnvSnapshot` 包住（`setupPiAgentDir` 会 `loadEnvFile()` 写 `process.env`，不还原会污染同进程其它用例）。
+  - `app.test.ts` 扩充 5 例（`http/routes.ts` 88% → 89.3%）：`/skills` 列表不带正文而详情读磁盘正文、**`SKILL.md` 读不出来时响应里不能出现绝对路径**、`/knowledge` 列表/搜索/详情的路由顺序（`/knowledge/search` 不能被 `:name` 抢走）、`/prompt-templates` 的 `argumentHint` 只在有值时才出现、以及**依赖全挂时 liveness 仍 200 而 readiness 变 503 并逐项给原因**。
+
 - **进程执行的工具层测试**（`src/tools/exec.test.ts`，13 例，`exec.ts` 79% → **100%**）：`src/exec/runner.ts` 有测试，但**工具层完全没有** —— 也就是「参数怎么翻译成 runner 调用」与「结果怎么呈现给模型」这两段从未被执行过，而它们恰好是模型直接看到的部分。覆盖：只有 coding 档且给了环境才装配（`off` / `readonly` / 缺环境一律空）、`exec_jobs` 的能力必须是手写的 `shell.observe`（按名字推断会推错）、非零退出与超时必须标成 `isError`、后台任务立即返回 id 并提示下一步用哪个工具、输出截断必须说出来、**非法 `timeout_seconds` 在调用 runner 之前就被拦下**（断言 `runs.length === 0`）、`AbortSignal` 原样透传、超长命令在列表里截断而不是撑爆一行。
 - **联网抓取的真实路径测试**（`web.test.ts` 11 → 23 例，`web.ts` 77% → **92.95%**）：此前只测了假后端，`fetchPage` 里的字节上限、重定向、超时、content-type 判定**全都没被真实执行过**。现在起本地 HTTP 服务跑真实抓取，覆盖：HTML 转纯文本 / JSON 不被拍平、正文恰好等于上限时 `truncated=false`、超限截断、404 与 `image/png` 翻成可读 `WebError`、正常跟随重定向且**每一跳都过策略**、302 到被禁主机时请求不发出、超过 `MAX_REDIRECTS` 即停、超时翻成 `timeout`、注入放行策略后非 http/https 仍被拒、重定向目标是非法 URL 时报错而不是崩在 `new URL`。
 - **WS 分派层的畸形输入测试**（`integration.test.ts`，`ws.ts` 76% → **83.42%**）：这一层此前只有跨进程的 `npm run smoke` 覆盖（那些覆盖率不进 `npm test` 统计），而它最容易「一个坏输入打死整条连接」。覆盖：`prompt` 带 `data:` 前缀 / 非白名单 MIME / 超过 4 张图片、`set_label`·`edit_message`·`rollback_conversation` 缺 `entryId`、`rename_conversation` 缺 `title`、打开或删除不存在的会话、非法思考档位、未知命令名（走「未注册命令」分支并带提示，而不是静默丢弃）、空串与纯空白 `type` 在协议层被拒 —— 以及**一连串畸形输入之后 `ping` 仍必须得到 `pong`**。
@@ -43,6 +47,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`npm run setup` 复制出来的 `.env` 是 0644（世界可读），而它正是要填 API Key 的文件**：`ensureEnvFile` 用 `copyFileSync(.env.example, .env)`，而 `copyFileSync` 会把**源文件的权限位**一并带过来（实测：源 644 → 副本 644）。本项目对 `auth.json`（0600）、向量库（0600）、provider-keys（0600）都坚持最小权限，`.env` 不该例外。现在复制后显式 `chmod 0600`（Windows 上尽力而为，与 `writeJsonFile` 同一口径），并加回归用例断言权限位。
 - **联网抓取的重定向会在校验之前就把请求打到下一跳（`web_fetch` 的 SSRF 面）**：原实现用 `fetch(..., { redirect: "follow" })`，等响应回来才检查 `response.url` —— 也就是 `302` 到 `10.0.0.1` 时**请求已经发出去了**，事后检查只能阻止「把内容读回来」，挡不住「内网端点被触发」（对带副作用的 GET 就是真实影响）。现在改为 `redirect: "manual"` 自己跟，**每一跳都在发请求之前过一遍 host 策略**，共用一个超时，并用 `MAX_REDIRECTS = 5` 封顶。新增回归用例：公网点 `302` 到被禁主机时，**被禁主机收到 0 个请求**。
 - **`readCapped` 的差一错误：正文恰好等于上限时误报「已截断」**：判断写的是 `total + value.length >= maxBytes`，于是长度正好等于上限的正文被标成 `truncated: true` —— 一个字都没丢，工具却对模型说「正文已按上限截断」。改成 `>`，并加回归用例。
 - **`urlGuard` 可注入**：`HttpWebClient` 新增 `urlGuard?: UrlGuard`（默认 `assertPublicHost`），内网部署 / 走自有出口代理时可替换。**协议校验（只允许 http/https）刻意不经过它**，所以换 host 策略也换不掉这一条 —— 有对应用例锁定。

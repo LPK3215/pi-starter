@@ -154,6 +154,144 @@ test("GET /health/ready 做依赖深度探针", async () => {
   }
 });
 
+/* ────────────────────── 资源目录与探针降级 ────────────────────── */
+// routes.ts 里的资源路由（/skills/:name、/knowledge*、/prompt-templates*）此前没有测试 ——
+// 它们决定「人和模型看到的技能/知识/模板目录对不对」，而详情路由还要读磁盘。
+
+test("资源路由：/skills 列表与详情；列表不带正文，详情读磁盘，找不到即 404", async () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-skills-"));
+  mkdirSync(join(root, "summarize"));
+  writeFileSync(
+    join(root, "summarize", "SKILL.md"),
+    "---\nname: summarize\ndescription: 归纳长文本\n---\n# 正文\n三步走。\n",
+  );
+  const skills = loadSkillsFromDirs([root]);
+  const { app, dispose } = createApp({ agent: fakeAgent({ skills }), staticDir: false });
+  const { url, close } = await listen(app);
+  try {
+    const list = await json(`${url}/skills`);
+    assert.equal(list.status, 200);
+    const items = (list.body as { skills: Array<Record<string, unknown>> }).skills;
+    assert.equal(items[0]?.name, "summarize");
+    assert.equal(items[0]?.description, "归纳长文本");
+    assert.match(String(items[0]?.location), /SKILL\.md$/);
+    assert.ok(!("body" in (items[0] ?? {})), "列表不该带正文（正文只走详情路由）");
+
+    const detail = await json(`${url}/skills/summarize`);
+    assert.equal(detail.status, 200);
+    assert.match(String((detail.body as { skill: { body: string } }).skill.body), /三步走/);
+
+    assert.equal((await json(`${url}/skills/nope`)).status, 404);
+  } finally {
+    await close();
+    dispose();
+  }
+});
+
+test("资源路由：SKILL.md 读不出来时**不能把绝对路径泄漏给客户端**", async () => {
+  // 注释里写明这条取舍：读不到 SKILL.md 是内部文件系统问题、不是客户端错误，
+  // 所以让它走统一错误处理（详情只进日志，响应给通用文案）。
+  const missingDir = join(tmpdir(), "pi-skills-missing-dir");
+  const skill = { name: "broken", description: "d", filePath: join(missingDir, "SKILL.md") };
+  const { app, dispose } = createApp({ agent: fakeAgent({ skills: [skill as never] }), staticDir: false });
+  const { url, close } = await listen(app);
+  try {
+    const res = await json(`${url}/skills/broken`);
+    assert.equal(res.status, 500);
+    assert.ok(!res.text.includes("pi-skills-missing-dir"), `响应里不能出现绝对路径：${res.text}`);
+  } finally {
+    await close();
+    dispose();
+  }
+});
+
+test("资源路由：/knowledge 列表、搜索、详情，且 /knowledge/search 不会被 :name 抢走", async () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-kb-"));
+  writeFileSync(join(root, "faq.md"), "---\ntitle: 常见问题\ndescription: 怎么切换模型\n---\nPOST /model\n");
+  const knowledge = loadKnowledgeFromDirs([root]);
+  const { app, dispose } = createApp({ agent: fakeAgent({ knowledge }), staticDir: false });
+  const { url, close } = await listen(app);
+  try {
+    const list = await json(`${url}/knowledge`);
+    assert.equal((list.body as { knowledge: Array<{ name: string; title: string }> }).knowledge[0]?.name, "faq");
+    assert.equal((list.body as { knowledge: Array<Record<string, unknown>> }).knowledge[0]?.body, undefined);
+
+    assert.equal((await json(`${url}/knowledge/search`)).status, 400, "缺 q 必须 400");
+    // 路由顺序回归：`/knowledge/search` 注册在 `/knowledge/:name` 之前，否则这里会 404。
+    const search = await json(`${url}/knowledge/search?q=切换模型`);
+    assert.equal(search.status, 200);
+    assert.equal((search.body as { hits: unknown[] }).hits.length, 1);
+
+    const doc = await json(`${url}/knowledge/faq`);
+    assert.match(String((doc.body as { doc: { body: string } }).doc.body), /POST \/model/);
+    assert.equal((await json(`${url}/knowledge/nope`)).status, 404);
+  } finally {
+    await close();
+    dispose();
+  }
+});
+
+test("资源路由：/prompt-templates 列表与详情，argumentHint 只在有值时才出现", async () => {
+  const templates = [
+    { name: "review", description: "走查", content: "请走查这段代码", argumentHint: "<path>" },
+    { name: "plain", description: "无提示", content: "正文" },
+  ];
+  const { app, dispose } = createApp({ agent: fakeAgent({ promptTemplates: templates as never }), staticDir: false });
+  const { url, close } = await listen(app);
+  try {
+    const list = (await json(`${url}/prompt-templates`)).body as {
+      promptTemplates: Array<Record<string, unknown>>;
+    };
+    assert.equal(list.promptTemplates.length, 2);
+    assert.equal(list.promptTemplates[0]?.argumentHint, "<path>");
+    assert.ok(!("argumentHint" in (list.promptTemplates[1] ?? {})), "没提示时不该塞一个空字段");
+    assert.ok(!("body" in (list.promptTemplates[0] ?? {})), "列表不带正文");
+
+    const detail = (await json(`${url}/prompt-templates/review`)).body as {
+      promptTemplate: { body: string; argumentHint?: string };
+    };
+    assert.equal(detail.promptTemplate.body, "请走查这段代码");
+    assert.equal(detail.promptTemplate.argumentHint, "<path>");
+    assert.equal((await json(`${url}/prompt-templates/nope`)).status, 404);
+  } finally {
+    await close();
+    dispose();
+  }
+});
+
+test("探针：依赖全挂时 liveness 仍 200、readiness 变 503 并逐项给原因", async () => {
+  const agent = fakeAgent();
+  // 模拟「模型没选出来」+「数据库连不上」：两个硬依赖都不可用。
+  (agent as unknown as { model: unknown }).model = undefined;
+  (agent.database as unknown as { ping: () => never }).ping = () => {
+    throw new Error("database is down");
+  };
+  const { app, dispose } = createApp({ agent, staticDir: false });
+  const { url, close } = await listen(app);
+  try {
+    // liveness 刻意不碰模型运行时：provider 挂了也不该让编排器重启一个健康的进程。
+    const live = await json(`${url}/health`);
+    assert.equal(live.status, 200);
+
+    const ready = await json(`${url}/health/ready`);
+    assert.equal(ready.status, 503);
+    const body = ready.body as {
+      ok: boolean;
+      checks: Record<string, { ok: boolean; detail?: string }>;
+    };
+    assert.equal(body.ok, false);
+    assert.equal(body.checks.model?.ok, false);
+    assert.match(String(body.checks.model?.detail), /no model selected/);
+    assert.equal(body.checks.database?.ok, false);
+    assert.match(String(body.checks.database?.detail), /database is down/);
+    // 探针不公开内部路径/连接串是既有约定，这里顺带确认错误文案就是原样 message。
+    assert.ok(body.checks.knowledge?.ok === true, "知识库是本地数组，仍然可用");
+  } finally {
+    await close();
+    dispose();
+  }
+});
+
 test("GET /metrics 暴露运行时指标，支持 Prometheus 文本格式", async () => {
   const { app, dispose } = createApp({ agent: fakeAgent(), staticDir: false });
   const { url, close } = await listen(app);

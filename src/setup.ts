@@ -176,6 +176,15 @@ function ensureEnvFile(cwd: string): boolean {
     throw new Error(`缺少 ${envPath}，也没有 .env.example 可复制。`);
   }
   copyFileSync(examplePath, envPath);
+  // `copyFileSync` 会把**源文件的权限位**一并带过来，而仓库里的 `.env.example` 是 0644 ——
+  // 也就是复制出来的 `.env` 是「世界可读」，可它正是用户接下来要填 API Key 的地方。
+  // 本项目对 auth.json（0600）/ 向量库（0600）/ provider-keys（0600）都坚持最小权限，
+  // 这里不能例外。Windows 上 chmod 是尽力而为，与 `writeJsonFile` 同一口径。
+  try {
+    chmodSync(envPath, 0o600);
+  } catch {
+    /* 尽力而为 */
+  }
   return true;
 }
 
