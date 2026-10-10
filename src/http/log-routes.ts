@@ -294,7 +294,11 @@ async function scanPage(
   if (files.length === 0) return { entries: [], hasMore: false };
 
   let startIdx = 0;
-  let startPos = beginPos(q.order, false);
+  // 首个候选文件**本身可能就是 `.gz`**（只剩归档、或时间/级别筛选把较新的 `.log` 排除了）。
+  // 这里必须按真实文件名判 gz：原先写死 `false`，于是 desc 时带着 `.log` 语义的 `-1`
+  // 进了 gz 分支 —— `pageFromFile` 对 gz 用的是 `all.slice(fromPos, fromPos + want)`，
+  // 负数起点会**从尾部算起**，结果是「只返回最后一条」甚至「返回空」，而日志明明在库里。
+  let startPos = beginPos(q.order, files[0]!.endsWith(".gz"));
   if (q.cursor) {
     let at = files.indexOf(q.cursor.file);
     let pos = q.cursor.pos;

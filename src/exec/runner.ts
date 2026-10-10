@@ -279,16 +279,19 @@ export class ExecEnvironment {
   private wire(job: Job, child: ChildProcess, timeoutMs: number, signal: AbortSignal | undefined): void {
     const stdoutLeft = { n: MAX_OUTPUT_BYTES };
     const stderrLeft = { n: MAX_OUTPUT_BYTES };
+    // 每条流一个解码器：跨块保留不完整的 UTF-8 尾巴（见 `take` 的说明）。
+    const stdoutDecoder = new TextDecoder("utf-8");
+    const stderrDecoder = new TextDecoder("utf-8");
 
     child.stdout?.on("data", (chunk: Buffer | string) => {
-      job.stdout = take(job, job.stdout, asBuffer(chunk), stdoutLeft);
+      job.stdout = take(job, job.stdout, asBuffer(chunk), stdoutLeft, stdoutDecoder);
     });
     child.stderr?.on("data", (chunk: Buffer | string) => {
-      job.stderr = take(job, job.stderr, asBuffer(chunk), stderrLeft);
+      job.stderr = take(job, job.stderr, asBuffer(chunk), stderrLeft, stderrDecoder);
     });
 
     child.once("error", (err: Error) => {
-      job.stderr = take(job, job.stderr, Buffer.from(err.message), stderrLeft);
+      job.stderr = take(job, job.stderr, Buffer.from(err.message), stderrLeft, stderrDecoder);
       if (job.status === "running") job.status = "exited";
       this.settle(job);
     });
@@ -303,10 +306,13 @@ export class ExecEnvironment {
     };
     child.stdout?.once("close", () => {
       stdoutClosed = true;
+      // flush 解码器里挂起的尾巴（正常结束的流这里为空；不完整的字符只可能来自截断）。
+      job.stdout += stdoutDecoder.decode();
       maybeSettle();
     });
     child.stderr?.once("close", () => {
       stderrClosed = true;
+      job.stderr += stderrDecoder.decode();
       maybeSettle();
     });
     child.once("exit", (code) => {
@@ -453,7 +459,15 @@ function asBuffer(chunk: Buffer | string): Buffer {
   return typeof chunk === "string" ? Buffer.from(chunk) : chunk;
 }
 
-function take(job: Job, current: string, chunk: Buffer, left: { n: number }): string {
+/**
+ * 把一个 chunk 追加到当前输出，并遵守字节上限。
+ *
+ * **必须用 `TextDecoder` 而不是 `chunk.toString("utf8")`**：管线每次交付的字节数不对齐到
+ * 字符边界，一个 UTF-8 字符（中文 3 字节）被切开时，前后两半各自解码就会各吐一个
+ * `U+FFFD` —— 而原文字符一个都没丢。`{ stream: true }` 会把不完整的尾巴留下来，
+ * 等下一个 chunk 补上；流结束时由调用方 `decode()`（不带参数）flush。
+ */
+function take(job: Job, current: string, chunk: Buffer, left: { n: number }, decoder: TextDecoder): string {
   if (chunk.length === 0) return current;
   if (left.n <= 0) {
     job.truncated = true;
@@ -463,10 +477,12 @@ function take(job: Job, current: string, chunk: Buffer, left: { n: number }): st
     job.truncated = true;
     const slice = chunk.subarray(0, left.n);
     left.n = 0;
-    return current + slice.toString("utf8");
+    // 截断处落在字符中间是**预期的**（我们确实只保留了前 N 字节），
+    // 所以这里也带 stream 标志：不完整的尾巴留待 flush，而不是当场吐一个替换字符。
+    return current + decoder.decode(slice, { stream: true });
   }
   left.n -= chunk.length;
-  return current + chunk.toString("utf8");
+  return current + decoder.decode(chunk, { stream: true });
 }
 
 /** 杀掉 shell 以及它拉起来的子进程。失败就当对方已经不在了。 */

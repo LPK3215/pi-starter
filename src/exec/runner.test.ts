@@ -103,6 +103,30 @@ test("子进程的 cwd 是工作区内的真实目录", async () => {
   }
 });
 
+test("多字节输出被分块边界切开时不该出现替换字符（U+FFFD）", async () => {
+  const root = workspace();
+  const env = new ExecEnvironment({ workspace: root });
+  try {
+    // 确定性复现：把 9000 字节的中文按 4096 字节切开分两次写。
+    // 4096 不是 3 的倍数，所以第一次写的末尾正好是一个汉字的中间 —— 两个 chunk 各自
+    // 单独 `toString("utf8")` 就会各吐一个 U+FFFD，而原文字符其实一个都没丢。
+    const view = await env.run({
+      command: nodeEval(
+        "const b=Buffer.from('中'.repeat(3000));" +
+          "process.stdout.write(b.subarray(0,4096));" +
+          "setTimeout(()=>process.stdout.write(b.subarray(4096)),50)",
+      ),
+    });
+    assert.equal(view.exitCode, 0);
+    assert.equal(view.truncated, false, "9000 字节没到 64KB 上限，不该被截断");
+    assert.equal(view.stdout.includes("\uFFFD"), false, "分块边界不该解码出替换字符");
+    assert.equal(view.stdout, "中".repeat(3000), "字符必须逐字完整");
+  } finally {
+    env.dispose();
+    remove(root);
+  }
+});
+
 test("子进程不继承模型密钥，但保留其余环境（PATH 等）", async () => {
   const root = workspace();
   const env = new ExecEnvironment({ workspace: root });

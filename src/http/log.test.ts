@@ -9,6 +9,7 @@
  */
 import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync } from "node:fs";
+import { gzipSync } from "node:zlib";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -206,4 +207,52 @@ test("pagination is lossless past the old 50k cap and stable (no dup/skip)", asy
   assert.equal(new Set(seen).size, N, "no duplicates across pages");
   assert.deepEqual(seen.slice(0, 3), [0, 1, 2], "asc order preserved");
   assert.equal(seen.at(-1), N - 1, "reaches the true last line");
+});
+
+/**
+ * 回归：**只剩 .gz 归档**时 desc 查询必须给出内容。
+ *
+ * `scanPage` 在无游标时把首个文件的 isGz 写死成 `false`，于是当第一个候选文件是归档时，
+ * `pageFromFile` 走 gz 分支却拿到 `fromPos = -1` → `all.slice(-1, -1 + limit)`。
+ * `slice` 的负数起点会从尾部算起，结果是「只返回最后一条」甚至「返回空」——
+ * 用户看到的是「日志明明在，查询却是空的」。
+ */
+test("只剩 .gz 归档时 desc 查询不能返回空页（首个候选文件是 gz 的回归）", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "pi-logq-gz-"));
+  const day = "2026-09-30";
+  const lines = [1, 2, 3].map((i) =>
+    JSON.stringify({ ts: `${day}T0${i}:00:00.000Z`, level: "error", msg: `m${i}`, component: "x" }),
+  );
+  writeFileSync(join(dir, `${LOG_BASE_NAME}-${day}.000.log.gz`), gzipSync(`${lines.join("\n")}\n`));
+  const app = buildApp(dir);
+  const { url, close } = await listenTestServer(app);
+  try {
+    const desc = (await (await fetch(`${url}/logs?order=desc`)).json()) as {
+      count: number;
+      hasMore: boolean;
+      entries: Array<{ msg: string }>;
+    };
+    assert.equal(desc.count, 3, "只剩归档时 desc 也必须返回全部命中");
+    assert.deepEqual(desc.entries.map((e) => e.msg), ["m3", "m2", "m1"], "desc 必须新→旧");
+    assert.equal(desc.hasMore, false);
+
+    const asc = (await (await fetch(`${url}/logs?order=asc`)).json()) as { entries: Array<{ msg: string }> };
+    assert.deepEqual(asc.entries.map((e) => e.msg), ["m1", "m2", "m3"], "asc 必须是旧→新");
+
+    // 分页也要无损：limit=2 时第一页 2 条 + hasMore，第二页用游标拿剩下 1 条。
+    const page1 = (await (await fetch(`${url}/logs?order=desc&limit=2`)).json()) as {
+      entries: Array<{ msg: string }>;
+      nextCursor?: string;
+      hasMore: boolean;
+    };
+    assert.deepEqual(page1.entries.map((e) => e.msg), ["m3", "m2"]);
+    assert.equal(page1.hasMore, true);
+    assert.ok(page1.nextCursor, "有下一页时必须给游标");
+    const page2 = (await (
+      await fetch(`${url}/logs?order=desc&limit=2&cursor=${encodeURIComponent(page1.nextCursor!)}`)
+    ).json()) as { entries: Array<{ msg: string }> };
+    assert.deepEqual(page2.entries.map((e) => e.msg), ["m1"], "翻页不能丢条目");
+  } finally {
+    await close();
+  }
 });
