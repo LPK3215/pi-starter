@@ -17,6 +17,15 @@
 
 基于 [pi-agent](https://github.com/earendil-works/pi) SDK 的 **Agent 脚手架**：拿到就能跑，往上加工具、加扩展、改人设，就变成一个垂直 Agent。
 
+## 在线体验
+
+无需安装，浏览器直接打开（GitHub Pages 托管）：
+
+- 🌐 **全景观览页** — 交互式单页全景（架构 / 技术栈 / 能力 / 路由 / 质量）：<https://lpk3215.github.io/pi-starter/>
+- 🕸️ **交互式架构图** — 可点击缩放 / 搜索 / 聚焦（主干图、全景图、业务流程、`POST /chat` 时序、知识与记忆数据流）：<https://lpk3215.github.io/pi-starter/archify/core-architecture.html>
+
+概览页的 **Interactive** 区块链向五张图，每张图也链回概览页。
+
 ## 架构总览
 
 <p align="center">
@@ -665,7 +674,7 @@ server.listen(3000);
 | [`README.md`](README.md) | 英文主版（同章节 1∶1 对齐）；快速开始、二次开发都在里面 |
 | [`docs/project_overview/index.html`](docs/project_overview/index.html) | 整个项目的交互式全景观览页（架构 / 技术栈 / 能力 / 路由 / 质量）。其中的数值、文件清单、路由表、门禁列表由 `npm run docs:overview` 从源码生成；已由 GitHub Pages 上线：<https://lpk3215.github.io/pi-starter/> |
 | [`docs/project_overview/project_card.html`](docs/project_overview/project_card.html) | 同一份内容的「可分享单图」版：800px 长图名片，自带一键导出 2x PNG。数值出自同一个生成器，所以两份页面不可能对不上 |
-| [`docs/archify/`](docs/archify/core-architecture.html) | 交互式、自包含的架构图（可点击缩放 / 搜索 / 聚焦）：`core-architecture`、全景 `architecture-panorama`、`workflow-panorama`、`sequence-panorama`（`POST /chat`）、`dataflow-panorama`。可由 `scripts/visualization/archify/` 下的 typed JSON 重生成；受门禁的静态 `docs/*.svg` 仍为真源 |
+| [`docs/archify/`](https://lpk3215.github.io/pi-starter/archify/core-architecture.html) | 交互式、自包含的架构图（可点击缩放 / 搜索 / 聚焦）：`core-architecture`、全景 `architecture-panorama`、`workflow-panorama`、`sequence-panorama`（`POST /chat`）、`dataflow-panorama`。线上：<https://lpk3215.github.io/pi-starter/archify/core-architecture.html>（从概览页 Interactive 区块进入，并可链回概览页）。可由 `scripts/visualization/archify/` 下的 typed JSON 重生成；受门禁的静态 `docs/*.svg` 仍为真源 |
 
 **查接口：它对外到底暴露什么**
 

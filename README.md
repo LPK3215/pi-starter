@@ -17,6 +17,15 @@
 
 An **agent scaffold** built on the [pi-agent](https://github.com/earendil-works/pi) SDK: clone it and it runs; add tools, extensions, or a new persona, and it becomes a vertical agent.
 
+## Live demo
+
+No install needed — open these in a browser (served from GitHub Pages):
+
+- 🌐 **Project overview** — interactive one-page panorama (architecture, stack, capabilities, routes, quality): <https://lpk3215.github.io/pi-starter/>
+- 🕸️ **Interactive architecture diagrams** — click to zoom / search / focus (core trunk, full panorama, request workflow, `POST /chat` sequence, knowledge & memory dataflow): <https://lpk3215.github.io/pi-starter/archify/core-architecture.html>
+
+The overview page's **Interactive** section links out to all five diagrams, and every diagram links back to the overview.
+
 ## Architecture
 
 <p align="center">
@@ -679,7 +688,7 @@ Grouped by the question you are trying to answer. Read this index first, then pi
 | [`README.zh-CN.md`](README.zh-CN.md) | Chinese companion, mirrored section by section; Quick Start and secondary development live there too |
 | [`docs/project_overview/index.html`](docs/project_overview/index.html) | Interactive one-page panorama of the whole project (architecture, stack, capabilities, routes, quality). Its numbers, file lists, route table and gate list are generated from source by `npm run docs:overview`. Published live on GitHub Pages: <https://lpk3215.github.io/pi-starter/> |
 | [`docs/project_overview/project_card.html`](docs/project_overview/project_card.html) | The same story as one shareable image: an 800 px card that exports itself to a 2x PNG. Its numbers come from the same generator, so the two pages cannot disagree |
-| [`docs/archify/`](docs/archify/core-architecture.html) | Interactive, self-contained architecture views (click to zoom / search / focus): `core-architecture`, full `architecture-panorama`, `workflow-panorama`, `sequence-panorama` (`POST /chat`), `dataflow-panorama`. Regenerable from the typed JSON under `scripts/visualization/archify/`; the gated `docs/*.svg` remain the source of truth |
+| [`docs/archify/`](https://lpk3215.github.io/pi-starter/archify/core-architecture.html) | Interactive, self-contained architecture views (click to zoom / search / focus): `core-architecture`, full `architecture-panorama`, `workflow-panorama`, `sequence-panorama` (`POST /chat`), `dataflow-panorama`. Live: <https://lpk3215.github.io/pi-starter/archify/core-architecture.html> — reachable from the overview's **Interactive** section and linking back to it. Regenerable from the typed JSON under `scripts/visualization/archify/`; the gated `docs/*.svg` remain the source of truth |
 
 **The interface: what it actually exposes**
 
