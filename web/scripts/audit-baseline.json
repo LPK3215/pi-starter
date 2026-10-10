@@ -1,0 +1,15 @@
+{
+  "_说明": "已复核、且**无可用修复**的开发依赖高危通告清单。check-audit.mjs 用它区分「已知」（打印但不阻断）与「新增」（判失败）。字段含义：`range` 是通告的受影响版本区间、`affected` 是它波及的包集合——这两者只要与实测不符，脚本就会判失败，逼人重新复核。**能升依赖修掉的，就不要往这里加**；确实要登记时，必须在同一个 PR 里把理由写进 `note`。生产依赖（--omit=dev）不适用本清单：那条硬门永远要求 0 高危。",
+  "advisories": {
+    "GHSA-VFJ7-8CJW-P6XM": {
+      "package": "braces",
+      "severity": "high",
+      "url": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+      "range": "<=3.0.3",
+      "affected": [
+        "braces"
+      ],
+      "note": "braces 深度嵌套模式导致栈耗尽（DoS）。链路：shadcn -> fast-glob -> micromatch -> braces，全部只在**构建期**被用到（shadcn/tailwind.css 由 src/index.css @import，Tailwind 在编译 CSS 时解析；fast-glob/micromatch/braces 是 shadcn CLI 的文件匹配）。无可用修复：braces 最新版本就是受影响的 3.0.3（npm view braces version = 3.0.3），上界 micromatch 4.0.8 / fast-glob 3.3.3 也均已是最新，npm audit fix --force 只会把 shadcn 降到 1.0.0（breaking change）且换不来修复。攻击面是构建机自身进程（解析模式串），不是终端用户——产物 bundle 里不含这些包。已把 shadcn 从 dependencies 移到 devDependencies（分类修正），生产依赖因此为 0 高危。"
+    }
+  }
+}

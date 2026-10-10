@@ -279,3 +279,27 @@ assistant-ui + Tailwind 4。手写代码只有一层胶水 `web/src/pi/`：
 
 仍未处理：§8 P2-2（`session-hub.ts` 2169 行单体）与 P2-3（分层倒置）——两者都是重构，
 需要单独一轮并单独验证；§9 记录的「44 / 55 口径不同」建议在需要对外报数字时统一口径或给指标改名。
+
+---
+
+## 12. 现状校正（2026-10-10 第二轮，基线 commit `e0c4539`）
+
+§8 / §9 / §11 写的部分条目在本报告落盘之后已随 `e0c4539` 等提交**失效**，这一节把它们
+按当前源码改对，避免本报告自身变成下一个「过期结论」。改的只是判断，不删历史。
+
+| 原条目 | 原结论 | 现状（已实测） |
+|---|---|---|
+| §1 / §2 / §8 P2-2 / §11 | `src/session-hub.ts` 2169 行，仓库最大单文件 | **已拆分**：现 **492 行**（`wc -l src/session-hub.ts`）。拆出的 `src/conversation/{conversation.ts,messages.ts}` 在文件头注明了职责边界。§8 P2-2 的「单体」判断已不成立 |
+| §8 P2-3 / §11 | 分层倒置：编排层 import `./http/errors.js` | **已修**：错误原语下沉到 `src/errors.ts`，`src/http/errors.ts` 只留 Express 中间件（`errorHandler`）。实测 `src/agent.ts` / `src/session-hub.ts` / `src/app.ts` 等改从 `./errors.js` 取原语，方向回到「外层依赖内层」 |
+| §9 | 「44 / 55 两个路由口径」 | 仍在（生成器按 method+path 去重 vs 按 `.get(`/`.post(` 计数）。**不是 bug**，但对外报数字时应只取一个口径并给指标改名 |
+| §11 P1-1（关联） | 只在 `智能体视角评估.md` 的「我写错了」清单里补正，正文 §2.4 表格按「保留原样」不动 | 该「既有错误结论、又有它的更正」的状态**已就地改掉**：§2.4 表格那一行与 §5 第 15 条的下游引用都改成了正确边界 |
+| §11 「中文 README 把 `/health` 描述成数据库探活」 | 记为已改正文与接口表两处，另称 `README.zh-CN.md:79` / `:96` 是漏掉的**第三处** | **第三处不存在**（本轮复核结论，属于原判断有误）：`:79` / `:96` 写的是 `GET /db` 探活，主语是数据库端点而不是 `/health`，与英文版 `README.md:80` 的 `GET /db` for liveness 表述一致，**无需改动**；`/health` 的两处表格行此前已改对（`README.zh-CN.md:249`、`:559`） |
+
+补记这一轮新确认并修掉的问题（不在本报告前文的范围里）：
+
+| 新发现 | 事实 | 落点 |
+|---|---|---|
+| 远端 frontend 作业的 audit 恒红，本地完全看不见 | `web/` 的依赖链里有一条**无可用修复**的高危通告（`braces` 的 GHSA-vfj7-8cjw-p6xm，经由 `shadcn -> fast-glob -> micromatch -> braces`）。裸 `npm audit` 建议的 `npm audit fix --force` 会把 `shadcn` 降到 1.0.0（breaking change）且换不来修复——`braces` 最新版本就是受影响的 3.0.3。而 `.cnb.yml` 的 audit 只在远端跑，`npm run verify` 里没有审计步骤，于是「本地绿 ≠ 远端绿」 | 见下 |
+| `shadcn` 是**运行时 CSS 源**，不是纯 CLI | `src/index.css` 第 3 行 `@import "shadcn/tailwind.css"`，Tailwind v4 在**编译 CSS 时**解析它（自定义变体 `data-open` / `data-closed` 等只在这里定义，实测产物 CSS 里存在）。同时 `check:official` 又把 `shadcn` 当 CLI 调。所以它既不是纯运行时依赖、也不是纯开发依赖——但产物已内联进 `web/dist`，**构建期依赖**才是它的准确归类 | `web/package.json`：`shadcn` 从 `dependencies` 移到 `devDependencies`（构建阶段 `npm ci --prefix web` 与 Dockerfile 的 web-builder 都装全量依赖，不受影响） |
+| 依赖审计缺一个「只对新增报错」的闸门 | 恒红的闸门等于没有闸门。改为与 `check-registry-sync.mjs` 同款的**基线化**门禁 | 新增 `web/scripts/check-audit.mjs` + `web/scripts/audit-baseline.json`：生产依赖（`--omit=dev`）必须 0 高危（硬门）；开发依赖里的已知通告登记后放过、只对**新增**或**影响范围变化**报错 |
+| `npm run verify` 与远端门禁口径不一致 | 远端有审计步骤、本地没有——这个不对称本身就是隐患 | 新增 `scripts/verify-audit.mjs`（根包 + `web/` 两段审计，缺 `web/node_modules` 时明确 SKIP），并接进 `npm run verify` |
