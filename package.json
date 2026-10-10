@@ -1,6 +1,6 @@
 {
   "name": "pi-starter",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "type": "module",
   "description": "Agent scaffold on the pi-agent SDK: tools, skills, knowledge base with pluggable RAG, cross-session memory, MCP bridge, plan mode, subagents, database, model switching, CLI + HTTP SSE + WebSocket + library entry points; business logic injected via options",
   "author": "LPK3215 <17538703215@163.com>",

@@ -54,7 +54,7 @@ import { PlanModeController, planModeExtension } from "./modes/plan-mode.js";
 import { createProviderKeyStore, defaultProviderKeysFile } from "./provider-keys.js";
 import { DELEGATE_TOOL_NAME, SUBAGENT_CAPABILITY, createDelegateTool } from "./subagents/index.js";
 
-const SERVER_VERSION = "0.4.0";
+const SERVER_VERSION = "0.4.1";
 
 const flags = parseCliFlags(process.argv.slice(2));
 const PORT = flags.port ?? 3000;
