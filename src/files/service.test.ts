@@ -293,13 +293,16 @@ test("文件服务：denyNames 可覆盖默认名单", () => {
  * 它的预览走绝对路径直接读、不经过 `resolvePath`，所以只要条目被列出来，`.env` 的
  * 内容就会作为 `notes.txt` 的预览出现在目录列表里。
  */
-test("文件服务：root 内的符号链接不能绕过 denyNames（读与列表预览）", () => {
+test("文件服务：root 内的符号链接不能绕过 denyNames（读与列表预览）", (t) => {
   const root = tmpRoot();
   writeFileSync(join(root, ".env"), "PI_API_KEY=leaked");
   try {
     symlinkSync(".env", join(root, "notes.txt"));
-  } catch {
-    return; // 平台不支持符号链接
+  } catch (err) {
+    // 原先这里是 `catch { return; }` —— 一个从未跑过任何断言的用例显示成通过。
+    // 跳过必须被打印、被统计（同 `guard.test.ts` 里的同类用例）。
+    t.skip(`当前平台无法创建文件符号链接（Windows 需开发者模式/特权）：${(err as Error).message}`);
+    return;
   }
   const fs_ = new FileService({ root });
 

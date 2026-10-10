@@ -19,6 +19,17 @@ function withEnvSnapshot<T>(fn: () => T): T {
     for (const [key, value] of Object.entries(before)) process.env[key] = value;
   }
 }
+
+/**
+ * Windows 的 `chmod` 只能置「只读」位：`0600` 与 `0644` 在 `stat.mode` 上不可区分（实测恒为
+ * `0o666`），目录的 `0700` 同理。所以「权限收紧到了 0600」这条只能在 POSIX 上真验。
+ *
+ * 关键是**跳过要被打出来**，不能靠 `if (win32) return` 静默通过——那正是本仓反复写的
+ * 「没验证不等于验证通过」。同口径的先例见 `src/knowledge/vector-store-sqlite.test.ts`。
+ */
+const CAN_OBSERVE_MODE = process.platform !== "win32";
+const MODE_SKIP_REASON =
+  "Windows 的 chmod 只能置只读位，0600 与 0644 在 stat.mode 上不可区分（POSIX 专属断言）";
 import {
   DEFAULT_API,
   DEFAULT_BASE_URL,
@@ -129,9 +140,11 @@ test("setupPiAgentDir 写入临时目录，缺 key 不落盘", () => {
   assert.throws(() => readFileSync(join(agentDir, "auth.json"), "utf-8"), /ENOENT/);
 });
 
-test("没有 .env 时从 .env.example 复制一份，且复制出来的 .env **不能是世界可读**", () => {
-  // 回归：`copyFileSync` 会沿用源文件权限位，而 `.env.example` 是 0644 ——
-  // 于是 `npm run setup` 造出来的 `.env`（用户马上要在里面填 API Key）是 644 世界可读。
+/**
+ * 在临时 cwd 里放一份 0644 的 `.env.example`（仓库里的真实权限），跑一次 setup。
+ * 功能面（复制发生了、内容被真读进 auth.json）全平台都要验；权限面只在 POSIX 上验（见下）。
+ */
+function setupFromExample(): { cwd: string; agentDir: string; copied: boolean; authKey: string } {
   const cwd = mkdtempSync(join(tmpdir(), "pi-setup-cwd-"));
   const agentDir = join(cwd, "agent");
   writeFileSync(
@@ -149,13 +162,31 @@ test("没有 .env 时从 .env.example 复制一份，且复制出来的 .env **�
     return setupPiAgentDir({ cwd, agentDir });
   });
 
-  assert.equal(result.copiedEnvExample, true);
+  return {
+    cwd,
+    agentDir,
+    copied: result.copiedEnvExample,
+    authKey: JSON.parse(readFileSync(join(agentDir, "auth.json"), "utf-8"))[DEFAULT_PROVIDER].key,
+  };
+}
+
+test("没有 .env 时从 .env.example 复制一份，且复制出来的 .env 被真的读进 auth.json", () => {
+  // 回归：`copyFileSync` 会沿用源文件权限位，而 `.env.example` 是 0644 ——
+  // 于是 `npm run setup` 造出来的 `.env`（用户马上要在里面填 API Key）是 644 世界可读。
+  // 权限收紧本身是另一条断言（POSIX 专属），这里验的是「复制 + 内容被用上」。
+  const { cwd, copied, authKey } = setupFromExample();
+  assert.equal(copied, true);
+  assert.ok(statSync(join(cwd, ".env")).isFile(), ".env 要被真的写出来");
+  assert.equal(authKey, "sk-from-example", "复制出来的 .env 要被真的读进去");
+});
+
+test("复制出来的 .env 权限收紧到 0600，不留世界可读", (t) => {
+  if (!CAN_OBSERVE_MODE) {
+    t.skip(MODE_SKIP_REASON);
+    return;
+  }
+  const { cwd } = setupFromExample();
   assert.equal(statSync(join(cwd, ".env")).mode & 0o777, 0o600, ".env 必须 0600，它要装 API Key");
-  assert.equal(
-    JSON.parse(readFileSync(join(agentDir, "auth.json"), "utf-8"))[DEFAULT_PROVIDER].key,
-    "sk-from-example",
-    "复制出来的 .env 要被真的读进去",
-  );
 });
 
 test("已有 .env 时不覆盖，copiedEnvExample 为 false", () => {
@@ -224,7 +255,11 @@ test("provider 专属密钥优先，且名字里的 `-` 会换算成 `_`", () =>
   assert.equal(auth["my-prov"]?.key, "sk-specific", "PI_API_KEY_<PROVIDER> 必须优先于 PI_API_KEY");
 });
 
-test("权限：auth.json 是 0600、agent 目录是 0700（与 provider-keys / 向量库同一口径）", () => {
+test("权限：auth.json 是 0600、agent 目录是 0700（与 provider-keys / 向量库同一口径）", (t) => {
+  if (!CAN_OBSERVE_MODE) {
+    t.skip(MODE_SKIP_REASON);
+    return;
+  }
   const agentDir = mkdtempSync(join(tmpdir(), "pi-starter-setup-"));
   const result = setupPiAgentDir({
     agentDir,

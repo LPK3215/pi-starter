@@ -69,7 +69,16 @@ test("guard：cwd 内指向 .env 的符号链接同样被拦（真实目标名�
   writeFileSync(join(cwd, ".env"), "PI_API_KEY=sk-should-not-leak\n");
   writeFileSync(join(cwd, "notes.txt"), "无害内容\n");
   writeFileSync(join(cwd, "id_rsa"), "-----BEGIN PRIVATE KEY-----\n");
-  symlinkSync(join(cwd, ".env"), join(cwd, "alias.txt")); // 绝对目标
+  // 文件符号链接在 Windows 上要开发者模式或特权（实测 EPERM），而 junction 只对目录有效，
+  // 换不成这条用例的形状（字面名无害 → 真实目标是 `.env`）。建不了就**显式跳过并说明**：
+  // `catch { return; }` 会让一个从未跑过的用例显示成通过，正是本仓反复禁止的那种假绿
+  // （`src/files/service.test.ts` 的同类用例此前就是这么写的）。
+  try {
+    symlinkSync(join(cwd, ".env"), join(cwd, "alias.txt")); // 绝对目标
+  } catch (err) {
+    t.skip(`当前平台无法创建文件符号链接（Windows 需开发者模式/特权）：${(err as Error).message}`);
+    return;
+  }
   symlinkSync(".env", join(cwd, "relative-alias.txt")); // 相对目标
   symlinkSync(join(cwd, "id_rsa"), join(cwd, "key-link"));
   symlinkSync(join(cwd, "notes.txt"), join(cwd, "harmless.txt")); // 指向普通文件
